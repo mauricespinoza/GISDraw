@@ -635,6 +635,7 @@ export class Panels {
         h('p', { class: 'hint' }, 'Máscara: la forma cerrada de MÁS ARRIBA recorta a las demás seleccionadas, como en Illustrator.'),
         row('Mover a capa', select({ '': '— elegir —', ...Object.fromEntries(vectors.map((l) => [l.id, l.name])) }, '', (v) => v && n && app.history.commit(moveToLayer(this.doc, ids, v)))),
       ),
+      this.topologySection(),
       sec(
         'Seleccionar lo mismo',
         row('Criterio', select(SAME_CRITERIA, sameState.criterion, (v) => {
@@ -663,6 +664,57 @@ export class Panels {
         }, 'primary'),
       ),
     ];
+  }
+
+  topologySection() {
+    const app = this.app;
+    const ed = app.editor;
+    const st = this.topoState || (this.topoState = { tol: 2, snap: 2 });
+    const targets = () => {
+      const sel = ed.selectedShapes();
+      if (sel.length) return sel;
+      const l = findLayer(this.doc, this.doc.activeLayerId);
+      return l?.kind === 'vector' ? l.items.filter((s) => !s.locked) : [];
+    };
+    return sec(
+      'Topología',
+      row('Tolerancia (m)', num(st.tol, (v) => (st.tol = v), { step: 0.5, min: 0.01 })),
+      h(
+        'div',
+        { class: 'grid-btns two' },
+        btn('Confirmar topología', async () => {
+          const { confirmShapesTopology } = await import('../topoOps.js');
+          const { map, stats } = confirmShapesTopology(targets(), st.tol);
+          const { replaceShapes } = await import('../doc.js');
+          if (map.size) app.history.commit(replaceShapes(this.doc, map));
+          app.message(`Topología: ${stats.fusionados} vértice(s) fusionados, ${stats.insertados} insertados, ${map.size} forma(s) cambiadas`, 5000);
+        }, 'primary'),
+        btn('Polígonos desde líneas', async () => {
+          const layer = ed.ensureDrawableLayer();
+          if (!layer) return;
+          const lines = targets().filter((s) => s.type === 'path');
+          if (lines.length < 1) return app.message('Selecciona los contactos (líneas) que cierran las unidades');
+          app.message('Construyendo polígonos…', 0);
+          const { polygonizeShapes } = await import('../topoOps.js');
+          try {
+            const polys = await polygonizeShapes(lines, { snap: st.snap, style: { ...app.currentStyle, fill: app.currentStyle.fill !== 'none' ? app.currentStyle.fill : '#bef264', fillOpacity: 0.5 } });
+            if (!polys.length) return app.message('Las líneas no encierran ninguna región');
+            const { addShapes } = await import('../doc.js');
+            // los polígonos van debajo de las líneas, como en un mapa
+            const next = addShapes(this.doc, layer.id, polys);
+            const items = next.layers.find((l) => l.id === layer.id).items;
+            const reordered = [...items.slice(-polys.length), ...items.slice(0, -polys.length)];
+            app.history.commit(updateLayer(next, layer.id, (l) => ({ ...l, items: reordered })));
+            ed.setSelection(polys.map((p) => p.id));
+            app.message(`${polys.length} polígono(s) creados`, 4000);
+          } catch (err) {
+            app.message(`Polígonos: ${err.message}`, 6000);
+          }
+        }),
+      ),
+      row('Cerrar huecos (m)', num(st.snap, (v) => (st.snap = v), { step: 0.5, min: 0 })),
+      h('p', { class: 'hint' }, 'Actúan sobre la selección o, si no hay, sobre la capa activa. Confirmar topología hace que los bordes vecinos compartan vértices. Polígonos desde líneas convierte contactos y fallas en unidades cerradas, sin huecos ni traslapes.'),
+    );
   }
 
   /* ============================================================= ATRIBUTOS */

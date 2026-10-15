@@ -111,6 +111,20 @@ línea, estilo completo, tipo de objeto, opacidad, valor de un atributo, o todo
 en la capa; en todas las capas visibles o solo en la del objeto. Y
 **seleccionar por atributo** (=, ≠, <, >, ≤, ≥, contiene, vacío).
 
+## Topología
+
+En *Organizar → Topología*, sobre la selección o la capa activa:
+
+- **Confirmar topología** (el algoritmo de FieldDraw): los vértices a menos de
+  la tolerancia se fusionan y los que caen sobre el borde de un vecino se
+  insertan en él, así los polígonos contiguos comparten borde exacto.
+- **Polígonos desde líneas**: dibuja contactos y fallas como líneas y obtén
+  las unidades cerradas, sin huecos ni traslapes. Los extremos que casi se
+  tocan se cierran con la tolerancia "Cerrar huecos".
+
+Junto con el **trace** y el **snapping**, es el flujo de un mapa geológico:
+contactos que se siguen unos a otros y unidades que salen de ellos.
+
 ## Etiquetas
 
 Por capa: un **campo** o una **plantilla** (`{codigo} ({edad})`), fuente,
@@ -195,6 +209,7 @@ svg2pdf.
 | `src/doc.js` | documento, capas, historial (deshacer por referencias) |
 | `src/editor.js` | herramientas, entrada lápiz/dedo/ratón, snapping, trace |
 | `src/snapping.js` | índice espacial y camino más corto (de FieldDraw) |
+| `src/topology.js`, `src/topoOps.js` | confirmación topológica (de FieldDraw) y polígonos desde líneas (JSTS) |
 | `src/ops.js` | portapapeles, orden, alinear, distribuir, máscara, seleccionar lo mismo |
 | `src/labels.js` | etiquetado con colisiones y polo de inaccesibilidad |
 | `src/raster/` | mapas base, DEM, relieve sombreado y paletas |
@@ -205,9 +220,8 @@ svg2pdf.
 
 ## Pendiente
 
-- **Topología** de FieldDraw (confirmación de vértices compartidos) y
-  **construir polígonos desde contactos** (polygonize con JSTS): el trace y el
-  snapping ya están; falta la herramienta que cierra unidades desde líneas.
+- Edición topológica en vivo (mover un vértice compartido y que se muevan
+  los dos polígonos); hoy se confirma después con «Confirmar topología».
 - Simbología QGIS más rica: rellenos de patrón reales (hoy se aproximan con un
   color translúcido), marcadores SVG, ornamentos sobre líneas (dientes de
   falla inversa, barbas).
