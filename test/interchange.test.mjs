@@ -232,6 +232,12 @@ const AI = `<?xml version="1.0" encoding="UTF-8"?>
   ok(base.svg.includes('data-el="legend"') && /class="lv"/.test(base.svg), 'grupos de elemento y de contenido del mapa');
   const moved = composeLayout(doc, { ...L, offsets: { legend: [12.5, -3] } });
   ok(moved.parts.find((p) => p.el === 'legend').svg.includes('translate(12.5 -3)'), 'desplazamiento del elemento');
+  ok(base.parts.some((p) => p.el === 'scalenum') && base.parts.some((p) => p.el === 'scalebar'), 'escala gráfica y numérica son elementos separados');
+  const bgOn = composeLayout(doc, { ...L, scalebarBg: true, scalenumBg: true, scaleBgColor: '#ffeeaa' });
+  const bgOff = composeLayout(doc, { ...L, scalebarBg: false, scalenumBg: false });
+  const has = (r, el) => r.parts.find((p) => p.el === el).svg.includes('fill="#ffeeaa"');
+  ok(has(bgOn, 'scalebar') && has(bgOn, 'scalenum'), 'fondo sólido opcional de las escalas');
+  ok(!has(bgOff, 'scalebar') && !has(bgOff, 'scalenum'), 'sin fondo cuando se desactiva');
   const gone = composeLayout(doc, { ...L, showTitle: false, showInfo: false, north: false, scalebar: false, legend: false });
   ok(!['title', 'info', 'north', 'scalebar', 'legend'].some((e) => gone.parts.some((p) => p.el === e && p.el !== 'info' && p.el !== 'legend')), 'elementos eliminados');
   ok(!gone.parts.some((p) => p.el === 'title'), 'sin título');

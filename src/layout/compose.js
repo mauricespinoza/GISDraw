@@ -54,7 +54,11 @@ export function defaultLayout(doc, view) {
     gridLabelSize: 6, // pt
     zebra: true,
     north: true,
-    scalebar: true,
+    scalebar: true, // escala gráfica (barra)
+    scalenum: true, // escala numérica (1:25.000)
+    scalebarBg: null, // fondo sólido de la escala gráfica: null = automático (solo si va sobre el mapa)
+    scalenumBg: null, // ídem, escala numérica
+    scaleBgColor: '#ffffff',
     legend: true,
     legendWidth: 62,
     legendTitle: 'Leyenda',
@@ -314,7 +318,10 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
     if (L.legend) element('legend', 'Leyenda', legendSvg(doc, vectors, L, sideX, g.fy, g.side, g.fy + g.fh - 52, font, f).svg);
     const blockY = g.fy + g.fh - 48;
     if (L.north) element('north', 'Norte', northArrowSvg(sideX + 10, blockY + 12, centerRot, font));
-    if (L.scalebar) element('scalebar', 'Escala', scaleBarSvg(L, sideX + 22, blockY + 6, g.side - 24, font));
+    const bx0 = sideX + 22;
+    const sp0 = scaleBarSpec(L.scale, g.side - 24);
+    if (L.scalebar) element('scalebar', 'Escala gráfica', scaleBarSvg(L, bx0, blockY + 6, g.side - 24, font, scaleBg(L, 'scalebarBg', false, sp0, bx0, blockY + 6)));
+    if (L.scalenum !== false && (L.scalenum != null || L.scalebar)) element('scalenum', 'Escala numérica', scaleNumSvg(L, bx0 + sp0.mm / 2, blockY + 4.6, font, scaleBg(L, 'scalenumBg', false, sp0, bx0 + sp0.mm / 2, blockY + 4.6, true)));
     element('info', 'Datos', info(sideX, blockY + 26, g.side));
   } else {
     const bx = g.fx + 4;
@@ -322,7 +329,9 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
     const plate = (x, y, w, h) => `<rect x="${r2(x)}" y="${r2(y)}" width="${r2(w)}" height="${r2(h)}" fill="#fff" fill-opacity="0.85" stroke="#000" stroke-width="0.2"/>`;
     if (L.north) element('north', 'Norte', plate(bx - 2, by - 2, 16, 20) + northArrowSvg(bx + 7, by + 8, centerRot, font, 0.8));
     const sw = Math.min(80, g.fw - 30);
-    if (L.scalebar) element('scalebar', 'Escala', plate(bx + 14, by - 2, sw + 12, 20) + scaleBarSvg(L, bx + 20, by + 3, sw, font));
+    const sp1 = scaleBarSpec(L.scale, sw);
+    if (L.scalebar) element('scalebar', 'Escala gráfica', scaleBarSvg(L, bx + 20, by + 8, sw, font, scaleBg(L, 'scalebarBg', true, sp1, bx + 20, by + 8)));
+    if (L.scalenum !== false && (L.scalenum != null || L.scalebar)) element('scalenum', 'Escala numérica', scaleNumSvg(L, bx + 20 + sp1.mm / 2, by + 3.5, font, scaleBg(L, 'scalenumBg', true, sp1, bx + 20 + sp1.mm / 2, by + 3.5, true)));
     element('info', 'Datos', L.showInfo !== false ? `<text x="${r2(g.fx)}" y="${r2(g.H - L.margin + 4)}" font-family="${font}" font-size="2.2" fill="#374151">${esc(crsNote(centerRot))}${attribution ? ` · ${esc(attribution)}` : ''}</text>` : '');
   }
 
@@ -530,7 +539,19 @@ export function northArrowSvg(cx, cy, rot, font, s = 1) {
   return `<g transform="translate(${r2(cx)} ${r2(cy)}) rotate(${r2(rot)}) scale(${s})"><path d="M0 -9 L3.2 4 L0 2.2 Z" fill="#000"/><path d="M0 -9 L-3.2 4 L0 2.2 Z" fill="#fff" stroke="#000" stroke-width="0.3"/><text x="0" y="-10.5" font-family="${font}" font-size="4" font-weight="700" text-anchor="middle">N</text></g>`;
 }
 
-export function scaleBarSvg(L, x, y, maxW, font) {
+/** Fondo sólido de la escala (rectángulo) o '' si no se pidió; `auto` = valor por omisión cuando el ajuste es null. */
+function scaleBg(L, key, auto, sp, x, y, num = false) {
+  const on = L[key] == null ? auto : !!L[key];
+  if (!on) return '';
+  const fill = L.scaleBgColor || '#ffffff';
+  const box = num
+    ? { x: x - 17, y: y - 3.4, w: 34, h: 4.6 }
+    : { x: x - 4, y: y - 1.6, w: sp.mm + 14, h: 9 };
+  return `<rect x="${r2(box.x)}" y="${r2(box.y)}" width="${r2(box.w)}" height="${r2(box.h)}" fill="${esc(fill)}"/>`;
+}
+
+/** Escala gráfica: barra alternada con sus cotas. */
+export function scaleBarSvg(L, x, y, maxW, font, bg = '') {
   const sp = scaleBarSpec(L.scale, maxW);
   const seg = sp.mm / sp.parts;
   const parts = [];
@@ -544,8 +565,12 @@ export function scaleBarSvg(L, x, y, maxW, font) {
     if (i % every && i !== sp.parts) continue;
     labels.push(`<text x="${r2(x + i * seg)}" y="${r2(y + 4.6)}" font-family="${font}" font-size="2.4" text-anchor="middle">${sp.fmt((sp.totalM * i) / sp.parts)}${i === sp.parts ? ` ${sp.unit}` : ''}</text>`);
   }
-  const num = `<text x="${r2(x + sp.mm / 2)}" y="${r2(y - 1.4)}" font-family="${font}" font-size="2.8" text-anchor="middle">Escala 1:${fmtThousands(L.scale).replace(/ /g, '.')}</text>`;
-  return `<g>${num}${parts.join('')}${labels.join('')}</g>`;
+  return `<g>${bg}${parts.join('')}${labels.join('')}</g>`;
+}
+
+/** Escala numérica («Escala 1:25.000»), centrada en `cx`. */
+export function scaleNumSvg(L, cx, y, font, bg = '') {
+  return `<g>${bg}<text x="${r2(cx)}" y="${r2(y)}" font-family="${font}" font-size="2.8" text-anchor="middle">Escala 1:${fmtThousands(L.scale).replace(/ /g, '.')}</text></g>`;
 }
 
 function infoSvg(L, x, y, w, rot, attribution, font) {

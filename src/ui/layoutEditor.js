@@ -12,8 +12,9 @@
 
 import { openRichEditor } from './richEditor.js';
 import { composeLayout, defaultLayout, fitFrame, layoutTextShape, frameExtent, elementTransform, pageGeometry, pageToGround, PAGES, SYMBOL_SCALES, symbolFactor } from '../layout/compose.js';
-import { allTopShapes } from '../doc.js';
-import { makeText, newId, shapeBBox, unionBBox } from '../vector.js';
+import { allTopShapes, findTopShape, mapShapes } from '../doc.js';
+import { pickShape } from '../hit.js';
+import { makeText, newId, scaleShape, shapeBBox, translateShape, unionBBox } from '../vector.js';
 import { addShapes } from '../doc.js';
 import { applyStyle, deleteStyle, getStyle, importStyles, listStyles, parseStyleFile, pickStyle, saveStyle, styleFile } from '../layout/styles.js';
 import { defaultStyle } from '../style.js';
@@ -44,7 +45,7 @@ export class LayoutEditor {
       btn('－', () => this.zoomBy(0.8), 'sm'),
       btn('▭ Marco automático', () => this.resetFrame(), 'sm'),
       (this.textBtn = btn('T Cuadro de texto', () => this.startAddText(), 'sm')),
-      h('span', { class: 'lp-hint' }, 'Arrastra dentro del marco = mover el mapa · rueda = zoom · vértices del marco = tamaño · arrastra un elemento para moverlo · cuadrito de su esquina inferior = escalarlo · Supr lo elimina'),
+      h('span', { class: 'lp-hint' }, 'Arrastra dentro del marco = mover el mapa · rueda = zoom · vértices del marco = tamaño · arrastra un elemento (o un objeto vectorial del mapa) para moverlo · cuadrito de su esquina inferior = escalarlo · Supr lo elimina'),
     );
     this.el.append(this.stage, this.bar);
     document.getElementById('viewport').append(this.el);
@@ -87,7 +88,11 @@ export class LayoutEditor {
         };
         if (e.key === 'Delete' || e.key === 'Backspace') {
           stop();
-          if (this.sel && this.sel !== 'frame') this.deleteElement(this.sel);
+          if (this.sel === 'shapes') {
+            this.app.editor.deleteSelection();
+            this.select(null);
+            this.schedule(0);
+          } else if (this.sel && this.sel !== 'frame') this.deleteElement(this.sel);
         } else if (e.key === 'Escape') {
           stop();
           this.adding = false;
@@ -98,7 +103,8 @@ export class LayoutEditor {
           const k = e.shiftKey ? 5 : 0.5;
           const dx = e.key === 'ArrowLeft' ? -k : e.key === 'ArrowRight' ? k : 0;
           const dy = e.key === 'ArrowUp' ? -k : e.key === 'ArrowDown' ? k : 0;
-          if (this.sel && this.sel !== 'frame') this.nudgeElement(this.sel, dx, dy);
+          if (this.sel === 'shapes') this.transformVectors(dx, dy);
+          else if (this.sel && this.sel !== 'frame') this.nudgeElement(this.sel, dx, dy);
           else this.panByMm(-dx, -dy);
         }
       },
@@ -122,8 +128,76 @@ export class LayoutEditor {
     return p[0] >= g.fx && p[0] <= g.fx + g.fw && p[1] >= g.fy && p[1] <= g.fy + g.fh;
   }
 
+  /* ------------------------------------- objetos vectoriales dentro del marco */
+
+  /** Contexto para tratar la hoja como una «vista» del mapa: página (mm) ↔ terreno (m). */
+  vctx() {
+    const L = this.L;
+    const g = this.geom;
+    const ext = frameExtent(L, g);
+    const k = 1000 / L.scale; // mm por metro
+    const f = symbolFactor(this.app.history.doc.refScale, L);
+    const ppm = this.stage.getBoundingClientRect().width / g.W; // px de pantalla por mm de página
+    const toPage = (x, y) => [g.fx + (x - ext.minX) * k, g.fy + (ext.maxY - y) * k];
+    const view = { mpp: 1 / (k * ppm), toScreen: (x, y) => toPage(x, y).map((v) => v * ppm) };
+    const units = { mmToPx: f * ppm, ptToPx: 0.352778 * f * ppm, mmToM: f / k, ptToM: (0.352778 * f) / k };
+    return { L, g, k, f, ppm, toPage, view, units, est: { mmToM: units.mmToM, ptToM: units.ptToM, mpp: view.mpp } };
+  }
+
+  /** Objeto vectorial bajo un punto de la página (mm), o null. */
+  pickVector(p) {
+    const c = this.vctx();
+    const hit = pickShape(this.app.history.doc, [p[0] * c.ppm, p[1] * c.ppm], c.view, c.units, 6);
+    return hit?.shape || null;
+  }
+
+  selectedVectors() {
+    const doc = this.app.history.doc;
+    return [...this.app.editor.selection].map((id) => findTopShape(doc, id)?.shape).filter(Boolean);
+  }
+
+  /** Caja (mm de página) de los objetos vectoriales seleccionados. */
+  vectorBox() {
+    const shapes = this.selectedVectors();
+    if (!shapes.length) return null;
+    const c = this.vctx();
+    const b = unionBBox(shapes.map((s) => shapeBBox(s, c.est)));
+    if (!b) return null;
+    const [x0, y0] = c.toPage(b.x, b.y + b.h);
+    return { x: x0, y: y0, w: b.w * c.k, h: b.h * c.k };
+  }
+
+  /** Mueve (dx, dy en mm de página) y/o escala (s, alrededor de la esquina sup. izq.) los objetos seleccionados. */
+  transformVectors(dx, dy, s = 1) {
+    const box = this.vectorBox();
+    const ids = [...this.app.editor.selection];
+    if (!box || !ids.length) return;
+    const c = this.vctx();
+    const ext = frameExtent(c.L, c.g);
+    const origin = { x: ext.minX + (box.x - c.g.fx) / c.k, y: ext.maxY - (box.y - c.g.fy) / c.k };
+    const gx = dx / c.k;
+    const gy = -dy / c.k;
+    const doc = this.app.history.doc;
+    this.app.history.commit(
+      mapShapes(doc, ids, (sh) => {
+        let out = s !== 1 ? scaleShape(sh, origin, s, s) : sh;
+        if (gx || gy) out = translateShape(out, gx, gy);
+        return out;
+      }),
+    );
+    this.schedule(0);
+  }
+
+  selectVector(shape, add) {
+    const ed = this.app.editor;
+    const ids = add ? (ed.selection.has(shape.id) ? [...ed.selection].filter((x) => x !== shape.id) : [...ed.selection, shape.id]) : ed.selection.has(shape.id) ? [...ed.selection] : [shape.id];
+    ed.setSelection(ids);
+    this.select(ids.length ? 'shapes' : null);
+  }
+
   select(sel) {
     const changed = sel !== this.sel;
+    if (sel !== 'shapes' && this.app.editor.selection.size) this.app.editor.setSelection([]);
     this.sel = sel;
     this.drawOverlay();
     // el panel muestra los controles del cuadro de texto seleccionado
@@ -156,6 +230,11 @@ export class LayoutEditor {
       this.deleteElement(this.sel);
       return;
     }
+    if (handle === 'vsc') {
+      const b = this.vectorBox();
+      if (b) this.gesture = { mode: 'vscale', start: [0, 0], box: b, w0: Math.max(1e-3, b.w), h0: Math.max(1e-3, b.h), s: 1 };
+      return;
+    }
     if (handle === 'sc' && this.sel && this.sel !== 'frame') {
       const eo = this.elementGroup(this.sel)?.querySelector(':scope > .eo');
       if (eo) {
@@ -182,6 +261,12 @@ export class LayoutEditor {
       return;
     }
     if (this.inFrame(p)) {
+      const v = this.pickVector(p);
+      if (v) {
+        this.selectVector(v, e.shiftKey);
+        if (this.sel === 'shapes') this.gesture = { mode: 'vmove', start: p };
+        return;
+      }
       this.select('frame');
       this.gesture = { mode: 'pan', start: p, t0: { ...this.live } };
       return;
@@ -200,6 +285,12 @@ export class LayoutEditor {
       const g = this.elementGroup(gs.el)?.querySelector(':scope > .eo');
       if (g) g.setAttribute('transform', `translate(${gs.base[0] + dx} ${gs.base[1] + dy})`);
       gs.delta = [dx, dy];
+      this.drawOverlay();
+    } else if (gs.mode === 'vmove') {
+      gs.delta = [dx, dy];
+      this.drawOverlay();
+    } else if (gs.mode === 'vscale') {
+      gs.s = Math.max(0.05, Math.min(40, Math.max((p[0] - gs.box.x) / gs.w0, (p[1] - gs.box.y) / gs.h0)));
       this.drawOverlay();
     } else if (gs.mode === 'scale') {
       const k = Math.max(0.05, Math.min(40, Math.max((p[0] - gs.A[0]) / gs.w0, (p[1] - gs.A[1]) / gs.h0)));
@@ -226,6 +317,12 @@ export class LayoutEditor {
     if (gs.mode === 'move' && gs.delta) {
       const o = { ...(this.L.offsets || {}), [gs.el]: [+(gs.base[0] + gs.delta[0]).toFixed(2), +(gs.base[1] + gs.delta[1]).toFixed(2)] };
       this.set({ offsets: o });
+    } else if (gs.mode === 'vmove') {
+      if (gs.delta && Math.hypot(...gs.delta) > 0.3) this.transformVectors(gs.delta[0], gs.delta[1]);
+      else this.drawOverlay();
+    } else if (gs.mode === 'vscale') {
+      if (Math.abs(gs.s - 1) > 0.005) this.transformVectors(0, 0, gs.s);
+      else this.drawOverlay();
     } else if (gs.mode === 'scale' && gs.s) {
       this.set({ scales: { ...(this.L.scales || {}), [gs.el]: { s: gs.s, a: gs.a.map((v) => +v.toFixed(2)) } } });
     } else if (gs.mode === 'pan') {
@@ -354,7 +451,7 @@ export class LayoutEditor {
       this.app.panels?.render();
       return;
     }
-    const patch = { title: { showTitle: false }, legend: { legend: false }, north: { north: false }, scalebar: { scalebar: false }, info: { showInfo: false } }[name];
+    const patch = { title: { showTitle: false }, legend: { legend: false }, north: { north: false }, scalebar: { scalebar: false }, scalenum: { scalenum: false }, info: { showInfo: false } }[name];
     if (!patch) return;
     this.sel = null;
     this.set(patch);
@@ -407,6 +504,17 @@ export class LayoutEditor {
         const n = add('rect', { x: x - hs / 2, y: y - hs / 2, width: hs, height: hs, fill: '#fff', stroke: '#0ea5e9', 'stroke-width': 1.5 * u, 'data-h': k, class: 'lp-handle' });
         n.style.cursor = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize' }[k];
       }
+    } else if (this.sel === 'shapes') {
+      const b0 = this.vectorBox();
+      if (!b0) return;
+      const gs = this.gesture;
+      let b = b0;
+      if (gs?.mode === 'vmove' && gs.delta) b = { ...b0, x: b0.x + gs.delta[0], y: b0.y + gs.delta[1] };
+      if (gs?.mode === 'vscale') b = { ...b0, w: b0.w * gs.s, h: b0.h * gs.s };
+      const pad = 1.2;
+      add('rect', { x: b.x - pad, y: b.y - pad, width: b.w + 2 * pad, height: b.h + 2 * pad, fill: 'rgba(14,165,233,.06)', stroke: '#0ea5e9', 'stroke-width': 1.4 * u, 'stroke-dasharray': `${4 * u} ${3 * u}`, 'pointer-events': 'none' });
+      const hs = 8 * u;
+      add('rect', { x: b.x + b.w + pad - hs / 2, y: b.y + b.h + pad - hs / 2, width: hs, height: hs, fill: '#fff', stroke: '#0ea5e9', 'stroke-width': 1.5 * u, 'data-h': 'vsc', class: 'lp-handle' }).style.cursor = 'nwse-resize';
     } else if (this.sel) {
       const gEl = this.elementGroup(this.sel);
       if (!gEl) return;
@@ -577,7 +685,7 @@ export class LayoutEditor {
     this.geom = geometry;
     this.live = { s: 1, tx: 0, ty: 0 };
     this.content.innerHTML = svg.replace(/width="[\d.]+mm" height="[\d.]+mm"/, 'width="100%" height="100%"');
-    if (this.sel && this.sel !== 'frame' && !this.elementGroup(this.sel)) this.sel = null;
+    if (this.sel && this.sel !== 'frame' && this.sel !== 'shapes' && !this.elementGroup(this.sel)) this.sel = null;
     this.drawOverlay();
     this.app.message('');
     const after = this.afterPreview;
@@ -906,6 +1014,7 @@ export class LayoutEditor {
 
   panel() {
     const L = this.L;
+    const g0 = pageGeometry(L);
     const set = (k) => (v) => this.set({ [k]: v });
     const v = this.app.view;
     return [
@@ -960,7 +1069,12 @@ export class LayoutEditor {
         check('Título', L.showTitle !== false, set('showTitle')),
         check('Datos (autor, fecha, sistema, notas, fuentes)', L.showInfo !== false, set('showInfo')),
         check('Norte (verdadero, con convergencia)', L.north, set('north')),
-        check('Escala gráfica y numérica', L.scalebar, set('scalebar')),
+        check('Escala gráfica (barra)', L.scalebar, set('scalebar')),
+        L.scalebar ? check('Fondo sólido bajo la escala gráfica', L.scalebarBg ?? !g0.side, set('scalebarBg')) : null,
+        check('Escala numérica (1:…)', L.scalenum ?? L.scalebar, set('scalenum')),
+        L.scalenum ?? L.scalebar ? check('Fondo sólido bajo la escala numérica', L.scalenumBg ?? !g0.side, set('scalenumBg')) : null,
+        row('Color del fondo', color(L.scaleBgColor || '#ffffff', null, set('scaleBgColor'))),
+        h('p', { class: 'hint' }, 'La escala gráfica y la numérica son dos elementos independientes: se mueven y escalan por separado.'),
         check('Leyenda (columna lateral)', L.legend, set('legend')),
         L.legend ? row('Ancho columna (mm)', num(L.legendWidth, set('legendWidth'), { step: 2, min: 40 })) : null,
         L.legend ? row('Título leyenda', text(L.legendTitle, set('legendTitle'))) : null,
