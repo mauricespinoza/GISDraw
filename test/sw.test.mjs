@@ -15,4 +15,10 @@ if (missing.length) {
   console.error('✗ faltan en sw.js:', missing.join(', '));
   process.exit(1);
 }
+const ver = /VERSION = '([^']+)'/.exec(sw)?.[1];
+const appVer = /APP_VERSION = '([^']+)'/.exec(readFileSync(join(root, 'src/version.js'), 'utf8'))?.[1];
+if (!ver || ver !== appVer) {
+  console.error(`✗ VERSION de sw.js (${ver}) y APP_VERSION de src/version.js (${appVer}) deben coincidir`);
+  process.exit(1);
+}
 console.log(`${need.length} archivos en el precache OK`);

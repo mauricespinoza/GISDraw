@@ -16,7 +16,9 @@ import { hillshade, compose, paletteLUT, elevationRange } from '../src/raster/hi
 import { decodeTerrarium, parseAsciiGrid, gridSampler } from '../src/raster/dem.js';
 import { SnapIndex, buildGraph, tracePath } from '../src/snapping.js';
 import { shapeGeometry, geometryToShapes } from '../src/io/features.js';
-import { evalFilter, qgisExprToTemplate, buildQLR, describeStyle } from '../src/io/qml.js';
+import { evalFilter, qgisExprToTemplate, buildQLR, describeStyle, styleToSymbolXml } from '../src/io/qml.js';
+import { ornamentSymbolSvg, ORNAMENTS } from '../src/ornaments.js';
+import { PATTERNS, patternTileSvg } from '../src/patterns.js';
 import { sanitizeTableName } from '../src/io/gpkg.js';
 
 let pass = 0;
@@ -291,6 +293,41 @@ const near = (a, b, tol, msg) => ok(Math.abs(a - b) <= tol, `${msg}: ${a} ≠ ${
   ok(qlr.includes('Unidades &amp; co') && qlr.includes('label="Kia"') && qlr.includes('EPSG:32719'), 'QLR: nombres escapados, rótulos y SRS');
   ok(qlr.includes('fieldName="codigo"') && qlr.includes('labelsEnabled="1"'), 'QLR: etiquetas');
   ok(/Cabalgamiento/.test(describeStyle({ ...defaultStyle(), ornament: 'thrust' }, 'line')), 'rótulo de leyenda de una falla');
+}
+
+/* ------------------------------------------- ornamentos y tramas en QML */
+{
+  const dec = (x) => Buffer.from(x.replace(/^base64:/, ''), 'base64').toString('utf8');
+  const refs = (xml) => [...xml.matchAll(/value="(base64:[^"]+)"/g)].map((m) => dec(m[1]));
+  for (const k of Object.keys(ORNAMENTS).filter((x) => x !== 'none')) {
+    const st = { ...defaultStyle(), stroke: '#0000ff', ornament: k, ornamentSpacing: ORNAMENTS[k].spacing };
+    const o = ornamentSymbolSvg(st);
+    ok(o && o.sizeMm > 1 && o.svg.includes('viewBox'), `SVG de ornamento ${k}`);
+    const xml = styleToSymbolXml(st, 'line', '0');
+    ok(xml.includes('class="MarkerLine"') && xml.includes('class="SvgMarker"') && xml.includes('class="SimpleLine"'), `QML línea con ornamento ${k}`);
+    ok(xml.includes(`name="offset_along_line" value="${(ORNAMENTS[k].spacing / 2).toFixed(3)}"`), `ornamento ${k} empieza a media separación`);
+    ok(refs(xml).length === 1 && refs(xml)[0].startsWith('<svg'), `SVG incrustado de ${k}`);
+  }
+  const left = ornamentSymbolSvg({ ...defaultStyle(), ornament: 'thrust' });
+  const right = ornamentSymbolSvg({ ...defaultStyle(), ornament: 'thrust', ornamentSide: 'right' });
+  ok(!left.svg.includes('scale(1,-1)') && right.svg.includes('scale(1,-1)'), 'el lado derecho voltea el símbolo');
+  ok(ornamentSymbolSvg({ ...defaultStyle(), ornament: 'none' }) === null, 'sin ornamento no hay símbolo');
+  ok(!ornamentSymbolSvg({ ...defaultStyle(), ornament: 'normal', ornamentHalo: false }).svg.includes('#ffffff'), 'sin halo no hay blanco');
+  ok(!styleToSymbolXml(defaultStyle(), 'line', '0').includes('MarkerLine'), 'línea común sin MarkerLine');
+
+  const keys = Object.keys(PATTERNS);
+  let allOk = true;
+  for (const k of keys) {
+    const xml = styleToSymbolXml({ ...defaultStyle(), fill: '#bef264', pattern: k, patternColor: '#112233', patternSize: 6, patternOpacity: 0.8 }, 'polygon', '0');
+    const r = refs(xml);
+    if (!(xml.includes('class="SVGFill"') && r.length === 1 && r[0].includes('#112233') && r[0].includes('opacity="0.8"') && xml.indexOf('SimpleFill') < xml.indexOf('SVGFill'))) allOk = false;
+  }
+  ok(allOk, `las ${keys.length} tramas salen como SVGFill sobre el relleno`);
+  const pat = styleToSymbolXml({ ...defaultStyle(), fill: '#bef264', pattern: 'sandstone', patternSize: 7.5 }, 'polygon', '0');
+  ok(pat.includes('name="patternWidth" value="7.500"'), 'ancho de la trama en mm');
+  ok(pat.includes('line_style" value="no"') || pat.includes('name="line_style" value="no"'), 'la trama no dibuja contorno propio');
+  ok(!styleToSymbolXml({ ...defaultStyle(), fill: '#bef264' }, 'polygon', '0').includes('SVGFill'), 'polígono sin trama');
+  ok(patternTileSvg('nope') === null, 'trama inexistente');
 }
 
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLARON` : ''}`);

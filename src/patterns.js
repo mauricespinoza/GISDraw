@@ -205,6 +205,16 @@ export function patternDef(id, key, color, tilePx, opacity = 1) {
   }>${p.draw(color)}</g></pattern>`;
 }
 
+/**
+ * Mosaico de una trama como SVG autónomo de 10×10 unidades (para el
+ * `SVGFill` de QGIS, donde el ancho del patrón es `patternSize` mm).
+ */
+export function patternTileSvg(key, color = '#111827', opacity = 1) {
+  const p = PATTERNS[key];
+  if (!p) return null;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><g${opacity < 1 ? ` opacity="${opacity}"` : ''}>${p.draw(color)}</g></svg>`;
+}
+
 /** Miniatura para el selector del panel: un <svg> autónomo (usa un id único). */
 export function patternPreview(key, color = '#111827', bg = '#ffffff', px = 44) {
   const id = `pv_${key}`;
