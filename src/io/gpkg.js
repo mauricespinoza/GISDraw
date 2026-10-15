@@ -107,13 +107,23 @@ export async function importGeoPackage(arrayBuffer, { refScale = 25000 } = {}) {
         if (!geometry) continue;
         const attrs = {};
         for (const [k, v] of Object.entries(row)) {
-          if (k === geomCol || k === 'gd_style' || k === 'gd_name' || k === 'gd_text' || k === 'fid') continue;
+          if (k === geomCol || k === 'gd_style' || k === 'gd_style_json' || k === 'gd_name' || k === 'gd_text' || k === 'fid') continue;
           attrs[k] = v instanceof Uint8Array ? null : v;
           fields.add(k);
         }
         // las reglas pueden depender de campos que no se guardan como atributo (gd_style)
         const ruled = rules ? styleFor(rules, { ...row, ...attrs }) : null;
-        const styles = ruled ? { point: ruled, line: ruled, polygon: ruled } : base;
+        // un GeoPackage hecho por GISDrawer trae el estilo completo (ornamentos,
+        // tramas, ondulados…) en gd_style_json: manda sobre lo que se pueda leer del QML
+        let own = null;
+        if (row.gd_style_json) {
+          try {
+            own = { ...defaultStyle(), ...JSON.parse(row.gd_style_json) };
+          } catch {
+            own = null;
+          }
+        }
+        const styles = own ? { point: own, line: own, polygon: own } : ruled ? { point: ruled, line: ruled, polygon: ruled } : base;
         for (const s of geometryToShapes(geometry, attrs, T, styles)) {
           s.name = row.gd_name || guessName(attrs, s.name);
           if (s.style) s.style = { ...defaultStyle(), ...s.style };
@@ -174,11 +184,11 @@ export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1 } = {})
       used.add(table);
       const fieldSet = new Set();
       for (const f of subset) for (const k of Object.keys(f.shape.attrs || {})) fieldSet.add(k);
-      const fields = [...fieldSet].filter((k) => !['fid', 'geom', 'gd_style', 'gd_name', 'gd_text'].includes(k.toLowerCase()));
+      const fields = [...fieldSet].filter((k) => !['fid', 'geom', 'gd_style', 'gd_style_json', 'gd_name', 'gd_text'].includes(k.toLowerCase()));
       const types = fields.map((k) => (subset.every((f) => f.shape.attrs?.[k] == null || typeof f.shape.attrs[k] === 'number') ? 'REAL' : 'TEXT'));
       const cols = fields.map((k, i) => `"${k.replace(/"/g, '')}" ${types[i]}`);
       db.exec(
-        `CREATE TABLE "${table}" (fid INTEGER PRIMARY KEY AUTOINCREMENT, geom ${GEOM_NAME[kind]}, gd_name TEXT, gd_style TEXT, gd_text TEXT${cols.length ? `, ${cols.join(', ')}` : ''})`,
+        `CREATE TABLE "${table}" (fid INTEGER PRIMARY KEY AUTOINCREMENT, geom ${GEOM_NAME[kind]}, gd_name TEXT, gd_style TEXT, gd_style_json TEXT, gd_text TEXT${cols.length ? `, ${cols.join(', ')}` : ''})`,
       );
       // estilos distintos -> índice
       const styles = [];
@@ -188,7 +198,7 @@ export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1 } = {})
       let maxX = -Infinity;
       let maxY = -Infinity;
       const stmt = db.prepare(
-        `INSERT INTO "${table}" (geom, gd_name, gd_style, gd_text${fields.length ? `, ${fields.map((k) => `"${k.replace(/"/g, '')}"`).join(', ')}` : ''}) VALUES (?, ?, ?, ?${', ?'.repeat(fields.length)})`,
+        `INSERT INTO "${table}" (geom, gd_name, gd_style, gd_style_json, gd_text${fields.length ? `, ${fields.map((k) => `"${k.replace(/"/g, '')}"`).join(', ')}` : ''}) VALUES (?, ?, ?, ?, ?${', ?'.repeat(fields.length)})`,
       );
       for (const f of subset) {
         const st = f.shape.style || {};
@@ -208,6 +218,7 @@ export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1 } = {})
           encodeGeoPackageBinary(f.geometry, DOC_EPSG),
           f.shape.name || null,
           String(keyOf.get(k)),
+          k,
           f.shape.type === 'text' ? f.shape.text : null,
           ...fields.map((fl) => {
             const v = f.shape.attrs?.[fl];
