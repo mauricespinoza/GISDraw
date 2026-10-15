@@ -315,6 +315,10 @@ Exportar → Vista previa, hasta 600 dpi; la resolución de la capa de relieve l
 pequeñas el relieve tiene menos detalle por naturaleza: el mismo número de
 píxeles cubre más terreno, y Terrarium parte de ~30 m en tierra.
 
+**Escalar elementos del layout**: al seleccionar un elemento (título, leyenda, norte, escala, datos o cuadro de texto) aparece un cuadrito en su esquina inferior derecha; arrástralo para agrandarlo o achicarlo de forma proporcional (la esquina superior izquierda queda fija). Vale también para el PDF/SVG exportado.
+
+**Varios objetos a la vez**: con varios objetos seleccionados, trazo, grosor, relleno, opacidad, halo y demás del panel Estilo se aplican a todos; si hay textos, aparece además una sección con fuente, tamaño, negrita/cursiva y halo de texto para todos.
+
 **Cuadros de texto del layout**: «T Cuadro de texto» en la barra de la vista
 previa, clic en la hoja y se escribe encima (doble clic para volver a editar;
 Ctrl+Enter termina). Se mueven y eliminan como los demás elementos y tienen

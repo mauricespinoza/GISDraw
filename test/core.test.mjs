@@ -330,5 +330,22 @@ const near = (a, b, tol, msg) => ok(Math.abs(a - b) <= tol, `${msg}: ${a} ≠ ${
   ok(patternTileSvg('nope') === null, 'trama inexistente');
 }
 
+{
+  // textos: ida y vuelta por JSON (guardar/abrir proyecto) y normalización
+  const { normalizeDoc } = await import('../src/doc.js');
+  const { makeText } = await import('../src/vector.js');
+  const { elementTransform } = await import('../src/layout/compose.js');
+  const tx = { ...makeText(1, 2, 'Hola mundo', undefined, 12), runs: [{ s: 0, e: 4, bold: true, color: '#ff0000' }, { s: 2, e: 99, italic: true }] };
+  const nd = newDocument();
+  let d = addShapes(nd, nd.activeLayerId, [tx]);
+  d = { ...d, layout: { texts: [{ id: 'x', x: 5, y: 6, text: 'Cuadro', runs: [{ s: 1, e: 3, scale: 2 }] }], scales: { legend: { s: 1.5, a: [3, 4] } } } };
+  const back = normalizeDoc(JSON.parse(JSON.stringify({ app: 'GISDrawer', ...d })));
+  const t2 = back.layers.find((l) => l.kind === 'vector').items[0];
+  ok(t2.text === 'Hola mundo' && t2.fontSize === 12 && t2.runs.length === 2 && t2.runs[1].e === 10, 'texto del mapa sobrevive guardar/abrir con sus tramos');
+  ok(back.layout.texts[0].text === 'Cuadro' && back.layout.texts[0].runs[0].scale === 2 && back.layout.scales.legend.s === 1.5, 'texto del layout y escalas sobreviven');
+  ok(elementTransform({ offsets: { a: [1, 2] }, scales: { a: { s: 2, a: [3, 4] } } }, 'a') === 'translate(1 2) translate(3 4) scale(2) translate(-3 -4)', 'transformación de elemento con escala');
+  ok(elementTransform({}, 'a') === 'translate(0 0)', 'sin escala solo desplaza');
+}
+
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLARON` : ''}`);
 if (fail) process.exit(1);

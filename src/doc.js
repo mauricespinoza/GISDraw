@@ -16,6 +16,7 @@
  */
 
 import { cloneShape, newId, walkShapes } from './vector.js';
+import { normalizeRuns } from './richText.js';
 
 export const BLEND_MODES = {
   normal: 'Normal',
@@ -100,6 +101,32 @@ export function newDocument() {
     activeLayerId: dibujo.id,
     layout: null,
   };
+}
+
+/**
+ * Deja un proyecto leído de disco/IndexedDB en forma segura: textos con
+ * `text` en cadena y tramos válidos (en los textos del mapa y en los cuadros
+ * de texto del layout), y el layout con sus tablas de desplazamientos y escalas.
+ */
+export function normalizeDoc(doc) {
+  const fixText = (t) => {
+    const text = t.text == null ? '' : String(t.text);
+    const out = { ...t, text };
+    if (Array.isArray(t.runs)) {
+      const runs = normalizeRuns(t.runs, text.length);
+      if (runs.length) out.runs = runs;
+      else delete out.runs;
+    } else delete out.runs;
+    return out;
+  };
+  const fixShape = (s) => {
+    if (s.type === 'text') return fixText(s);
+    if (s.type === 'group' && s.children) return { ...s, children: s.children.map(fixShape) };
+    return s;
+  };
+  const layers = doc.layers.map((l) => (l.kind === 'vector' && l.items ? { ...l, items: l.items.map(fixShape) } : l));
+  const layout = doc.layout ? { ...doc.layout, texts: (doc.layout.texts || []).map(fixText), offsets: doc.layout.offsets || {}, scales: doc.layout.scales || {} } : doc.layout;
+  return { ...doc, layers, layout };
 }
 
 /* ------------------------------------------------------------- consultas */
