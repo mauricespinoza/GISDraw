@@ -10,6 +10,7 @@
  * "multiplicar" sale igual en pantalla, en SVG y en PDF.
  */
 
+import { openRichEditor } from './richEditor.js';
 import { composeLayout, defaultLayout, fitFrame, layoutTextShape, frameExtent, pageGeometry, pageToGround, PAGES, SYMBOL_SCALES, symbolFactor } from '../layout/compose.js';
 import { allTopShapes } from '../doc.js';
 import { makeText, newId, shapeBBox, unionBBox } from '../vector.js';
@@ -624,61 +625,22 @@ export class LayoutEditor {
     const host = this.el.getBoundingClientRect();
     const sr = this.stage.getBoundingClientRect();
     const pxPerMm = sr.width / this.geom.W;
-    const ta = h('textarea', { class: 'lp-edit', spellcheck: false });
-    ta.value = t.text || '';
     const fpx = Math.max(13, t.fontSize * 0.352778 * pxPerMm);
-    Object.assign(ta.style, {
-      left: `${Math.max(4, r.left - host.left - 6)}px`,
-      top: `${Math.max(4, r.top - host.top - 6)}px`,
-      fontSize: `${fpx}px`,
-      fontFamily: t.fontFamily,
-      fontWeight: t.fontWeight || 400,
-      fontStyle: t.italic ? 'italic' : 'normal',
-      lineHeight: String(t.lineHeight || 1.2),
-      letterSpacing: `${((t.letterSpacing || 0) / 1000) * fpx}px`,
-      textAlign: t.align === 'justify' ? 'justify' : t.align || 'left',
-      width: `${Math.max(140, r.width + 24, t.boxWidth ? t.boxWidth * pxPerMm + 16 : 0)}px`,
+    const ed = openRichEditor({
+      host: this.el,
+      rect: { left: Math.max(4, r.left - host.left - 6), top: Math.max(4, r.top - host.top - 6 + 44), width: Math.max(260, r.width + 24, t.boxWidth ? t.boxWidth * pxPerMm + 16 : 0) },
+      shape: layoutTextShape(t),
+      fontPx: fpx,
+      color: t.color || '#111827',
+      isNew,
+      onDone: (res) => {
+        this.closeEditor = null;
+        if ((!res && isNew) || (res && !res.text.trim())) return this.deleteElement(`text:${id}`);
+        if (!res) return;
+        if (res.text !== t.text || JSON.stringify(res.runs) !== JSON.stringify(t.runs || [])) this.updateText(id, { text: res.text, runs: res.runs.length ? res.runs : undefined });
+      },
     });
-    this.el.append(ta);
-    const fit = () => {
-      ta.style.height = 'auto';
-      ta.style.height = `${ta.scrollHeight + 2}px`;
-    };
-    fit();
-    ta.addEventListener('input', fit);
-    const opened = performance.now();
-    const focus = () => {
-      ta.focus({ preventScroll: true });
-      ta.select();
-    };
-    focus();
-    requestAnimationFrame(focus);
-    let closed = false;
-    const close = (save) => {
-      if (closed) return;
-      closed = true;
-      this.closeEditor = null;
-      const v = ta.value;
-      ta.remove();
-      if (!save && isNew) return this.deleteElement(`text:${id}`);
-      if (save && !v.trim()) return this.deleteElement(`text:${id}`);
-      if (save && v !== t.text) this.updateText(id, { text: v });
-    };
-    this.closeEditor = () => close(true);
-    ta.addEventListener('blur', () => {
-      if (performance.now() - opened < 400) return setTimeout(focus, 0);
-      close(true);
-    });
-    ta.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        close(false);
-      } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        close(true);
-      }
-    });
+    this.closeEditor = () => ed.close(true);
   }
 
   /**
@@ -708,6 +670,7 @@ export class LayoutEditor {
       lineHeight: t.lineHeight,
       letterSpacing: t.letterSpacing,
       wordSpacing: t.wordSpacing,
+      runs: t.runs,
       rotation: t.rotation || 0,
       halo: !!t.halo,
       haloColor: t.haloColor || '#ffffff',

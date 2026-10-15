@@ -159,6 +159,7 @@ export function layoutTextShape(t) {
     x: t.x,
     y: t.y,
     text: t.text ?? '',
+    runs: t.runs,
     fontSize: t.fontSize || 10,
     fontFamily: t.fontFamily || 'Helvetica, Arial, sans-serif',
     fontWeight: t.fontWeight || 400,

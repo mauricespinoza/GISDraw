@@ -3,6 +3,7 @@
  * paneles y archivos.
  */
 
+import { openRichEditor } from './ui/richEditor.js';
 import { History, addLayer, addShapes, findLayer, findTopShape, layerOfShape, makeRasterLayer, makeVectorLayer, mapShapes, newDocument, updateLayer, allTopShapes } from './doc.js';
 import { View, paperUnits } from './view.js';
 import { Editor, TOOLS } from './editor.js';
@@ -1011,77 +1012,42 @@ class App {
    * tocando fuera.
    */
   editText(shape, isNew = false) {
-    const ta = document.getElementById('text-editor');
+    const host = document.getElementById('text-editor').parentElement;
     const [x, y] = this.view.toScreen(shape.x, shape.y);
     const fpx = Math.max(15, Math.min(40, shape.fontSize * paperUnits(this.view, this.history.doc.refScale).ptToPx));
-    Object.assign(ta.style, {
-      fontSize: `${fpx}px`,
-      fontFamily: shape.fontFamily,
-      fontWeight: shape.fontWeight || 400,
-      fontStyle: shape.italic ? 'italic' : 'normal',
-      textAlign: shape.align === 'justify' ? 'justify' : shape.align || (shape.anchor === 'middle' ? 'center' : shape.anchor === 'end' ? 'right' : 'left'),
-      lineHeight: String(shape.lineHeight || 1.2),
-      color: shape.style?.fill && shape.style.fill !== 'none' ? shape.style.fill : '#111827',
-      left: `${Math.max(4, Math.min(x - 8, this.view.w - 220))}px`,
-      top: `${Math.max(4, y - fpx * 1.35)}px`,
+    this.closeTextEditor?.();
+    const color = shape.style?.fill && shape.style.fill !== 'none' ? shape.style.fill : '#111827';
+    const ed = openRichEditor({
+      host,
+      rect: { left: Math.max(4, Math.min(x - 8, this.view.w - 260)), top: Math.max(4, y - fpx * 1.35), width: Math.min(this.view.w - 16, Math.max(260, (shape.text || '').split('\n').reduce((m, l) => Math.max(m, l.length), 9) * fpx * 0.62 + 20)) },
+      shape,
+      fontPx: fpx,
+      color,
+      isNew,
+      onDone: (res) => {
+        this.closeTextEditor = null;
+        const current = findTopShape(this.history.doc, shape.id)?.shape;
+        if (!current) return;
+        // Esc descarta: un texto nuevo desaparece, uno existente queda como estaba
+        if ((!res && isNew) || (res && !res.text.trim())) {
+          this.history.commit(mapShapes(this.history.doc, [shape.id], () => null));
+          this.editor.setSelection([]);
+          return;
+        }
+        if (!res) return;
+        const runs = res.runs;
+        if (res.text !== current.text || JSON.stringify(runs) !== JSON.stringify(current.runs || [])) {
+          this.history.commit(mapShapes(this.history.doc, [shape.id], (s) => {
+            const n = { ...s, text: res.text, name: res.text.split('\n')[0].slice(0, 40) };
+            if (runs.length) n.runs = runs;
+            else delete n.runs;
+            return n;
+          }));
+        }
+        if (isNew) this.editor.setTool('select');
+      },
     });
-    ta.value = shape.text || '';
-    ta.placeholder = 'Escribe aquí…';
-    const fit = () => {
-      const lines = ta.value.split('\n');
-      ta.style.width = `${Math.min(this.view.w - 16, Math.max(9, ...lines.map((l) => l.length + 2)) * fpx * 0.62 + 20)}px`;
-      ta.style.height = 'auto';
-      ta.style.height = `${ta.scrollHeight + 2}px`;
-    };
-    ta.oninput = fit;
-    ta.hidden = false;
-    fit();
-    const opened = performance.now();
-    const focus = () => {
-      ta.focus({ preventScroll: true });
-      if (!isNew) ta.select();
-    };
-    focus();
-    requestAnimationFrame(focus);
-    const done = (save) => {
-      ta.hidden = true;
-      ta.onblur = null;
-      ta.onkeydown = null;
-      ta.oninput = null;
-      const v = ta.value;
-      const current = findTopShape(this.history.doc, shape.id)?.shape;
-      if (!current) return;
-      // Esc descarta: un texto nuevo desaparece, uno existente queda como estaba
-      if ((!save && isNew) || (save && !v.trim())) {
-        this.history.commit(mapShapes(this.history.doc, [shape.id], () => null));
-        this.editor.setSelection([]);
-        return;
-      }
-      if (!save) return;
-      if (v !== current.text) this.history.commit(mapShapes(this.history.doc, [shape.id], (s) => ({ ...s, text: v, name: v.split('\n')[0].slice(0, 40) })));
-      if (isNew) this.editor.setTool('select');
-    };
-    ta.onblur = () => {
-      // el mismo clic que abrió el cuadro puede quitarle el foco: recuperarlo
-      if (performance.now() - opened < 400) {
-        setTimeout(focus, 0);
-        return;
-      }
-      done(true);
-    };
-    ta.onkeydown = (e) => {
-      e.stopPropagation();
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        ta.onblur = null;
-        done(true);
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        ta.onblur = null;
-        done(false);
-      }
-    };
+    this.closeTextEditor = () => ed.close(true);
   }
 
   /* --------------------------------------------------------- vista */

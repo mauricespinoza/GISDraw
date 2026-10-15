@@ -455,25 +455,52 @@ export function pointToSvg(shape, ctx, extraAttrs = '') {
   return `<g data-id="${shape.id}"${opacity}${extraAttrs}><path d="${d}" ${fill} ${stroke}/></g>`;
 }
 
+/** Medidor de un texto con su fuente real; `st` (un tramo) puede cambiar negrita y cursiva. */
+export function textMeasurer(shape) {
+  return (t, size, st) => measureText(t, size, shape.fontFamily, (st && st.bold !== undefined ? (st.bold ? 700 : 400) : shape.fontWeight) || 400, st && st.italic !== undefined ? st.italic : !!shape.italic);
+}
+
 export function textToSvg(shape, ctx, extraAttrs = '') {
   const s = shape.style;
   const [x, y] = ctx.P(shape.x, shape.y);
   const fs = shape.fontSize * ctx.ptToPx;
   if (fs < 0.8) return '';
-  const m = layoutText(shape, fs, ctx.mmToPx, (t, size) => measureText(t, size, shape.fontFamily, shape.fontWeight || 400, !!shape.italic));
+  const m = layoutText(shape, fs, ctx.mmToPx, textMeasurer(shape));
   const boxed = m.boxed;
   const anchor = anchorOf(shape);
+  const baseFill = s.fill && s.fill !== 'none' ? s.fill : null;
   // x de cada renglón: en un cuadro, el borde izquierdo / centro / borde derecho; sin cuadro, el ancla
   const lineX = boxed ? (m.align === 'center' ? m.boxW / 2 : m.align === 'right' ? m.boxW : 0) : 0;
-  const tspans = m.lines
-    .map((l, i) => {
-      const dy = i === 0 ? 0 : r2(m.lh);
-      if (l.words) {
-        return l.words.map((w, k) => `<tspan x="${r2(x + w.x)}" ${k === 0 ? `dy="${dy}" ` : 'dy="0" '}text-anchor="start">${esc(hardSpaces(w.t))}</tspan>`).join('');
-      }
-      return `<tspan x="${r2(x + lineX)}" dy="${dy}">${esc(hardSpaces(l.t)) || ' '}</tspan>`;
-    })
-    .join('');
+  /** Trozos de un renglón como <tspan>: el primero lleva la posición, los demás siguen a continuación. */
+  const spans = (pieces, first, withFill) =>
+    pieces
+      .map((pc, k) => {
+        const st = pc.st;
+        const attrs = [];
+        if (k === 0) attrs.push(...first);
+        if (st.scale && st.scale !== 1) {
+          attrs.push(`font-size="${r2(fs * st.scale)}"`);
+          if (m.track) attrs.push(`letter-spacing="${r2(m.track * st.scale)}"`);
+          if (m.wordGap) attrs.push(`word-spacing="${r2(m.wordGap * st.scale)}"`);
+        }
+        if (st.bold !== undefined) attrs.push(`font-weight="${st.bold ? 700 : 400}"`);
+        if (st.italic !== undefined) attrs.push(`font-style="${st.italic ? 'italic' : 'normal'}"`);
+        if (withFill && st.color) attrs.push(`fill="${esc(st.color)}"`);
+        return `<tspan${attrs.length ? ` ${attrs.join(' ')}` : ''}>${esc(hardSpaces(pc.t)) || (k === 0 ? ' ' : '')}</tspan>`;
+      })
+      .join('');
+  const build = (withFill) =>
+    m.lines
+      .map((l, i) => {
+        const dy = i === 0 ? 0 : r2(l.adv);
+        if (l.words) {
+          return l.words
+            .map((w, k) => spans(w.pieces, [`x="${r2(x + w.x)}"`, `dy="${k === 0 ? dy : 0}"`, 'text-anchor="start"'], withFill))
+            .join('');
+        }
+        return spans(l.pieces.length ? l.pieces : [{ t: '', st: {} }], [`x="${r2(x + lineX)}"`, `dy="${dy}"`], withFill);
+      })
+      .join('');
   const rot = shape.rotation ? ` transform="rotate(${shape.rotation} ${r2(x)} ${r2(y)})"` : '';
   const opacity = s.opacity != null && s.opacity < 1 ? ` opacity="${s.opacity}"` : '';
   const spacing =
@@ -487,7 +514,8 @@ export function textToSvg(shape, ctx, extraAttrs = '') {
   const halo = shape.halo
     ? `<text ${common} fill="${esc(shape.haloColor || '#fff')}" stroke="${esc(shape.haloColor || '#fff')}" stroke-width="${r2(
         2 * (shape.haloWidth ?? 0.5) * ctx.mmToPx,
-      )}" stroke-linejoin="round" stroke-linecap="round"${shape.haloOpacity != null && shape.haloOpacity < 1 ? ` opacity="${shape.haloOpacity}"` : ''}>${tspans}</text>`
+      )}" stroke-linejoin="round" stroke-linecap="round"${shape.haloOpacity != null && shape.haloOpacity < 1 ? ` opacity="${shape.haloOpacity}"` : ''}>${build(false)}</text>`
     : '';
-  return `<g data-id="${shape.id}"${opacity}${extraAttrs}>${halo}<text ${common} ${fillPaint(shape, ctx)}>${tspans}</text></g>`;
+  void baseFill;
+  return `<g data-id="${shape.id}"${opacity}${extraAttrs}>${halo}<text ${common} ${fillPaint(shape, ctx)}>${build(true)}</text></g>`;
 }

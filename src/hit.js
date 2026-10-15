@@ -10,8 +10,8 @@
 import { allTopShapes } from './doc.js';
 import { nearestOnPolyline, pointInRing } from './geom.js';
 import { flattenShape, shapeBBox } from './vector.js';
-import { measureText } from './labels.js';
 import { layoutText } from './textLayout.js';
+import { textMeasurer } from './style.js';
 
 const flatCache = new WeakMap(); // shape -> {tol, rings}
 
@@ -35,7 +35,7 @@ export function shapeDistance(shape, sp, view, units) {
     case 'text': {
       const [x, y] = P(shape.x, shape.y);
       const fs = shape.fontSize * units.ptToPx;
-      const m = layoutText(shape, fs, units.mmToPx, (t, size) => measureText(t, size, shape.fontFamily, shape.fontWeight || 400, !!shape.italic));
+      const m = layoutText(shape, fs, units.mmToPx, textMeasurer(shape));
       // el puntero, al sistema local del texto (sin girar): la caja sigue la orientación del texto
       const a = ((shape.rotation || 0) * Math.PI) / 180;
       const lx = (sp[0] - x) * Math.cos(a) + (sp[1] - y) * Math.sin(a);
