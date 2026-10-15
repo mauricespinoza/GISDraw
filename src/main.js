@@ -3,7 +3,7 @@
  * paneles y archivos.
  */
 
-import { History, addLayer, findLayer, layerOfShape, makeRasterLayer, makeVectorLayer, mapShapes, newDocument, updateLayer, allTopShapes } from './doc.js';
+import { History, addLayer, findLayer, findTopShape, layerOfShape, makeRasterLayer, makeVectorLayer, mapShapes, newDocument, updateLayer, allTopShapes } from './doc.js';
 import { View, paperUnits } from './view.js';
 import { Editor, TOOLS } from './editor.js';
 import { StageRenderer } from './render.js';
@@ -13,8 +13,8 @@ import { Panels } from './ui/panels.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
 import { ICONS } from './ui/icons.js';
 import { h } from './ui/dom.js';
-import { defaultStyle } from './style.js';
-import { copyShapes, pasteShapes, arrange, group, ungroup } from './ops.js';
+import { DASHES, defaultStyle } from './style.js';
+import { copyShapes, pasteShapes, arrange, group, ungroup, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame } from './ops.js';
 import { formatDMS, toLonLat } from './proj.js';
 import { shapeBBox, unionBBox, walkShapes, newId } from './vector.js';
 import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles } from './io/store.js';
@@ -51,6 +51,10 @@ class App {
       onEditText: (t, isNew) => this.editText(t, isNew),
     });
     this.editor.onCommandKey = (e) => this.commandKey(e);
+    this.editor.onPlainKey = (e) => this.plainKey(e);
+    this.editor.onContextMenu = (sp, info) => this.showContextMenu(sp, info);
+    this.editor.onPointerStart = () => this.hideContextMenu();
+    this.swatchFront = 'stroke';
     this.editor.onStylePicked = (st) => {
       if (!this.editor.selection.size) this.setCurrentStyle(st);
     };
@@ -76,6 +80,8 @@ class App {
 
     this.buildToolbar();
     this.buildTopbar();
+    this.buildContextMenu();
+    this.setupTooltips();
     this.observeSize();
     this.restore();
   }
@@ -88,11 +94,18 @@ class App {
     this.syncToggles();
   }
 
-  setCurrentStyle(st) {
+  /**
+   * `render: false` durante un arrastre de deslizador o del selector de color:
+   * reconstruir el panel en ese momento destruiría el control en uso (el
+   * selector de color se cerraba al primer movimiento).
+   */
+  setCurrentStyle(st, { render = true } = {}) {
     this.currentStyle = { ...defaultStyle(), ...st };
     writeJSON('gd.style', this.currentStyle);
     this.updateSwatch();
-    if (this.panels.tab === 'style') this.panels.render();
+    if (!render) return;
+    if (['style', 'geology'].includes(this.panels.tab)) this.panels.render();
+    this.renderPropbar();
   }
 
   layerOf(id) {
@@ -106,6 +119,7 @@ class App {
     if (!meta.preview) {
       if (!this.layout.el.hidden) this.layout.schedule();
       this.panels.render();
+      this.renderPropbar();
       this.updateUndo();
       this.updateAttribution();
       this.scheduleSave();
@@ -120,7 +134,8 @@ class App {
     const sig = `${[...this.editor.selection].join(',')}|${this.editor.tool}`;
     if (sig !== this.lastSelSig) {
       this.lastSelSig = sig;
-      if (['style', 'attrs', 'arrange'].includes(this.panels.tab)) this.panels.render();
+      if (['style', 'geology', 'attrs', 'arrange'].includes(this.panels.tab)) this.panels.render();
+      this.renderPropbar();
     }
     this.updateSwatch();
     if (this.editor.hover?.wp) this.updateCoords(this.editor.hover.wp);
@@ -194,31 +209,151 @@ class App {
 
   buildToolbar() {
     this.toolbarEl = document.getElementById('toolbar');
-    const groups = [['select', 'node', 'lasso'], ['pen', 'polygon', 'pencil', 'line', 'arrow'], ['rect', 'ellipse', 'text', 'point'], ['eyedropper', 'pan']];
+    const groups = [['select', 'node', 'lasso'], ['pen', 'polygon', 'pencil', 'line', 'arrow'], ['rect', 'ellipse', 'text', 'point'], ['scissors', 'eyedropper', 'pan', 'zoom']];
     const els = [];
     groups.forEach((g, gi) => {
       if (gi) els.push(h('div', { class: 'tsep' }));
       for (const t of g) {
-        const b = h('button', { 'data-tool': t, title: `${TOOLS[t].label} (${TOOLS[t].key.toUpperCase()})`, html: ICONS[t], onclick: () => this.editor.setTool(t) });
+        const b = h('button', { 'data-tool': t, 'aria-label': TOOLS[t].label, 'data-tip': `${TOOLS[t].label}  ${TOOLS[t].key.toUpperCase()}`, html: ICONS[t], onclick: () => this.editor.setTool(t) });
         els.push(b);
       }
     });
-    this.swatch = h('div', { class: 'swatch', title: 'Relleno y trazo actuales (abre Estilo)', onclick: () => this.showPanel('style') }, h('div', { style: { left: '0', top: '0' } }), h('div', { style: { left: '10px', top: '10px' } }));
-    els.push(h('div', { class: 'tsep' }), this.swatch);
+    els.push(h('div', { class: 'tsep' }), this.buildSwatch());
     this.toolbarEl.replaceChildren(...els);
     this.updateSwatch();
   }
 
+  /**
+   * Relleno y trazo, como en Illustrator: cada cuadro abre su selector de
+   * color (el input va encima, transparente, para que funcione también en
+   * iPad); el que está al frente es el que afectan X, / y el menú.
+   */
+  buildSwatch() {
+    const chip = (kind) => {
+      const input = h('input', { type: 'color', class: 'sw-input', 'aria-label': kind === 'fill' ? 'Color de relleno' : 'Color de trazo' });
+      input.addEventListener('pointerdown', () => this.setSwatchFront(kind));
+      input.addEventListener('input', () => this.editStyle({ [kind]: input.value }, false));
+      input.addEventListener('change', () => this.editStyle({ [kind]: input.value }, true));
+      const el = h('div', { class: `sw-chip sw-${kind}`, 'data-tip': kind === 'fill' ? 'Relleno (X alterna)' : 'Trazo (X alterna)' }, h('div', { class: 'sw-paint' }), input);
+      el.input = input;
+      return el;
+    };
+    this.swFill = chip('fill');
+    this.swStroke = chip('stroke');
+    const mini = (label, tip, f) => h('button', { class: 'sw-mini', 'data-tip': tip, 'aria-label': tip, onclick: f }, label);
+    this.swatch = h(
+      'div',
+      { class: 'swatch' },
+      h('div', { class: 'sw-chips' }, this.swFill, this.swStroke),
+      h(
+        'div',
+        { class: 'sw-row' },
+        mini('◩', 'Predeterminado  D', () => this.defaultColors()),
+        mini('⇄', 'Intercambiar  Mayús+X', () => this.swapColors()),
+        mini('⌀', 'Ninguno  /', () => this.noneColor()),
+      ),
+    );
+    this.setSwatchFront(this.swatchFront);
+    return this.swatch;
+  }
+
+  setSwatchFront(kind) {
+    this.swatchFront = kind;
+    this.swatch?.classList.toggle('fill-front', kind === 'fill');
+  }
+
+  shownStyle() {
+    const sel = this.editor.selectedShapes();
+    let target = null;
+    for (const s of sel) walkShapes([s], (x) => {
+      if (!target && x.style) target = x;
+    });
+    return target?.style || this.currentStyle;
+  }
+
+  defaultColors() {
+    this.editStyle({ fill: 'none', stroke: '#000000', strokeWidth: 0.35, strokeOpacity: 1 }, true);
+    this.message('Predeterminado: sin relleno, trazo negro 0,35 mm');
+  }
+
+  swapColors() {
+    const st = this.shownStyle();
+    this.editStyle({ fill: st.stroke || 'none', stroke: st.fill || 'none', fillOpacity: st.fill === 'none' ? 1 : st.fillOpacity }, true);
+  }
+
+  noneColor() {
+    const st = this.shownStyle();
+    const k = this.swatchFront;
+    if (st[k] === 'none') return;
+    this.editStyle(k === 'fill' ? { fill: 'none', lastFill: st.fill } : { stroke: 'none', lastStroke: st.stroke }, true);
+  }
+
   updateSwatch() {
     if (!this.swatch) return;
-    const sel = this.editor.selectedShapes()[0];
-    const st = sel?.style || this.currentStyle;
-    const [fill, stroke] = this.swatch.children;
-    const none = 'linear-gradient(45deg, transparent 45%, #ef4444 45%, #ef4444 55%, transparent 55%), #fff';
-    fill.style.background = st.fill && st.fill !== 'none' ? st.fill : none;
-    stroke.style.background = 'transparent';
-    stroke.style.border = `5px solid ${st.stroke && st.stroke !== 'none' ? st.stroke : '#ef4444'}`;
-    stroke.style.outline = '1px solid #fff';
+    const st = this.shownStyle();
+    const paint = (chip, color) => {
+      const none = !color || color === 'none';
+      chip.classList.toggle('none', none);
+      chip.firstChild.style.setProperty('--c', none ? 'transparent' : color);
+      if (!none && /^#[0-9a-f]{6}$/i.test(color)) chip.input.value = color;
+    };
+    paint(this.swFill, st.fill);
+    paint(this.swStroke, st.stroke);
+  }
+
+  /* ------------------------------------------------ barra de propiedades */
+
+  /** Barra de control (como la de Illustrator): trazo, grosor, tipo, relleno y opacidad a mano. */
+  renderPropbar() {
+    const bar = document.getElementById('propbar');
+    if (!bar || bar.contains(document.activeElement)) return;
+    const ed = this.editor;
+    const sel = ed.selectedShapes();
+    const st = { ...defaultStyle(), ...this.shownStyle() };
+    const text = sel.length === 1 && sel[0].type === 'text' ? sel[0] : null;
+    const items = [];
+    const lbl = (t) => h('span', { class: 'pb-l' }, t);
+    const colorIn = (kind) => {
+      const has = st[kind] && st[kind] !== 'none';
+      const i = h('input', { type: 'color', value: has && /^#[0-9a-f]{6}$/i.test(st[kind]) ? st[kind] : kind === 'fill' ? '#86efac' : '#000000' });
+      i.addEventListener('input', () => this.editStyle({ [kind]: i.value }, false));
+      i.addEventListener('change', () => this.editStyle({ [kind]: i.value }, true));
+      const wrap = h('label', { class: `pb-color${has ? '' : ' none'}`, 'data-tip': kind === 'fill' ? 'Color de relleno' : 'Color de trazo' }, i);
+      const off = h('button', { class: `pb-btn${has ? '' : ' on'}`, 'data-tip': has ? 'Quitar' : 'Activar', onclick: () => this.editStyle(has ? { [kind]: 'none', [kind === 'fill' ? 'lastFill' : 'lastStroke']: st[kind] } : { [kind]: (kind === 'fill' ? st.lastFill : st.lastStroke) || (kind === 'fill' ? '#86efac' : '#000000') }, true) }, '⌀');
+      return [wrap, off];
+    };
+    items.push(h('span', { class: 'pb-head' }, sel.length ? `${sel.length} sel.` : 'Nuevo'));
+    items.push(lbl('Trazo'), ...colorIn('stroke'));
+    const w = h('input', { type: 'number', class: 'pb-num', min: 0, step: 0.05, value: Number(st.strokeWidth || 0).toFixed(2), 'data-tip': 'Grosor del trazo (mm en el papel)' });
+    w.addEventListener('change', () => {
+      const v = Number(String(w.value).replace(',', '.'));
+      if (Number.isFinite(v) && v >= 0) this.editStyle({ strokeWidth: v }, true);
+    });
+    const widths = h('select', { class: 'pb-sel pb-w', 'data-tip': 'Grosores frecuentes', onchange: (e) => e.target.value && this.editStyle({ strokeWidth: Number(e.target.value) }, true) }, h('option', { value: '' }, '▾'), ...[0.1, 0.18, 0.25, 0.35, 0.5, 0.7, 1, 1.4, 2].map((v) => h('option', { value: v }, `${v} mm`)));
+    items.push(w, h('span', { class: 'pb-u' }, 'mm'), widths);
+    const dash = h('select', { class: 'pb-sel', 'data-tip': 'Tipo de línea', onchange: (e) => this.editStyle({ dash: e.target.value }, true) }, ...Object.entries(DASHES).map(([k, d]) => h('option', { value: k, selected: (st.dash || 'solid') === k }, d.label)));
+    items.push(dash, h('span', { class: 'pb-sep' }));
+    items.push(lbl('Relleno'), ...colorIn('fill'));
+    const op = h('input', { type: 'number', class: 'pb-num pb-pct', min: 0, max: 100, step: 5, value: Math.round((st.opacity ?? 1) * 100), 'data-tip': 'Opacidad del objeto (%)' });
+    op.addEventListener('change', () => {
+      const v = Math.max(0, Math.min(100, Number(op.value)));
+      if (Number.isFinite(v)) this.editStyle({ opacity: v / 100 }, true);
+    });
+    items.push(h('span', { class: 'pb-sep' }), lbl('Opac.'), op, h('span', { class: 'pb-u' }, '%'));
+    if (text) {
+      const fs = h('input', { type: 'number', class: 'pb-num', min: 0.5, step: 0.5, value: text.fontSize, 'data-tip': 'Tamaño de letra (pt a la escala de referencia)' });
+      fs.addEventListener('change', () => {
+        const v = Number(fs.value);
+        if (v > 0) this.history.commit(mapShapes(this.history.doc, [text.id], (x) => ({ ...x, fontSize: v })));
+      });
+      items.push(h('span', { class: 'pb-sep' }), lbl('Letra'), fs, h('span', { class: 'pb-u' }, 'pt'));
+    }
+    items.push(
+      h('span', { class: 'pb-sep' }),
+      h('button', { class: 'pb-btn pb-more', 'data-tip': 'Todo el estilo  Ctrl+F10', onclick: () => this.showPanel('style') }, 'Estilo…'),
+      h('button', { class: 'pb-btn pb-more', 'data-tip': 'Tramas, fallas y tipos de línea geológicos', onclick: () => this.showPanel('geology') }, 'Geología…'),
+    );
+    bar.replaceChildren(...items);
   }
 
   buildTopbar() {
@@ -228,7 +363,8 @@ class App {
     $('btn-snap').onclick = () => this.saveSettings({ snap: !this.settings.snap });
     $('btn-trace').onclick = () => this.saveSettings({ trace: !this.settings.trace });
     $('btn-finger').onclick = () => this.saveSettings({ fingerDraws: !this.settings.fingerDraws });
-    $('btn-panel').onclick = () => document.getElementById('app').classList.toggle('panel-hidden');
+    $('btn-panel').onclick = () => this.togglePanel();
+    $('btn-help').onclick = () => this.toggleHelp();
     if (window.innerWidth < 900) document.getElementById('app').classList.add('panel-hidden');
     this.scaleInput = $('in-scale');
     this.scaleInput.addEventListener('change', () => {
@@ -283,6 +419,8 @@ class App {
       item('Estilo QGIS (.qml / .qlr) a la capa activa…', () => this.applyQmlToLayer(this.history.doc.activeLayerId)),
       h('div', { class: 'mh' }, 'Exportar'),
       item('GeoPackage (todas las capas, con estilo QGIS)', () => this.exportGpkg()),
+      item('Simbología QGIS (.qlr) + GeoPackage', () => this.exportQLR()),
+      item('Estilo QGIS (.qml) de la capa activa', () => this.exportQML()),
       item('GeoJSON de la capa activa (WGS84)', () => this.exportGeoJSON(true)),
       item('GeoJSON de la capa activa (UTM 19S)', () => this.exportGeoJSON(false)),
       item('Imagen PNG de la vista', () => this.exportView('png')),
@@ -371,6 +509,231 @@ class App {
     this.panels.show(tab);
   }
 
+  togglePanel() {
+    document.getElementById('app').classList.toggle('panel-hidden');
+  }
+
+  /* --------------------------------------------------- menú contextual */
+
+  buildContextMenu() {
+    this.ctxEl = document.getElementById('ctx-menu');
+    document.addEventListener('pointerdown', (e) => {
+      // en el lienzo lo cierra el editor (el mismo clic derecho lo abre)
+      if (!this.ctxEl.hidden && !this.ctxEl.contains(e.target) && !e.target.closest?.('#input-host')) this.hideContextMenu();
+    });
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        this.hideContextMenu();
+        this.toggleHelp(false);
+      }
+    });
+    window.addEventListener('blur', () => this.hideContextMenu());
+  }
+
+  hideContextMenu() {
+    if (this.ctxEl) this.ctxEl.hidden = true;
+  }
+
+  /** Menú del botón derecho o de mantener apretado: lo que tiene sentido según lo que hay bajo el puntero. */
+  showContextMenu(sp, info = {}) {
+    const ed = this.editor;
+    const doc = this.history.doc;
+    const sel = ed.selectedShapes();
+    const n = sel.length;
+    const groups = [];
+    const it = (label, key, f, opts = {}) => ({ label, key, f, ...opts });
+    const run = (f) => () => {
+      this.hideContextMenu();
+      Promise.resolve(f()).catch((err) => this.message(`Error: ${err.message}`, 6000));
+    };
+    const commitSel = (r) => {
+      if (r.error) return this.message(r.error);
+      this.history.commit(r.doc);
+      if (r.id) ed.setSelection([r.id]);
+      else if (r.ids) ed.setSelection(r.ids);
+    };
+
+    if (ed.draft) {
+      groups.push([
+        it('Terminar línea', 'Enter', () => ed.finishDraft(false)),
+        it('Cerrar forma', '', () => ed.finishDraft(true)),
+        it('Quitar último vértice', '⌫', () => ed.undoDraftNode()),
+        it('Cancelar trazo', 'Esc', () => ed.cancelDraft()),
+      ]);
+    }
+    if (info.node) {
+      const a = info.node;
+      groups.push([
+        it('Borrar nodo', 'Supr', () => ed.deleteActiveNode()),
+        it('Esquina ↔ curva', 'Mayús+C', () => ed.toggleSmooth(a.id, a.ring, a.index)),
+        a.ring < 0 ? it('Cortar en este nodo', 'C', () => commitSel(splitPath(this.history.doc, a.id, a.index, 0))) : null,
+      ]);
+    }
+    if (n) {
+      const paths = sel.filter((s) => s.type === 'path');
+      groups.push([
+        it('Cortar', 'Ctrl+X', () => this.cut()),
+        it('Copiar', 'Ctrl+C', () => this.copy()),
+        it('Duplicar', 'Ctrl+D', () => ed.duplicate()),
+        it('Eliminar', 'Supr', () => ed.deleteSelection(), { danger: true }),
+      ]);
+      groups.push([
+        it('Estilo…', 'Ctrl+F10', () => this.showPanel('style')),
+        it('Geología: tramas y fallas…', '', () => this.showPanel('geology')),
+        n === 1 ? it('Atributos…', '', () => this.showPanel('attrs')) : null,
+        n === 1 && sel[0].type === 'text' ? it('Editar texto', 'Doble clic', () => this.editText(sel[0])) : null,
+        n === 1 && sel[0].type === 'path' ? it('Editar nodos', 'A', () => ed.setTool('node')) : null,
+      ]);
+      groups.push([
+        it('Traer al frente', 'Ctrl+Mayús+]', () => this.history.commit(arrange(doc, ed.selection, 'front'))),
+        it('Hacia adelante', 'Ctrl+]', () => this.history.commit(arrange(doc, ed.selection, 'forward'))),
+        it('Hacia atrás', 'Ctrl+[', () => this.history.commit(arrange(doc, ed.selection, 'backward'))),
+        it('Enviar al fondo', 'Ctrl+Mayús+[', () => this.history.commit(arrange(doc, ed.selection, 'back'))),
+      ]);
+      groups.push([
+        n > 1 ? it('Agrupar', 'Ctrl+G', () => commitSel(group(doc, ed.selection))) : null,
+        sel.some((s) => s.type === 'group') ? it('Desagrupar', 'Ctrl+Mayús+G', () => commitSel(ungroup(doc, ed.selection))) : null,
+        paths.length && paths.length <= 2 && paths.some((p) => !p.closed) ? it(paths.length === 1 ? 'Cerrar trazo' : 'Unir trazos', 'Ctrl+J', () => this.joinSelected()) : null,
+        paths.length ? it('Invertir dirección', '', () => ed.reverseSelected()) : null,
+        it('Seleccionar mismo relleno y trazo', '', () => ed.setSelection(selectSame(doc, ed.selection, 'fillstroke', { scope: 'all' }))),
+      ]);
+      groups.push([
+        it('Bloquear', 'Ctrl+2', () => this.lockSelection()),
+        it('Ocultar', 'Ctrl+3', () => this.hideSelection()),
+        it('Zoom a la selección', '', () => this.zoomToShapes(sel)),
+      ]);
+    }
+    groups.push([
+      this.clipboard.length ? it('Pegar', 'Ctrl+V', () => this.paste(false)) : null,
+      this.clipboard.length ? it('Pegar en el lugar', 'Ctrl+F', () => this.paste(true)) : null,
+      it('Seleccionar todo', 'Ctrl+A', () => ed.selectAll()),
+      n ? it('Deseleccionar', 'Ctrl+Mayús+A', () => ed.setSelection([])) : null,
+    ]);
+    groups.push([
+      it('Desbloquear todo', 'Ctrl+Alt+2', () => this.unlockAll()),
+      it('Mostrar todo', 'Ctrl+Alt+3', () => this.showAll()),
+      it('Zoom a todo el dibujo', 'Ctrl+0', () => this.zoomToShapes(allTopShapes(doc).map((x) => x.shape))),
+      it(`Escala de referencia 1:${Number(doc.refScale).toLocaleString('es-CL')}`, 'Ctrl+1', () => this.view.setScale(doc.refScale)),
+      info.wp ? it('Copiar coordenadas de este punto', '', () => this.copyCoords(info.wp)) : null,
+    ]);
+
+    const els = [];
+    for (const g of groups) {
+      const items = g.filter(Boolean);
+      if (!items.length) continue;
+      if (els.length) els.push(h('div', { class: 'msep' }));
+      for (const x of items) els.push(h('button', { class: x.danger ? 'danger' : '', onclick: run(x.f) }, h('span', {}, x.label), x.key ? h('kbd', {}, x.key) : null));
+    }
+    const m = this.ctxEl;
+    m.replaceChildren(...els);
+    m.hidden = false;
+    const vr = this.viewport.getBoundingClientRect();
+    const mw = m.offsetWidth;
+    const mh = m.offsetHeight;
+    m.style.left = `${Math.max(4, Math.min(vr.left + sp[0], window.innerWidth - mw - 6))}px`;
+    m.style.top = `${Math.max(4, Math.min(vr.top + sp[1], window.innerHeight - mh - 6))}px`;
+  }
+
+  copyCoords(wp) {
+    const [lon, lat] = toLonLat(wp[0], wp[1]);
+    const t = `${lat.toFixed(6)}, ${lon.toFixed(6)}  (${formatDMS(lat, true)} ${formatDMS(lon, false)} · ${Math.round(wp[0])} E ${Math.round(wp[1])} N UTM 19S)`;
+    navigator.clipboard?.writeText(t).then(
+      () => this.message('Coordenadas copiadas'),
+      () => prompt('Coordenadas', t),
+    ) ?? prompt('Coordenadas', t);
+  }
+
+  joinSelected() {
+    const r = joinPaths(this.history.doc, this.editor.selection, 2 * this.view.mpp);
+    if (r.error) return this.message(r.error);
+    this.history.commit(r.doc);
+    this.editor.setSelection([r.id]);
+    this.editor.snapDirty = true;
+  }
+
+  lockSelection() {
+    const ed = this.editor;
+    if (!ed.selection.size) return;
+    this.history.commit(setShapeFlag(this.history.doc, ed.selection, 'locked', true));
+    ed.setSelection([]);
+    this.message('Bloqueado · Ctrl+Alt+2 desbloquea todo');
+  }
+
+  hideSelection() {
+    const ed = this.editor;
+    if (!ed.selection.size) return;
+    this.history.commit(setShapeFlag(this.history.doc, ed.selection, 'visible', false));
+    ed.setSelection([]);
+    this.message('Oculto · Ctrl+Alt+3 muestra todo');
+  }
+
+  unlockAll() {
+    const r = resetShapeFlag(this.history.doc, 'locked');
+    if (!r.ids.length) return this.message('No hay objetos bloqueados');
+    this.history.commit(r.doc);
+    this.editor.setSelection(r.ids);
+  }
+
+  showAll() {
+    const r = resetShapeFlag(this.history.doc, 'visible');
+    if (!r.ids.length) return this.message('No hay objetos ocultos');
+    this.history.commit(r.doc);
+    this.editor.setSelection(r.ids);
+  }
+
+  /* ------------------------------------------------------ ayuda */
+
+  /** Globos de ayuda con el atajo, solo con ratón (en tablet estorban). */
+  setupTooltips() {
+    const tip = document.getElementById('tip');
+    let t = null;
+    let cur = null;
+    const hide = () => {
+      clearTimeout(t);
+      tip.hidden = true;
+      cur = null;
+    };
+    document.addEventListener('pointerover', (e) => {
+      if (e.pointerType !== 'mouse') return;
+      const el = e.target.closest?.('[data-tip]');
+      if (el === cur) return;
+      hide();
+      if (!el) return;
+      cur = el;
+      t = setTimeout(() => {
+        const [label, key] = el.dataset.tip.split(/\s{2,}/);
+        tip.replaceChildren(h('span', {}, label), key ? h('kbd', {}, key) : '');
+        tip.hidden = false;
+        const r = el.getBoundingClientRect();
+        const w = tip.offsetWidth;
+        const hgt = tip.offsetHeight;
+        const vertical = el.closest('#toolbar');
+        let x = vertical ? r.right + 8 : r.left + r.width / 2 - w / 2;
+        let y = vertical ? r.top + r.height / 2 - hgt / 2 : r.bottom + 8;
+        if (y + hgt > window.innerHeight - 4) y = r.top - hgt - 8;
+        x = Math.max(4, Math.min(x, window.innerWidth - w - 4));
+        tip.style.left = `${x}px`;
+        tip.style.top = `${Math.max(4, y)}px`;
+      }, 450);
+    });
+    document.addEventListener('pointerdown', hide, true);
+    document.addEventListener('pointerout', (e) => {
+      if (cur && !cur.contains(e.relatedTarget)) hide();
+    });
+  }
+
+  toggleHelp(force) {
+    const el = document.getElementById('help');
+    const show = force ?? el.hidden;
+    if (!show) {
+      el.hidden = true;
+      return;
+    }
+    if (!el.childElementCount) el.append(...helpContent(() => this.toggleHelp(false)));
+    el.onpointerdown = (e) => e.target === el && this.toggleHelp(false);
+    el.hidden = false;
+  }
+
   /* --------------------------------------------------------- edición */
 
   /** Cambia el estilo de la selección (todas las hojas de los grupos) o el de dibujo. */
@@ -378,7 +741,7 @@ class App {
     const ed = this.editor;
     const sel = ed.selectedShapes();
     if (!sel.length) {
-      this.setCurrentStyle({ ...this.currentStyle, ...patch });
+      this.setCurrentStyle({ ...this.currentStyle, ...patch }, { render: final });
       return;
     }
     if (!final && !this.history.anchor) this.history.begin();
@@ -407,13 +770,14 @@ class App {
     this.editor.deleteSelection();
   }
 
-  paste(inPlace) {
+  paste(inPlace, where = 'front') {
     if (!this.clipboard.length) return;
     const layer = this.editor.ensureDrawableLayer();
     if (!layer) return;
     const r = pasteShapes(this.history.doc, this.clipboard, layer.id, { inPlace, offset: inPlace ? 0 : 12 * this.view.mpp });
-    this.history.commit(r.doc);
-    this.editor.setSelection(r.ids);
+    const ids = new Set(r.ids);
+    this.history.commit(where === 'back' ? arrange(r.doc, ids, 'back') : r.doc);
+    this.editor.setSelection(ids);
   }
 
   commandKey(e) {
@@ -426,15 +790,31 @@ class App {
       f();
     };
     if (!mod) return;
+    if (e.key === 'F10') return run(() => this.showPanel('style'));
     if (k === 'z' && !e.shiftKey) return run(() => this.history.undo());
     if ((k === 'z' && e.shiftKey) || k === 'y') return run(() => this.history.redo());
     if (k === 'c') return run(() => this.copy());
     if (k === 'x') return run(() => this.cut());
     if (k === 'v') return run(() => this.paste(e.shiftKey || e.altKey));
-    if (k === 'f' && e.shiftKey) return run(() => this.paste(true)); // como "pegar delante" de Illustrator
+    // Ctrl+F / Ctrl+B: pegar en el lugar, delante o detrás (Illustrator)
+    if (k === 'f') return run(() => this.paste(true));
+    if (k === 'b') return run(() => this.paste(true, 'back'));
     if (k === 'd') return run(() => ed.duplicate());
+    if (k === 'a' && e.shiftKey) return run(() => ed.setSelection([]));
     if (k === 'a') return run(() => ed.selectAll());
     if (k === 's') return run(() => this.saveProject());
+    if (k === 'o') return run(() => this.openProject().catch((err) => this.message(`Error: ${err.message}`, 6000)));
+    if (k === 'p') return run(() => this.showPanel('layout'));
+    if (k === 'j') return run(() => this.joinSelected());
+    if (k === 'l')
+      return run(() => {
+        const l = makeVectorLayer(`Capa ${doc.layers.filter((x) => x.kind === 'vector').length + 1}`);
+        this.history.commit(addLayer(doc, l, doc.activeLayerId));
+        this.message(`Nueva capa: ${l.name}`);
+      });
+    if (e.code === 'Digit1') return run(() => this.view.setScale(doc.refScale));
+    if (e.code === 'Digit2') return run(() => (e.altKey ? this.unlockAll() : this.lockSelection()));
+    if (e.code === 'Digit3') return run(() => (e.altKey ? this.showAll() : this.hideSelection()));
     if (k === 'g' && !e.shiftKey)
       return run(() => {
         const r = group(doc, ed.selection);
@@ -467,40 +847,98 @@ class App {
     if (k === '-') return run(() => this.view.zoomAt(1.5));
   }
 
+  /** Atajos de una tecla que no son herramientas (X, Mayús+X, D, /, Tab, ?, F1, F7). */
+  plainKey(e) {
+    const run = (f) => {
+      e.preventDefault();
+      f();
+      return true;
+    };
+    if (e.key === '?' || e.key === 'F1') return run(() => this.toggleHelp());
+    if (e.key === 'Tab' && (document.activeElement === document.body || !document.activeElement)) return run(() => this.togglePanel());
+    if (e.key === 'F7') return run(() => this.showPanel('layers'));
+    if (e.key === '/') return run(() => this.noneColor());
+    const k = e.key.toLowerCase();
+    if (k === 'x' && e.shiftKey) return run(() => this.swapColors());
+    if (k === 'x') return run(() => this.setSwatchFront(this.swatchFront === 'fill' ? 'stroke' : 'fill'));
+    if (k === 'd' && !e.shiftKey) return run(() => this.defaultColors());
+    return false;
+  }
+
   /* --------------------------------------------------------- texto */
 
+  /**
+   * Cuadro de edición de texto sobre el mapa. Se abre con la letra a un
+   * tamaño legible (no el del mapa, que puede ser diminuto), crece con lo que
+   * se escribe y se cierra con Enter (Mayús+Enter = salto de línea), Esc o
+   * tocando fuera.
+   */
   editText(shape, isNew = false) {
     const ta = document.getElementById('text-editor');
     const [x, y] = this.view.toScreen(shape.x, shape.y);
-    ta.style.left = `${Math.max(4, x)}px`;
-    ta.style.top = `${Math.max(4, y - 30)}px`;
-    ta.value = shape.text;
+    const fpx = Math.max(15, Math.min(40, shape.fontSize * paperUnits(this.view, this.history.doc.refScale).ptToPx));
+    Object.assign(ta.style, {
+      fontSize: `${fpx}px`,
+      fontFamily: shape.fontFamily,
+      fontWeight: shape.fontWeight || 400,
+      fontStyle: shape.italic ? 'italic' : 'normal',
+      color: shape.style?.fill && shape.style.fill !== 'none' ? shape.style.fill : '#111827',
+      left: `${Math.max(4, Math.min(x - 8, this.view.w - 220))}px`,
+      top: `${Math.max(4, y - fpx * 1.35)}px`,
+    });
+    ta.value = shape.text || '';
+    ta.placeholder = 'Escribe aquí…';
+    const fit = () => {
+      const lines = ta.value.split('\n');
+      ta.style.width = `${Math.min(this.view.w - 16, Math.max(9, ...lines.map((l) => l.length + 2)) * fpx * 0.62 + 20)}px`;
+      ta.style.height = 'auto';
+      ta.style.height = `${ta.scrollHeight + 2}px`;
+    };
+    ta.oninput = fit;
     ta.hidden = false;
-    ta.focus();
-    ta.select();
+    fit();
+    const opened = performance.now();
+    const focus = () => {
+      ta.focus({ preventScroll: true });
+      if (!isNew) ta.select();
+    };
+    focus();
+    requestAnimationFrame(focus);
     const done = (save) => {
       ta.hidden = true;
       ta.onblur = null;
       ta.onkeydown = null;
+      ta.oninput = null;
       const v = ta.value;
-      if (!save) {
-        if (isNew) this.editor.deleteSelection();
+      const current = findTopShape(this.history.doc, shape.id)?.shape;
+      if (!current) return;
+      if (!save || !v.trim()) {
+        if (isNew || !v.trim()) {
+          this.history.commit(mapShapes(this.history.doc, [shape.id], () => null));
+          this.editor.setSelection([]);
+        }
         return;
       }
-      if (!v.trim()) {
-        this.history.commit(mapShapes(this.history.doc, [shape.id], () => null));
-        return;
-      }
-      if (v !== shape.text) this.history.commit(mapShapes(this.history.doc, [shape.id], (s) => ({ ...s, text: v, name: v.split('\n')[0].slice(0, 40) })));
+      if (v !== current.text) this.history.commit(mapShapes(this.history.doc, [shape.id], (s) => ({ ...s, text: v, name: v.split('\n')[0].slice(0, 40) })));
       if (isNew) this.editor.setTool('select');
     };
-    ta.onblur = () => done(true);
+    ta.onblur = () => {
+      // el mismo clic que abrió el cuadro puede quitarle el foco: recuperarlo
+      if (performance.now() - opened < 400) {
+        setTimeout(focus, 0);
+        return;
+      }
+      done(true);
+    };
     ta.onkeydown = (e) => {
+      e.stopPropagation();
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        ta.blur();
+        ta.onblur = null;
+        done(true);
       }
       if (e.key === 'Escape') {
+        e.preventDefault();
         ta.onblur = null;
         done(false);
       }
@@ -557,7 +995,7 @@ class App {
 
   saveProject() {
     const doc = this.history.doc;
-    download(JSON.stringify({ app: 'GISDrawer', ...doc }), `${(doc.title || 'dibujo').replace(/\W+/g, '_')}.gisdrawer`, 'application/json');
+    download(JSON.stringify({ app: 'GISDrawer', ...doc }), `${fileBase(doc.title)}.gisdrawer`, 'application/json');
   }
 
   async openProject() {
@@ -707,8 +1145,41 @@ class App {
     this.message('Generando GeoPackage…', 0);
     const { exportGeoPackage } = await import('./io/gpkg.js');
     const bytes = await exportGeoPackage(this.history.doc);
-    download(new Blob([bytes], { type: 'application/geopackage+sqlite3' }), `${(this.history.doc.title || 'dibujo').replace(/\W+/g, '_')}.gpkg`);
+    download(new Blob([bytes], { type: 'application/geopackage+sqlite3' }), `${fileBase(this.history.doc.title)}.gpkg`);
     this.message('GeoPackage exportado (EPSG:32719, con estilo QGIS)');
+  }
+
+  /**
+   * Simbología para QGIS: un .qlr (definición de capas con su estilo y
+   * etiquetas) y el GeoPackage al que apunta, con el mismo nombre. Dejando
+   * ambos en la misma carpeta, arrastrar el .qlr a QGIS carga todo con el
+   * aspecto del dibujo.
+   */
+  async exportQLR() {
+    this.message('Generando simbología QGIS…', 0);
+    const { exportGeoPackage } = await import('./io/gpkg.js');
+    const { buildQLR } = await import('./io/qml.js');
+    const base = fileBase(this.history.doc.title);
+    const manifest = [];
+    const bytes = await exportGeoPackage(this.history.doc, { manifest });
+    download(new Blob([bytes], { type: 'application/geopackage+sqlite3' }), `${base}.gpkg`);
+    const qlr = buildQLR(manifest, { gpkgName: `${base}.gpkg`, title: this.history.doc.title || 'GISDrawer' });
+    setTimeout(() => download(qlr, `${base}.qlr`, 'application/xml'), 400);
+    this.message(`Simbología exportada: ${base}.qlr + ${base}.gpkg (${manifest.length} capa(s)). Déjalos en la misma carpeta y arrastra el .qlr a QGIS.`, 8000);
+  }
+
+  /** Estilo .qml de la capa activa (para «Cargar estilo» en QGIS sobre una capa existente). */
+  async exportQML() {
+    const layer = findLayer(this.history.doc, this.history.doc.activeLayerId);
+    if (!layer || layer.kind !== 'vector') return this.message('Elige una capa vectorial activa');
+    const { exportGeoPackage } = await import('./io/gpkg.js');
+    const { buildCategorizedQML } = await import('./io/qml.js');
+    const manifest = [];
+    await exportGeoPackage(this.history.doc, { layerIds: [layer.id], manifest });
+    for (const t of manifest) {
+      download(buildCategorizedQML(t.styles, t.kind, t.labelCfg, t.labels), `${t.table}.qml`, 'application/xml');
+    }
+    this.message(manifest.length > 1 ? `${manifest.length} estilos .qml (uno por tipo de geometría). Se aplican sobre el campo gd_style.` : 'Estilo .qml exportado (categorizado por el campo gd_style)', 6000);
   }
 
   async exportGeoJSON(wgs84) {
@@ -777,6 +1248,49 @@ class App {
     }
     out.toBlob((b) => download(b, 'vista.png'), 'image/png');
   }
+}
+
+const SHORTCUTS = [
+  ['Herramientas', [
+    ['V', 'Selección'], ['A', 'Nodos'], ['Q', 'Lazo'], ['P', 'Pluma / línea'], ['Y', 'Polígono'], ['B', 'Lápiz'],
+    ['\\', 'Segmento'], ['W', 'Flecha'], ['M', 'Rectángulo'], ['E', 'Elipse'], ['T', 'Texto'], ['O', 'Punto'],
+    ['C', 'Tijera'], ['I', 'Cuentagotas'], ['H', 'Mano'], ['Z', 'Zoom (Alt = alejar)'], ['Espacio', 'Mano temporal'],
+  ]],
+  ['Color', [['X', 'Alternar relleno / trazo'], ['Mayús+X', 'Intercambiar relleno y trazo'], ['D', 'Colores predeterminados'], ['/', 'Ninguno']]],
+  ['Edición', [
+    ['Ctrl+Z / Ctrl+Mayús+Z', 'Deshacer / rehacer'], ['Ctrl+C / X / V', 'Copiar / cortar / pegar'], ['Ctrl+F / Ctrl+B', 'Pegar en el lugar delante / detrás'],
+    ['Ctrl+D', 'Duplicar'], ['Alt+arrastrar', 'Duplicar al mover'], ['Supr', 'Eliminar'], ['Flechas', 'Mover 1 px (Mayús: 10)'],
+    ['Ctrl+A / Ctrl+Mayús+A', 'Seleccionar todo / nada'], ['Ctrl+G / Ctrl+Mayús+G', 'Agrupar / desagrupar'], ['Ctrl+J', 'Unir o cerrar trazos'],
+    ['Ctrl+7 / Ctrl+Alt+7', 'Máscara de recorte / liberar'], ['Ctrl+] / Ctrl+[', 'Adelante / atrás (Mayús: al frente / al fondo)'],
+    ['Ctrl+2 / Ctrl+Alt+2', 'Bloquear / desbloquear todo'], ['Ctrl+3 / Ctrl+Alt+3', 'Ocultar / mostrar todo'], ['Mayús+C', 'Nodo esquina ↔ curva'],
+  ]],
+  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Mayús', 'Restringir ángulo o proporción']]],
+  ['Vista y archivo', [
+    ['Ctrl+0', 'Zoom a todo'], ['Ctrl+1', 'Escala de referencia'], ['Ctrl++ / Ctrl+−', 'Acercar / alejar'], ['Alt+rueda', 'Zoom'],
+    ['Tab', 'Mostrar / ocultar panel'], ['F7 / Ctrl+F10', 'Capas / Estilo'], ['Ctrl+L', 'Capa nueva'], ['Ctrl+S / Ctrl+O', 'Guardar / abrir proyecto'], ['Ctrl+P', 'Layout de impresión'], ['? o F1', 'Esta ayuda'],
+  ]],
+  ['Ratón y tablet', [['Botón derecho', 'Menú contextual (o terminar línea)'], ['Mantener el dedo', 'Menú contextual'], ['Un dedo / dos dedos', 'Desplazar / zoom'], ['Toque corto con el dedo', 'Seleccionar']]],
+];
+
+function helpContent(close) {
+  return [
+    h('div', { class: 'help-card' },
+      h('div', { class: 'help-head' }, h('h2', {}, 'Atajos de teclado'), h('button', { class: 'help-x', onclick: close, 'aria-label': 'Cerrar' }, '✕')),
+      h('p', { class: 'hint' }, 'Inspirados en Illustrator. En Mac, Ctrl es ⌘ y Alt es ⌥.'),
+      h('div', { class: 'help-grid' }, ...SHORTCUTS.map(([title, rows]) => h('section', {}, h('h3', {}, title), h('table', {}, ...rows.map(([k, d]) => h('tr', {}, h('td', {}, h('kbd', {}, k)), h('td', {}, d))))))),
+    ),
+  ];
+}
+
+/** Nombre de archivo a partir del título (sin tildes ni símbolos). */
+function fileBase(title) {
+  return (
+    String(title || 'dibujo')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Za-z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'dibujo'
+  );
 }
 
 function readJSON(key) {

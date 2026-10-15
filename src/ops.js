@@ -7,7 +7,7 @@
  */
 
 import { allTopShapes, findTopShape, replaceShapes } from './doc.js';
-import { cloneShape, makeGroup, shapeBBox, translateShape, unionBBox } from './vector.js';
+import { cloneNode, cloneShape, makeGroup, newId, shapeBBox, splitNodes, translateShape, unionBBox } from './vector.js';
 
 /* ------------------------------------------------------------ portapapeles */
 
@@ -301,4 +301,131 @@ export function selectByAttribute(doc, layerId, field, op, value) {
     }
   };
   return new Set(layer.items.filter((s) => test(s.attrs?.[field])).map((s) => s.id));
+}
+
+/* ------------------------------------------------- unir y cortar trazos */
+
+/** Nodos en sentido inverso, con los manejadores intercambiados. */
+export function reverseNodes(nodes) {
+  return nodes
+    .slice()
+    .reverse()
+    .map((n) => ({ ...cloneNode(n), hIn: n.hOut ? { ...n.hOut } : null, hOut: n.hIn ? { ...n.hIn } : null }));
+}
+
+/**
+ * Unir (Ctrl+J, como en Illustrator). Un trazo abierto: se cierra. Dos trazos
+ * abiertos: se unen por los extremos más cercanos; si están a menos de `tol`
+ * metros se funden en un solo vértice, si no se agrega un tramo recto. El
+ * resultado conserva el estilo y los atributos del primero (el de más abajo).
+ */
+export function joinPaths(doc, ids, tol = 0) {
+  const paths = [];
+  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
+    if (ids.has(shape.id) && shape.type === 'path' && !shape.locked) paths.push(shape);
+  }
+  const open = paths.filter((p) => !p.closed);
+  if (open.length === 1 && paths.length === 1) {
+    if (open[0].nodes.length < 3) return { error: 'Hacen falta al menos 3 vértices para cerrar el trazo' };
+    return { doc: replaceShapes(doc, new Map([[open[0].id, { ...open[0], closed: true }]])), id: open[0].id };
+  }
+  if (open.length !== 2) return { error: 'Selecciona uno o dos trazos abiertos para unir' };
+  const [a, b] = open;
+  const A = a.nodes;
+  const B = b.nodes;
+  const d = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+  // las cuatro combinaciones de extremos: [distancia, invertir a, invertir b]
+  const combos = [
+    [d(A[A.length - 1], B[0]), false, false],
+    [d(A[A.length - 1], B[B.length - 1]), false, true],
+    [d(A[0], B[0]), true, false],
+    [d(A[0], B[B.length - 1]), true, true],
+  ].sort((x, y) => x[0] - y[0]);
+  const [dist, revA, revB] = combos[0];
+  const na = revA ? reverseNodes(A) : A.map(cloneNode);
+  const nb = revB ? reverseNodes(B) : B.map(cloneNode);
+  let nodes;
+  if (dist <= tol) {
+    const last = na[na.length - 1];
+    const merged = { ...last, hOut: nb[0].hOut, smooth: false };
+    nodes = [...na.slice(0, -1), merged, ...nb.slice(1)];
+  } else {
+    na[na.length - 1].hOut = null;
+    nb[0].hIn = null;
+    nodes = [...na, ...nb];
+  }
+  const map = new Map([
+    [a.id, { ...a, nodes }],
+    [b.id, null],
+  ]);
+  return { doc: replaceShapes(doc, map), id: a.id };
+}
+
+/**
+ * Tijera (C): corta el trazo `id` en el tramo `seg`, parámetro `t`. Una línea
+ * queda en dos líneas con el mismo estilo; un polígono se abre en ese punto.
+ */
+export function splitPath(doc, id, seg, t) {
+  const found = findTopShape(doc, id);
+  const shape = found?.shape;
+  if (!shape || shape.type !== 'path' || shape.locked) return { error: 'Solo se pueden cortar trazos' };
+  if (shape.holes?.length) return { error: 'Un polígono con huecos no se puede abrir con la tijera' };
+  // cortar sobre un vértice existente no inserta otro
+  let nodes;
+  let k;
+  if (t < 1e-6) {
+    nodes = shape.nodes.map(cloneNode);
+    k = seg;
+  } else if (t > 1 - 1e-6) {
+    nodes = shape.nodes.map(cloneNode);
+    k = (seg + 1) % nodes.length;
+  } else {
+    nodes = splitNodes(shape.nodes, shape.closed, seg, t);
+    k = seg + 1;
+  }
+  if (shape.closed) {
+    const ring = [...nodes.slice(k), ...nodes.slice(0, k), cloneNode(nodes[k])];
+    ring[0].hIn = null;
+    ring[ring.length - 1].hOut = null;
+    return { doc: replaceShapes(doc, new Map([[id, { ...shape, nodes: ring, closed: false, name: shape.name }]])), ids: [id] };
+  }
+  if (k <= 0 || k >= nodes.length - 1) return { error: 'Corta entre los extremos del trazo, no en ellos' };
+  const first = nodes.slice(0, k + 1);
+  const second = nodes.slice(k).map(cloneNode);
+  first[first.length - 1] = { ...first[first.length - 1], hOut: null };
+  second[0].hIn = null;
+  const other = { ...JSON.parse(JSON.stringify(shape)), id: newId('p'), nodes: second };
+  const next = {
+    ...doc,
+    layers: doc.layers.map((l) => {
+      if (l.kind !== 'vector' || !l.items.some((s) => s.id === id)) return l;
+      const items = [];
+      for (const s of l.items) {
+        if (s.id === id) items.push({ ...shape, nodes: first }, other);
+        else items.push(s);
+      }
+      return { ...l, items };
+    }),
+  };
+  return { doc: next, ids: [id, other.id] };
+}
+
+/* ------------------------------------------------- ocultar y bloquear */
+
+/** Ctrl+2 / Ctrl+3: bloquea u oculta los objetos indicados. */
+export function setShapeFlag(doc, ids, flag, value) {
+  const map = new Map();
+  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) if (ids.has(shape.id)) map.set(shape.id, { ...shape, [flag]: value });
+  return map.size ? replaceShapes(doc, map) : doc;
+}
+
+/** Ctrl+Alt+2 / Ctrl+Alt+3: desbloquear o mostrar todo; devuelve también los ids que cambiaron. */
+export function resetShapeFlag(doc, flag) {
+  const map = new Map();
+  const want = flag === 'locked' ? false : true;
+  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
+    const cur = flag === 'locked' ? !!shape.locked : shape.visible !== false;
+    if (cur !== want) map.set(shape.id, { ...shape, [flag]: want });
+  }
+  return { doc: map.size ? replaceShapes(doc, map) : doc, ids: [...map.keys()] };
 }

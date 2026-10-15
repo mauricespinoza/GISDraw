@@ -57,6 +57,13 @@ node test/sw.test.mjs        # todo módulo está en el precache offline
 | Seleccionar sin cambiar de herramienta | toque corto con el dedo | — |
 | Terminar línea | doble toque con el lápiz, botón «Terminar» | Enter, doble clic, botón derecho |
 | Cerrar polígono | tocar el primer vértice, botón «Cerrar forma» | clic en el primer vértice |
+| **Menú contextual** | **mantener el dedo** (o el lápiz con Selección/Nodos) ~0,5 s | **botón derecho** |
+
+El menú contextual ofrece lo que corresponde a lo que hay bajo el puntero:
+cortar, copiar, duplicar, eliminar, orden, agrupar, unir o cerrar trazos,
+invertir dirección, bloquear, ocultar, seleccionar lo mismo, editar nodos o
+texto, abrir Estilo/Geología/Atributos, pegar, mostrar o desbloquear todo,
+zoom y copiar las coordenadas del punto.
 
 El dedo **nunca dibuja**, así la palma apoyada no deja trazos. En pantallas
 táctiles sin lápiz, el botón **Dedo ✍︎** hace que el dedo dibuje. Con el
@@ -80,16 +87,45 @@ barra contextual.
 | Y | Polígono |
 | B | Lápiz (trazo libre simplificado y suavizado; cerrar cerca del inicio = polígono) |
 | \\ | Segmento · W Flecha · M Rectángulo · E Elipse (Mayús = proporcional, Alt = desde el centro) |
-| T | Texto · O Punto (símbolo) · I Cuentagotas · H Mano |
+| T | Texto (el cuadro se abre al soltar; Enter termina, Mayús+Enter salto de línea) · O Punto (símbolo) · I Cuentagotas · H Mano |
+| C | **Tijera**: corta una línea en dos o abre un polígono en el punto tocado |
+| Z | **Zoom**: clic acerca, Alt+clic aleja, arrastre = zoom a un recuadro |
 | K | **Trace**: al poner un vértice sobre una línea existente, la nueva sigue la geometría hasta ese punto (camino más corto, como en QGIS) |
 | S | Snapping a vértices y segmentos |
 
-Atajos con Ctrl/⌘: Z deshacer, Mayús+Z rehacer, C/X/V copiar/cortar/pegar,
-**Mayús+V pegar en el lugar**, D duplicar, A seleccionar todo, G agrupar,
-Mayús+G desagrupar, **7 máscara de recorte**, Alt+7 liberarla, ] adelante,
-[ atrás (con Mayús: al frente / al fondo), 0 zoom a todo, S guardar proyecto.
+Atajos al estilo de **Illustrator** (la lista completa sale con **?** o F1, o
+con el botón ⌨ de la barra superior):
+
+- Ctrl/⌘: Z deshacer, Mayús+Z rehacer, C/X/V copiar/cortar/pegar, **F / B
+  pegar en el lugar delante / detrás** (también Mayús+V), D duplicar, A
+  seleccionar todo, **Mayús+A deseleccionar**, G agrupar, Mayús+G desagrupar,
+  **J unir o cerrar trazos**, **7 máscara de recorte**, Alt+7 liberarla,
+  ] adelante, [ atrás (con Mayús: al frente / al fondo), **2 bloquear** (Alt+2
+  desbloquear todo), **3 ocultar** (Alt+3 mostrar todo), 0 zoom a todo,
+  **1 escala de referencia**, +/− zoom, **L capa nueva**, S guardar, O abrir,
+  P layout de impresión, F10 panel Estilo.
+- Una tecla: **X** alterna relleno/trazo, **Mayús+X** los intercambia, **D**
+  colores predeterminados, **/** ninguno, **Mayús+C** nodo esquina ↔ curva,
+  **Tab** muestra u oculta el panel, F7 capas, Espacio = mano temporal,
+  Alt+rueda = zoom.
+
+**Barra de propiedades** (arriba del mapa, como el panel de control de
+Illustrator): color y grosor del trazo, grosores frecuentes, tipo de línea,
+relleno, opacidad y tamaño de letra de lo seleccionado —o de lo próximo que
+se dibuje—, siempre a la vista. Los **cuadros de relleno y trazo** de la barra
+de herramientas abren el selector de color directamente; debajo, botones de
+predeterminado, intercambiar y ninguno.
+
+**Texto legible a cualquier escala**: un texto nuevo nunca nace más chico de
+lo que se lee en pantalla (16 px); si la vista está muy alejada de la escala
+de referencia, el tamaño en pt sube a un valor redondo.
 
 ## Estilo
+
+La pestaña **Estilo** reúne trazo (primero, con colores rápidos), relleno y
+degradados, halo de línea, puntas y opacidad. Lo propiamente geológico está
+aparte, en la pestaña **Geología**: tipos de línea con certeza, ornamentos de
+falla y pliegue, discordancia ondulada y tramas de litología.
 
 - **Relleno** sólido, **degradado lineal o radial** (paradas, ángulo, opacidad por parada).
 - **Trazo** continuo, **segmentado, punteado, punto y raya** o patrón propio (en
@@ -220,11 +256,19 @@ entiende `mix-blend-mode`).
 | | Importar | Exportar |
 |---|---|---|
 | GeoPackage | todas las tablas de features, cualquier sistema (EPSG o WKT), atributos, **estilo QGIS embebido** | una tabla por capa y tipo de geometría, EPSG:32719, atributos, **QML con la simbología del dibujo** y el estilo completo en `gd_style_json` |
-| QML / QLR (QGIS) | símbolo único, categorizado, graduado y por reglas; símbolos de varias capas (relleno + contorno, línea con borde, flechas, degradados, marcadores); etiquetado simple | dentro del GeoPackage |
+| QML / QLR (QGIS) | símbolo único, categorizado, graduado y por reglas; símbolos de varias capas (relleno + contorno, línea con borde, flechas, degradados, marcadores); etiquetado simple | dentro del GeoPackage; **.qlr + GeoPackage** (Archivo → Exportar → Simbología QGIS); .qml de la capa activa |
 | GeoJSON | WGS84 o con `crs` | WGS84 (RFC 7946) o UTM 19S |
 | GeoTIFF | elevación (una banda) o imagen RGB(A), en su sistema | relieve calculado, imagen georreferenciada |
 | ASCII grid | elevación | — |
 | Proyecto `.gisdrawer` | sí | sí (además se guarda solo en el navegador) |
+
+**Simbología en QGIS (.qlr)**: se descargan `dibujo.qlr` y `dibujo.gpkg`.
+Con los dos en la misma carpeta, arrastrar el `.qlr` a QGIS (o Capa → Añadir
+desde archivo de definición de capa) carga todas las capas en un grupo, en el
+orden del dibujo, en EPSG:32719, con su simbología categorizada por estilo
+(con rótulos de leyenda legibles: el nombre de los objetos o el tipo de falla
+o trama), sus etiquetas, y los textos del dibujo como etiquetas del campo
+`gd_text`.
 
 Sistemas reconocidos sin pedir nada: WGS84, UTM WGS84 (todas las zonas),
 PSAD56 / UTM 17–20S, SAD69 / UTM 18–25S, SIRGAS 2000 / UTM 17–25S, Web
@@ -254,7 +298,8 @@ svg2pdf.
 | `src/georef.js` | transformaciones de georreferenciación y remuestreo |
 | `src/layout/compose.js` | la lámina en SVG (mm) |
 | `src/io/` | GeoPackage, QML, GeoJSON, GeoTIFF, sistemas de coordenadas, almacenamiento |
-| `src/ui/` | paneles, georreferenciación, layout |
+| `src/ui/` | paneles, georreferenciación, layout, iconos |
+| `icons/logo.svg` | logo de la app (curvas de nivel, unidad con trama, falla con dientes y plumilla) |
 
 ## Pendiente
 
