@@ -21,6 +21,9 @@ import { h, sec, row, select, num, text, check, btn, color } from './dom.js';
 import { download } from '../io/store.js';
 import { loadScript } from '../io/loader.js';
 
+/** Lado máximo (px) de las imágenes raster de la lámina. */
+const MAX_RASTER_PX = 9000;
+
 export class LayoutEditor {
   constructor(app) {
     this.app = app;
@@ -397,8 +400,9 @@ export class LayoutEditor {
     const doc = this.app.history.doc;
     const g = pageGeometry(L);
     const ext = frameExtent(L, g);
-    const wpx = Math.max(50, Math.min(6000, Math.round((g.fw / 25.4) * dpi)));
-    const hpx = Math.max(50, Math.min(6000, Math.round((g.fh / 25.4) * dpi)));
+    // hasta 9 000 px por lado (A0 a 200 dpi, A3 a 600 dpi)
+    const wpx = Math.max(50, Math.min(MAX_RASTER_PX, Math.round((g.fw / 25.4) * dpi)));
+    const hpx = Math.max(50, Math.min(MAX_RASTER_PX, Math.round((g.fh / 25.4) * dpi)));
     const v = new View(wpx, hpx);
     v.cx = (ext.minX + ext.maxX) / 2;
     v.cy = (ext.minY + ext.maxY) / 2;
@@ -526,12 +530,12 @@ export class LayoutEditor {
    * de la pantalla de trabajo, y la página se agranda para llenar el área— y
    * por eso el relieve se veía mucho más borroso que en la vista de capas.
    * Ahora sigue a la pantalla: los píxeles que ocupa la página (× la densidad
-   * de píxeles del equipo), entre 96 y 250 dpi.
+   * de píxeles del equipo), entre 96 y 400 dpi.
    */
   previewDpi(L, pxPerMm) {
     if (L.previewDpi && L.previewDpi !== 'auto') return Number(L.previewDpi);
     const auto = Math.round(pxPerMm * 25.4 * (window.devicePixelRatio || 1));
-    return Math.max(96, Math.min(250, auto));
+    return Math.max(96, Math.min(400, auto));
   }
 
   /* --------------------------------------------------------------- export */
@@ -674,8 +678,8 @@ export class LayoutEditor {
       ),
       sec(
         'Exportar',
-        row('Resolución', select({ 150: '150 dpi', 200: '200 dpi', 300: '300 dpi', 400: '400 dpi' }, L.dpi, (x) => this.set({ dpi: Number(x) }))),
-        row('Vista previa', select({ auto: 'Automática (sigue a la pantalla)', 96: 'Rápida (96 dpi)', 150: 'Nítida (150 dpi)', 250: 'Alta (250 dpi)' }, String(L.previewDpi || 'auto'), (x) => this.set({ previewDpi: x === 'auto' ? 'auto' : Number(x) }))),
+        row('Resolución', select({ 150: '150 dpi', 200: '200 dpi', 300: '300 dpi', 400: '400 dpi', 600: '600 dpi', 800: '800 dpi (muy pesado)' }, L.dpi, (x) => this.set({ dpi: Number(x) }))),
+        row('Vista previa', select({ auto: 'Automática (sigue a la pantalla)', 96: 'Rápida (96 dpi)', 150: 'Nítida (150 dpi)', 250: 'Alta (250 dpi)', 400: 'Muy alta (400 dpi)', 600: 'Máxima (600 dpi, lenta)' }, String(L.previewDpi || 'auto'), (x) => this.set({ previewDpi: x === 'auto' ? 'auto' : Number(x) }))),
         h(
           'div',
           { class: 'grid-btns' },

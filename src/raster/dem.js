@@ -93,7 +93,7 @@ export async function terrariumSampler(bbox, z, signal) {
   const n = 2 ** z;
   const tiles = new Map();
   const jobs = [];
-  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 200) throw new Error('Demasiadas teselas de DEM para esta vista');
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 600) throw new Error('Demasiadas teselas de DEM para esta vista');
   for (let x = x0; x <= x1; x++) {
     for (let y = y0; y <= y1; y++) {
       if (y < 0 || y >= n) continue;
