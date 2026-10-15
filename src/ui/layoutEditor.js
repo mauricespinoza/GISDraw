@@ -11,7 +11,7 @@
  */
 
 import { openRichEditor } from './richEditor.js';
-import { composeLayout, defaultLayout, fitFrame, layoutTextShape, frameExtent, pageGeometry, pageToGround, PAGES, SYMBOL_SCALES, symbolFactor } from '../layout/compose.js';
+import { composeLayout, defaultLayout, fitFrame, layoutTextShape, frameExtent, elementTransform, pageGeometry, pageToGround, PAGES, SYMBOL_SCALES, symbolFactor } from '../layout/compose.js';
 import { allTopShapes } from '../doc.js';
 import { makeText, newId, shapeBBox, unionBBox } from '../vector.js';
 import { addShapes } from '../doc.js';
@@ -44,7 +44,7 @@ export class LayoutEditor {
       btn('－', () => this.zoomBy(0.8), 'sm'),
       btn('▭ Marco automático', () => this.resetFrame(), 'sm'),
       (this.textBtn = btn('T Cuadro de texto', () => this.startAddText(), 'sm')),
-      h('span', { class: 'lp-hint' }, 'Arrastra dentro del marco = mover el mapa · rueda = zoom · vértices del marco = tamaño · arrastra un elemento para moverlo · Supr lo elimina'),
+      h('span', { class: 'lp-hint' }, 'Arrastra dentro del marco = mover el mapa · rueda = zoom · vértices del marco = tamaño · arrastra un elemento para moverlo · cuadrito de su esquina inferior = escalarlo · Supr lo elimina'),
     );
     this.el.append(this.stage, this.bar);
     document.getElementById('viewport').append(this.el);
@@ -156,6 +156,20 @@ export class LayoutEditor {
       this.deleteElement(this.sel);
       return;
     }
+    if (handle === 'sc' && this.sel && this.sel !== 'frame') {
+      const eo = this.elementGroup(this.sel)?.querySelector(':scope > .eo');
+      if (eo) {
+        const lb = eo.getBBox(); // en coordenadas locales (sin la transformación propia)
+        const sc = this.L.scales?.[this.sel];
+        const s0 = sc?.s || 1;
+        const a = sc?.a || [lb.x, lb.y];
+        const off = this.L.offsets?.[this.sel] || [0, 0];
+        const A = [off[0] + a[0], off[1] + a[1]]; // ancla en la página
+        const B = this.elementGroup(this.sel).getBBox();
+        this.gesture = { mode: 'scale', el: this.sel, a, off, s0, A, w0: Math.max(1e-3, B.x + B.width - A[0]), h0: Math.max(1e-3, B.y + B.height - A[1]) };
+        return;
+      }
+    }
     if (handle) {
       this.gesture = { mode: 'resize', handle, f0: this.frameRect(), start: p };
       return;
@@ -187,6 +201,12 @@ export class LayoutEditor {
       if (g) g.setAttribute('transform', `translate(${gs.base[0] + dx} ${gs.base[1] + dy})`);
       gs.delta = [dx, dy];
       this.drawOverlay();
+    } else if (gs.mode === 'scale') {
+      const k = Math.max(0.05, Math.min(40, Math.max((p[0] - gs.A[0]) / gs.w0, (p[1] - gs.A[1]) / gs.h0)));
+      gs.s = +(gs.s0 * k).toFixed(4);
+      const eo = this.elementGroup(gs.el)?.querySelector(':scope > .eo');
+      if (eo) eo.setAttribute('transform', elementTransform(this.L, gs.el, gs.off, { s: gs.s, a: gs.a }));
+      this.drawOverlay();
     } else if (gs.mode === 'pan') {
       this.live = { s: gs.t0.s, tx: gs.t0.tx + dx, ty: gs.t0.ty + dy };
       this.applyLive();
@@ -206,6 +226,8 @@ export class LayoutEditor {
     if (gs.mode === 'move' && gs.delta) {
       const o = { ...(this.L.offsets || {}), [gs.el]: [+(gs.base[0] + gs.delta[0]).toFixed(2), +(gs.base[1] + gs.delta[1]).toFixed(2)] };
       this.set({ offsets: o });
+    } else if (gs.mode === 'scale' && gs.s) {
+      this.set({ scales: { ...(this.L.scales || {}), [gs.el]: { s: gs.s, a: gs.a.map((v) => +v.toFixed(2)) } } });
     } else if (gs.mode === 'pan') {
       this.commitLive();
     } else if (gs.mode === 'resize' && gs.rect) {
@@ -313,11 +335,11 @@ export class LayoutEditor {
 
   resetFrame() {
     const L = this.L;
-    if (!L.frame && !Object.keys(L.offsets || {}).length) return this.app.message('El marco y los elementos ya están en su lugar automático');
+    if (!L.frame && !Object.keys(L.offsets || {}).length && !Object.keys(L.scales || {}).length) return this.app.message('El marco y los elementos ya están en su lugar automático');
     const g = pageGeometry({ ...L, frame: null });
     const cur = pageGeometry(L);
     const c = pageToGround(L, cur, g.fx + g.fw / 2, g.fy + g.fh / 2);
-    this.set({ frame: null, offsets: {}, center: [Math.round(c[0]), Math.round(c[1])] });
+    this.set({ frame: null, offsets: {}, scales: {}, center: [Math.round(c[0]), Math.round(c[1])] });
   }
 
   deleteElement(name) {
@@ -397,6 +419,8 @@ export class LayoutEditor {
       const pad = 1.2;
       add('rect', { x: b.x - pad, y: b.y - pad, width: b.width + 2 * pad, height: b.height + 2 * pad, fill: 'none', stroke: '#0ea5e9', 'stroke-width': 1.4 * u, 'stroke-dasharray': `${4 * u} ${3 * u}` });
       const r = 7 * u;
+      const hs = 8 * u;
+      add('rect', { x: b.x + b.width + pad - hs / 2, y: b.y + b.height + pad - hs / 2, width: hs, height: hs, fill: '#fff', stroke: '#0ea5e9', 'stroke-width': 1.5 * u, 'data-h': 'sc', class: 'lp-handle' }).style.cursor = 'nwse-resize';
       add('circle', { cx: b.x + b.width + pad, cy: b.y - pad, r, fill: '#ef4444', stroke: '#fff', 'stroke-width': 1.2 * u, 'data-h': 'del', class: 'lp-handle' }).style.cursor = 'pointer';
       add('path', { d: `M${b.x + b.width + pad - r * 0.45} ${b.y - pad - r * 0.45}l${r * 0.9} ${r * 0.9}m0 ${-r * 0.9}l${-r * 0.9} ${r * 0.9}`, stroke: '#fff', 'stroke-width': 1.6 * u, 'stroke-linecap': 'round', 'pointer-events': 'none' });
     }

@@ -379,7 +379,12 @@ export class Panels {
     );
 
     const out = [head];
-    if (target?.type === 'text') out.push(this.textSection(target));
+    const texts = [];
+    walkShapes(shapes, (x) => {
+      if (x.type === 'text') texts.push(x);
+    });
+    if (shapes.length === 1 && target?.type === 'text') out.push(this.textSection(target));
+    else if (texts.length && shapes.length > 1) out.push(this.multiTextSection(texts, shapes));
     out.push(strokeSec, fillSec, lineSec, objSec);
     if (shapes.length) {
       let length = 0;
@@ -493,6 +498,35 @@ export class Panels {
     const a = ((t.rotation || 0) * Math.PI) / 180;
     const moveLocal = (dmm) => ({ x: t.x + dmm * k * Math.cos(a), y: t.y - dmm * k * Math.sin(a) });
     return sec('Texto', ...this.textControls(t, set, { moveLocal }));
+  }
+
+  /** Propiedades de texto comunes a varios textos seleccionados (se aplican a todos). */
+  multiTextSection(texts, shapes) {
+    const app = this.app;
+    const t = texts[0];
+    const ids = shapes.map((x) => x.id);
+    const set = (patch, final = true) => {
+      if (!final && !app.history.anchor) app.history.begin();
+      const base = app.history.anchor || app.history.doc;
+      const deep = (x) => (x.type === 'group' ? { ...x, children: x.children.map(deep) } : x.type === 'text' ? { ...x, ...patch } : x);
+      const next = mapShapes(base, ids, deep);
+      if (final) {
+        if (app.history.anchor) {
+          app.history.preview(next);
+          app.history.end();
+        } else app.history.commit(next);
+      } else app.history.preview(next);
+    };
+    return sec(
+      `Texto (${texts.length} textos)`,
+      row('Fuente', select({ ...FONTS, ...(FONTS[t.fontFamily] ? {} : { [t.fontFamily]: t.fontFamily }) }, t.fontFamily, (v) => set({ fontFamily: v }))),
+      row('Tamaño (pt)', num(t.fontSize, (v) => set({ fontSize: v }), { step: 0.5, min: 1 })),
+      row('Estilo', check('Negrita', t.fontWeight >= 600, (v) => set({ fontWeight: v ? 700 : 400 })), check('Cursiva', t.italic, (v) => set({ italic: v }))),
+      row('Halo', check('Activado', t.halo, (v) => set({ halo: v })), color(t.haloColor || '#ffffff', (v) => set({ haloColor: v }, false), (v) => set({ haloColor: v }))),
+      row('Ancho halo (mm)', num(t.haloWidth ?? 0.5, (v) => set({ haloWidth: v }), { step: 0.1, min: 0 })),
+      row('Opacidad halo', ...slider({ min: 0, max: 100, value: Math.round((t.haloOpacity ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => set({ haloOpacity: v / 100 }, false), onchange: (v) => set({ haloOpacity: v / 100 }) })),
+      h('p', { class: 'hint' }, 'Color de letra, opacidad y demás ajustes de relleno/trazo están en las secciones de abajo y valen para todos los objetos seleccionados.'),
+    );
   }
 
   /**

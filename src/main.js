@@ -4,7 +4,7 @@
  */
 
 import { openRichEditor } from './ui/richEditor.js';
-import { History, addLayer, addShapes, findLayer, findTopShape, layerOfShape, makeRasterLayer, makeVectorLayer, mapShapes, newDocument, updateLayer, allTopShapes } from './doc.js';
+import { History, addLayer, addShapes, findLayer, findTopShape, layerOfShape, makeRasterLayer, makeVectorLayer, mapShapes, newDocument, normalizeDoc, updateLayer, allTopShapes } from './doc.js';
 import { View, paperUnits } from './view.js';
 import { Editor, TOOLS } from './editor.js';
 import { StageRenderer } from './render.js';
@@ -156,6 +156,18 @@ class App {
   scheduleSave() {
     clearTimeout(this.saveT);
     this.saveT = setTimeout(() => saveDoc(this.history.doc), 800);
+    if (!this.flushBound) {
+      // al cerrar o ocultar la pestaña se guarda ya, sin esperar los 800 ms
+      this.flushBound = true;
+      const now = () => {
+        if (!this.saveT) return;
+        clearTimeout(this.saveT);
+        this.saveT = null;
+        saveDoc(this.history.doc);
+      };
+      addEventListener('pagehide', now);
+      document.addEventListener('visibilitychange', () => document.hidden && now());
+    }
   }
 
   message(text, ms = 2600) {
@@ -177,7 +189,7 @@ class App {
     if (v?.mpp) Object.assign(this.view, { cx: v.cx, cy: v.cy, mpp: v.mpp });
     const saved = await loadDoc();
     if (saved?.layers) {
-      this.history.reset(saved);
+      this.history.reset(normalizeDoc(saved));
       // archivos pesados (DEM, imágenes) desde IndexedDB
       for (const l of saved.layers) {
         const fid = l.settings?.fileId;
@@ -1116,7 +1128,14 @@ class App {
 
   /* --------------------------------------------------------- archivos */
 
+  /** Cierra los editores de texto abiertos (confirmando lo escrito) para que el guardado no pierda nada. */
+  flushEdits() {
+    this.closeTextEditor?.();
+    this.layout?.closeEditor?.();
+  }
+
   saveProject() {
+    this.flushEdits();
     const doc = this.history.doc;
     download(JSON.stringify({ app: 'GISDrawer', ...doc }), `${fileBase(doc.title)}.gisdrawer`, 'application/json');
   }
@@ -1124,9 +1143,10 @@ class App {
   async openProject() {
     const [f] = await pickFiles('.gisdrawer,.json');
     if (!f) return;
-    const doc = JSON.parse(await f.text());
-    if (!doc.layers) throw new Error('No es un proyecto de GISDrawer');
-    delete doc.app;
+    const raw = JSON.parse(await f.text());
+    if (!raw.layers) throw new Error('No es un proyecto de GISDrawer');
+    delete raw.app;
+    const doc = normalizeDoc(raw);
     this.history.commit(doc);
     for (const l of doc.layers) if (l.settings?.fileId) this.reloadFile(l.settings.fileId).catch(() => null);
     this.zoomToShapes(allTopShapes(doc).map((x) => x.shape));

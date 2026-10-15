@@ -60,6 +60,7 @@ export function defaultLayout(doc, view) {
     legendTitle: 'Leyenda',
     texts: [], // cuadros de texto del layout: { id, x, y, text, fontSize (pt), align, boxWidth (mm), … }
     frame: null, // { x, y, w, h } del marco del mapa en mm; null = automático según la página
+    scales: {}, // escala de cada elemento (alrededor de su esquina sup. izq.): { legend: { s, a: [x, y] }, … }
     offsets: {}, // desplazamiento en mm de cada elemento respecto de su lugar por defecto: { legend: [dx, dy], … }
     showTitle: true,
     showInfo: true,
@@ -180,6 +181,13 @@ export function layoutTextShape(t) {
   };
 }
 
+/** Transformación de un elemento del layout: desplazamiento + escala propia alrededor de su ancla. */
+export function elementTransform(L, el, off = L.offsets?.[el] || [0, 0], sc = L.scales?.[el]) {
+  let t = `translate(${r2(off[0])} ${r2(off[1])})`;
+  if (sc && sc.s && sc.s !== 1) t += ` translate(${r2(sc.a[0])} ${r2(sc.a[1])}) scale(${+sc.s.toFixed(4)}) translate(${r2(-sc.a[0])} ${r2(-sc.a[1])})`;
+  return t;
+}
+
 /* --------------------------------------------------------- geometría de página */
 
 export function pageGeometry(L) {
@@ -258,7 +266,7 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
   // un elemento del layout (movible y eliminable): lleva su desplazamiento propio
   const element = (el, name, svg) =>
     svg &&
-    parts.push({ name, el, svg: `<g class="eo" transform="translate(${r2(off(el)[0])} ${r2(off(el)[1])})">${svg}</g>` });
+    parts.push({ name, el, svg: `<g class="eo" transform="${elementTransform(L, el)}">${svg}</g>` });
   const part = (name, svg, extra = {}) => svg && parts.push({ name, svg, ...extra });
   const frameRect = `<rect x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" fill="#ffffff"/>`;
   part('Fondo', `<rect width="${g.W}" height="${g.H}" fill="#fff"/>${frameRect}`, { locked: true });
