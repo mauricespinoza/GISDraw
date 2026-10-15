@@ -21,6 +21,7 @@ import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles } from './io/
 import { parseQML, styleFor } from './io/qml.js';
 import { parseAsciiGrid } from './raster/dem.js';
 import { lonLatToTransform } from './io/crs.js';
+import { APP_VERSION } from './version.js';
 
 const SETTINGS_KEY = 'gd.settings';
 
@@ -33,6 +34,7 @@ class App {
       smoothing: 0.25,
       pencilTolerance: 1.5,
       opentopoKey: '',
+      wheelMode: 'zoom',
       ...readJSON(SETTINGS_KEY),
     };
     this.currentStyle = { ...defaultStyle(), ...readJSON('gd.style') };
@@ -329,7 +331,7 @@ class App {
       const v = Number(String(w.value).replace(',', '.'));
       if (Number.isFinite(v) && v >= 0) this.editStyle({ strokeWidth: v }, true);
     });
-    const widths = h('select', { class: 'pb-sel pb-w', 'data-tip': 'Grosores frecuentes', onchange: (e) => e.target.value && this.editStyle({ strokeWidth: Number(e.target.value) }, true) }, h('option', { value: '' }, '▾'), ...[0.1, 0.18, 0.25, 0.35, 0.5, 0.7, 1, 1.4, 2].map((v) => h('option', { value: v }, `${v} mm`)));
+    const widths = h('select', { class: 'pb-sel pb-w', 'data-tip': 'Grosores frecuentes', onchange: (e) => e.target.value && this.editStyle({ strokeWidth: Number(e.target.value) }, true) }, h('option', { value: '' }, '▾'), ...[0.1, 0.18, 0.25, 0.35, 0.5, 0.7, 1, 1.4, 2, 3, 5, 8, 12, 20, 30].map((v) => h('option', { value: v }, `${v} mm`)));
     items.push(w, h('span', { class: 'pb-u' }, 'mm'), widths);
     const dash = h('select', { class: 'pb-sel', 'data-tip': 'Tipo de línea', onchange: (e) => this.editStyle({ dash: e.target.value }, true) }, ...Object.entries(DASHES).map(([k, d]) => h('option', { value: k, selected: (st.dash || 'solid') === k }, d.label)));
     items.push(dash, h('span', { class: 'pb-sep' }));
@@ -426,6 +428,10 @@ class App {
       item('Imagen PNG de la vista', () => this.exportView('png')),
       item('SVG de la vista (vectorial)', () => this.exportView('svg')),
       h('div', { class: 'mh' }, 'Vista'),
+      item(`Rueda del mouse: ${this.settings.wheelMode === 'pan' ? 'desplaza (Ctrl/Alt = zoom) → cambiar a zoom' : 'zoom → cambiar a desplazar'}`, () => {
+        this.saveSettings({ wheelMode: this.settings.wheelMode === 'pan' ? 'zoom' : 'pan' });
+        this.message(`Rueda del mouse: ${this.settings.wheelMode === 'pan' ? 'desplaza el mapa' : 'zoom'}`);
+      }),
       item('Ir a coordenadas…', () => this.gotoCoords()),
       item('Layout de impresión (PDF / SVG / PNG)…', () => this.showPanel('layout')),
       item('Zoom a todo el dibujo', () => this.zoomToShapes(allTopShapes(this.history.doc).map((x) => x.shape))),
@@ -1266,7 +1272,7 @@ const SHORTCUTS = [
   ]],
   ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Mayús', 'Restringir ángulo o proporción']]],
   ['Vista y archivo', [
-    ['Ctrl+0', 'Zoom a todo'], ['Ctrl+1', 'Escala de referencia'], ['Ctrl++ / Ctrl+−', 'Acercar / alejar'], ['Alt+rueda', 'Zoom'],
+    ['Ctrl+0', 'Zoom a todo'], ['Ctrl+1', 'Escala de referencia'], ['Ctrl++ / Ctrl+−', 'Acercar / alejar'], ['Rueda del mouse', 'Zoom (Archivo → Vista: cambiar a desplazar)'], ['Trackpad', 'Dos dedos desplazan, pellizco = zoom'],
     ['Tab', 'Mostrar / ocultar panel'], ['F7 / Ctrl+F10', 'Capas / Estilo'], ['Ctrl+L', 'Capa nueva'], ['Ctrl+S / Ctrl+O', 'Guardar / abrir proyecto'], ['Ctrl+P', 'Layout de impresión'], ['? o F1', 'Esta ayuda'],
   ]],
   ['Ratón y tablet', [['Botón derecho', 'Menú contextual (o terminar línea)'], ['Mantener el dedo', 'Menú contextual'], ['Un dedo / dos dedos', 'Desplazar / zoom'], ['Toque corto con el dedo', 'Seleccionar']]],
@@ -1276,7 +1282,7 @@ function helpContent(close) {
   return [
     h('div', { class: 'help-card' },
       h('div', { class: 'help-head' }, h('h2', {}, 'Atajos de teclado'), h('button', { class: 'help-x', onclick: close, 'aria-label': 'Cerrar' }, '✕')),
-      h('p', { class: 'hint' }, 'Inspirados en Illustrator. En Mac, Ctrl es ⌘ y Alt es ⌥.'),
+      h('p', { class: 'hint' }, `Inspirados en Illustrator. En Mac, Ctrl es ⌘ y Alt es ⌥. Versión de la app: ${APP_VERSION}.`),
       h('div', { class: 'help-grid' }, ...SHORTCUTS.map(([title, rows]) => h('section', {}, h('h3', {}, title), h('table', {}, ...rows.map(([k, d]) => h('tr', {}, h('td', {}, h('kbd', {}, k)), h('td', {}, d))))))),
     ),
   ];
@@ -1312,7 +1318,21 @@ function writeJSON(key, v) {
 window.gisdrawer = new App();
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('sw.js').catch(() => null);
+  // Si ya había un service worker y llega uno nuevo (versión publicada), la
+  // página se recarga sola una vez para no seguir con el código viejo.
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', async () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    const app = window.gisdrawer;
+    app.message(`Nueva versión (${APP_VERSION}): recargando…`, 0);
+    // esperar a que termine un trazo en curso, y guardar antes de recargar
+    while (app.editor.draft || app.editor.drag) await new Promise((r) => setTimeout(r, 500));
+    await saveDoc(app.history.doc).catch(() => null);
+    location.reload();
+  });
+  navigator.serviceWorker.register('sw.js').then((reg) => reg.update()).catch(() => null);
 }
 
 export { paperUnits, walkShapes };

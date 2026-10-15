@@ -1,14 +1,15 @@
 /**
  * Service worker de GISDrawer: la app abre sin señal.
  *
- * - App shell (PRECACHE): HTML, módulos, CSS, iconos y vendor/. Caché primero
- *   con refresco de fondo. SUBIR `VERSION` en cada publicación que toque
- *   src/, index.html o styles.css: es lo único que hace que el navegador
- *   busque la versión nueva.
+ * - App shell (PRECACHE): HTML, módulos, CSS, iconos y vendor/. RED PRIMERO
+ *   (revalidando, con 3 s de espera) y caché como respaldo sin señal: con
+ *   conexión siempre se ve la última versión publicada; sin ella, la guardada.
+ *   (Antes era caché primero: tras publicar había que abrir dos veces la app
+ *   para ver los cambios.) Subir `VERSION` (y src/version.js) al publicar.
  * - Teselas (TILES): mapas base y DEM Terrarium ya vistos, con tope.
  */
 
-const VERSION = 'v3';
+const VERSION = 'v4';
 const PRECACHE = `gisdrawer-shell-${VERSION}`;
 const TILES = 'gisdrawer-tiles';
 const TILE_LIMIT = 5000;
@@ -60,6 +61,7 @@ const SHELL = [
   './src/ui/layoutEditor.js',
   './src/ui/panels.js',
   './src/vector.js',
+  './src/version.js',
   './src/view.js',
   './vendor/geotiff.js',
   './vendor/jspdf.umd.min.js',
@@ -114,18 +116,17 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       (async () => {
         const cache = await caches.open(PRECACHE);
-        const hit = await cache.match(request, { ignoreSearch: true });
-        const refresh = fetch(request)
+        const net = fetch(request, { cache: 'no-cache' })
           .then((res) => {
             if (res.ok) cache.put(request, res.clone());
             return res;
           })
           .catch(() => null);
-        if (hit) {
-          event.waitUntil(refresh);
-          return hit;
-        }
-        return (await refresh) || new Response('Sin conexión', { status: 504 });
+        event.waitUntil(net);
+        const hit = await cache.match(request, { ignoreSearch: true });
+        // con una copia guardada, no esperar más de 3 s a una red lenta
+        const res = hit ? await Promise.race([net, new Promise((r) => setTimeout(() => r(null), 3000))]) : await net;
+        return res || hit || new Response('Sin conexión', { status: 504 });
       })(),
     );
     return;

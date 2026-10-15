@@ -189,6 +189,65 @@ export function ornamentsSvg(pts, st, mmToPx, strokeColor) {
   return { halo, symbols };
 }
 
+/**
+ * Un símbolo de ornamento como SVG autónomo, centrado en el punto de la traza
+ * y orientado como en el dibujo (eje x a lo largo de la línea, y negativa a
+ * la izquierda): es lo que QGIS necesita para repetirlo a lo largo de la
+ * línea con un `MarkerLine` + `SvgMarker`. Incluye el halo blanco.
+ *
+ * @returns {{svg: string, sizeMm: number, spacingMm: number}|null}
+ *   `sizeMm` es el ancho del SVG (cuadrado) a la escala de papel del dibujo.
+ */
+export function ornamentSymbolSvg(st) {
+  const def = ORNAMENTS[st.ornament];
+  if (!def || st.ornament === 'none') return null;
+  const size = Math.min(ORNAMENT_LIMITS.size.max, Math.max(ORNAMENT_LIMITS.size.min, st.ornamentSize || 1));
+  const sym = symbolOf(st.ornament, (st.ornamentGap ?? def.gap ?? 0.8) / U);
+  const flip = def.flippable && st.ornamentSide === 'right' ? -1 : 1;
+  const color = st.ornamentColor || st.stroke || '#000000';
+  const fills = [];
+  const lines = [];
+  let lw = 1.5;
+  let ext = 0;
+  const pt = ([x, y]) => `${r2(x)} ${r2(y)}`;
+  for (const pr of sym.prims) {
+    if (pr.poly) {
+      fills.push(`M${pr.poly.map(pt).join('L')}Z`);
+      for (const [x, y] of pr.poly) ext = Math.max(ext, Math.abs(x), Math.abs(y));
+    } else if (pr.circle) {
+      const [cx, cy, r] = pr.circle;
+      fills.push(`M${r2(cx - r)} ${r2(cy)}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0Z`);
+      ext = Math.max(ext, Math.abs(cx) + r, Math.abs(cy) + r);
+    } else if (pr.line) {
+      lines.push(`M${pr.line.map(pt).join('L')}`);
+      lw = pr.w;
+      for (const [x, y] of pr.line) ext = Math.max(ext, Math.abs(x), Math.abs(y));
+    }
+  }
+  const S = Math.ceil((ext + HALO_EXTRA + lw) * 10) / 10;
+  const fillD = fills.join('');
+  const lineD = lines.join('');
+  const halo =
+    st.ornamentHalo === false
+      ? ''
+      : `<g fill="#ffffff" stroke="#ffffff" stroke-linejoin="round" stroke-linecap="round" opacity="${HALO_OPACITY}">` +
+        (fillD ? `<path d="${fillD}" stroke-width="${HALO_EXTRA}"/>` : '') +
+        (lineD ? `<path d="${lineD}" fill="none" stroke-width="${r2(lw + HALO_EXTRA)}"/>` : '') +
+        '</g>';
+  const body =
+    `<g fill="${color}" stroke="${color}">` +
+    (fillD ? `<path d="${fillD}" stroke="none"/>` : '') +
+    (lineD ? `<path d="${lineD}" fill="none" stroke-width="${lw}" stroke-linecap="butt"/>` : '') +
+    '</g>';
+  const inner = flip < 0 ? `<g transform="scale(1,-1)">${halo}${body}</g>` : halo + body;
+  const w = r2(2 * S);
+  return {
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${w}" viewBox="${-S} ${-S} ${w} ${w}">${inner}</svg>`,
+    sizeMm: r2(w * U * size),
+    spacingMm: st.ornamentSpacing ?? def.spacing,
+  };
+}
+
 /** Ajustes por defecto al elegir un tipo de ornamento. */
 export function ornamentDefaults(type) {
   const d = ORNAMENTS[type];

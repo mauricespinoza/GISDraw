@@ -434,10 +434,18 @@ export class Editor {
   onWheel(e) {
     e.preventDefault();
     const sp = this.screenPoint(e);
-    // Alt + rueda = zoom, como en Illustrator
-    const zoomy = e.ctrlKey || e.metaKey || e.altKey || (Math.abs(e.deltaY) >= 40 && Number.isInteger(e.deltaY) && e.deltaX === 0) || e.deltaMode === 1;
+    // Rueda del ratón = zoom (ajuste «Rueda: desplazar» la deja para mover el
+    // mapa, y entonces Ctrl/Alt hacen zoom). Un trackpad se reconoce porque
+    // entrega deltaX o valores fraccionarios: sus dos dedos siempre desplazan
+    // y su pellizco (Ctrl) hace zoom.
+    const now = performance.now();
+    if (e.deltaMode === 0 && !e.ctrlKey && (e.deltaX !== 0 || !Number.isInteger(e.deltaY))) this.lastTrackpad = now;
+    const trackpad = now - (this.lastTrackpad || -1e9) < 600;
+    const wheelZooms = this.settings.wheelMode !== 'pan';
+    const zoomy = e.ctrlKey || e.metaKey || e.altKey || (wheelZooms && !trackpad);
     if (zoomy) {
-      const k = Math.exp((e.deltaMode === 1 ? e.deltaY * 30 : e.deltaY) * (e.ctrlKey ? 0.01 : 0.0018));
+      const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+      const k = Math.exp(Math.max(-150, Math.min(150, dy)) * (e.ctrlKey ? 0.01 : 0.0022));
       this.view.zoomAt(k, sp[0], sp[1]);
     } else {
       this.view.panBy(-e.deltaX, -e.deltaY);

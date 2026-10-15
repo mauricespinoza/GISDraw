@@ -35,8 +35,14 @@ probar en el iPad. Para usarla sin señal hay que publicarla con HTTPS (GitHub
 Pages, Netlify, Cloudflare Pages): es un sitio estático, sin build y sin
 `node_modules`.
 
-**Al publicar una versión nueva, sube `VERSION` en `sw.js`.** Es lo único que
-hace que los navegadores busquen los archivos nuevos.
+**Al publicar una versión nueva, sube `VERSION` en `sw.js` y `APP_VERSION` en
+`src/version.js`** (`node test/sw.test.mjs` exige que coincidan). La app pide
+primero la red y usa la copia guardada solo sin señal, así que con conexión se
+ve siempre lo último; al detectar una versión nueva se recarga sola. La
+versión en uso se ve en la ayuda (`?`). Si ves una versión vieja: Ctrl+F5, o
+en las herramientas del navegador → Aplicación → Service Workers →
+«Unregister» y recargar. En local (`node serve.mjs`) no hay caché; hay que
+`git pull` primero.
 
 ## Pruebas
 
@@ -53,7 +59,7 @@ node test/sw.test.mjs        # todo módulo está en el precache offline
 |---|---|---|
 | Dibujar / usar la herramienta | **Apple Pencil** | botón izquierdo |
 | Desplazar | un dedo | botón central, barra espaciadora + arrastre, trackpad con dos dedos |
-| Zoom | pellizco | rueda, pellizco del trackpad, Ctrl + / − |
+| Zoom | pellizco | **rueda del mouse**, pellizco del trackpad, Ctrl + / − |
 | Seleccionar sin cambiar de herramienta | toque corto con el dedo | — |
 | Terminar línea | doble toque con el lápiz, botón «Terminar» | Enter, doble clic, botón derecho |
 | Cerrar polígono | tocar el primer vértice, botón «Cerrar forma» | clic en el primer vértice |
@@ -121,6 +127,10 @@ lo que se lee en pantalla (16 px); si la vista está muy alejada de la escala
 de referencia, el tamaño en pt sube a un valor redondo.
 
 ## Estilo
+
+Grosor del trazo hasta **30 mm** (deslizador de escala cuadrática: fino hasta
+1 mm y amplio después; el campo numérico y la barra de propiedades aceptan
+cualquier valor).
 
 La pestaña **Estilo** reúne trazo (primero, con colores rápidos), relleno y
 degradados, halo de línea, puntas y opacidad. Lo propiamente geológico está
@@ -270,6 +280,15 @@ orden del dibujo, en EPSG:32719, con su simbología categorizada por estilo
 o trama), sus etiquetas, y los textos del dibujo como etiquetas del campo
 `gd_text`.
 
+**Ornamentos y tramas en el QML**: los ornamentos de falla y pliegue salen
+como una capa de símbolo `MarkerLine` (se repite a lo largo de la traza, girado
+con ella y desde media separación, como en GISDrawer) con un `SvgMarker` que
+lleva la misma geometría del dibujo —dientes, tic con bolita, medias flechas,
+flechas de pliegue, con su halo y el lado izquierdo/derecho— incrustado en el
+propio QML (`base64:`), sin archivos aparte. Las tramas de litología salen
+como un `SVGFill` sobre el relleno de color, con su color, opacidad y tamaño
+(mm). Todo se puede seguir editando en QGIS.
+
 Sistemas reconocidos sin pedir nada: WGS84, UTM WGS84 (todas las zonas),
 PSAD56 / UTM 17–20S, SAD69 / UTM 18–25S, SIRGAS 2000 / UTM 17–25S, Web
 Mercator, y cualquier WKT o proj4 que traiga el archivo.
@@ -305,11 +324,11 @@ svg2pdf.
 
 - Edición topológica en vivo (mover un vértice compartido y que se muevan
   los dos polígonos); hoy se confirma después con «Confirmar topología».
-- Simbología QGIS más rica: los **ornamentos y las tramas no se traducen al
-  QML** (QGIS ve la línea y el color de relleno, no los dientes ni la trama);
-  GISDrawer sí los recupera al reimportar su propio GeoPackage, porque guarda
-  el estilo completo en la columna `gd_style_json`. Faltan también los
-  marcadores SVG de QGIS.
+- Simbología QGIS: la **línea ondulada** (discordancia) sigue sin traducirse
+  (QGIS ve una línea recta); GISDrawer recupera todo al reimportar su propio
+  GeoPackage, porque guarda el estilo completo en `gd_style_json`. No se ha
+  probado la simbología exportada en todas las versiones de QGIS: si algún
+  símbolo no aparece, avisar con la versión.
 - El contorno "hacia afuera" se exporta a QGIS como línea desplazada medio
   grosor; conviene comprobar el sentido del desplazamiento en QGIS con anillos
   de orientación mixta.

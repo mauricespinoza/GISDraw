@@ -49,6 +49,10 @@ const LINE_PRESETS = [
 /** Colores rápidos: los de la simbología geológica habitual y unos neutros. */
 const QUICK_COLORS = ['#000000', '#4b5563', '#9ca3af', '#ffffff', '#0000ff', '#ff0000', '#ff00ff', '#8b4513', '#15803d', '#86efac', '#fde047', '#f97316', '#0ea5e9', '#c4b5fd'];
 
+/** Grosor máximo del trazo (mm de papel) y su escala cuadrática en el deslizador (0–1000). */
+const MAX_STROKE = 30;
+const widthOf = (v) => +(MAX_STROKE * (v / 1000) ** 2).toFixed(2);
+
 const FONTS = {
   'Helvetica, Arial, sans-serif': 'Helvetica / Arial',
   "'Times New Roman', Times, serif": 'Times',
@@ -330,7 +334,8 @@ export class Panels {
         color(hasStroke ? s.stroke : s.lastStroke || '#c2410c', live('stroke'), fin('stroke')),
       ),
       quick('stroke'),
-      row('Grosor (mm)', num(s.strokeWidth, fin('strokeWidth'), { step: 0.05, min: 0 }), ...slider({ min: 0, max: 300, value: Math.round((s.strokeWidth || 0) * 100), fmt: (v) => (v / 100).toFixed(2), oninput: (v) => live('strokeWidth')(v / 100), onchange: (v) => fin('strokeWidth')(v / 100) }).slice(0, 1)),
+      // escala cuadrática: fino donde se necesita (0,1–1 mm) y hasta 30 mm
+      row('Grosor (mm)', num(s.strokeWidth, fin('strokeWidth'), { step: 0.05, min: 0 }), ...slider({ min: 0, max: 1000, value: Math.round(Math.sqrt((s.strokeWidth || 0) / MAX_STROKE) * 1000), fmt: (v) => widthOf(v).toFixed(2), oninput: (v) => live('strokeWidth')(widthOf(v)), onchange: (v) => fin('strokeWidth')(widthOf(v)) }).slice(0, 1)),
       row('Opacidad', ...pct('strokeOpacity')),
       row('Tipo de línea', select({ ...Object.fromEntries(Object.entries(DASHES).map(([k, d]) => [k, d.label])), ...(DASHES[s.dash] ? {} : { [s.dash]: `Personalizada (${s.dash})` }) }, s.dash || 'solid', fin('dash'))),
       row('Patrón propio', text(DASHES[s.dash] ? '' : s.dash, (v) => v.trim() && edit({ dash: v.trim() }), 'p.ej. 6 2 1 2 (× grosor)')),

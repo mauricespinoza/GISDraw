@@ -16,8 +16,8 @@
  */
 
 import { DASHES, defaultStyle } from '../style.js';
-import { ORNAMENTS } from '../ornaments.js';
-import { PATTERNS } from '../patterns.js';
+import { ORNAMENTS, ornamentSymbolSvg } from '../ornaments.js';
+import { PATTERNS, patternTileSvg } from '../patterns.js';
 import { DOC_EPSG, DOC_WKT } from '../proj.js';
 
 /** QGIS mide en milímetros por defecto. */
@@ -499,6 +499,75 @@ function opts(map) {
     .join('')}</Option>`;
 }
 
+/** SVG como ruta incrustada de QGIS (`base64:…`): no depende de archivos aparte. */
+function svgRef(svg) {
+  const bytes = new TextEncoder().encode(svg);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return `base64:${btoa(bin)}`;
+}
+
+/**
+ * Ornamento de falla o pliegue: un `MarkerLine` que repite el símbolo (SVG con
+ * la misma geometría que el dibujo, halo incluido) a lo largo de la traza,
+ * girado con ella, empezando a media separación como GISDrawer.
+ */
+function ornamentLayer(st) {
+  const o = ornamentSymbolSvg(st);
+  if (!o) return '';
+  const marker = `<symbol type="marker" name="@orn" alpha="1" clip_to_extent="1" force_rhr="0"><layer class="SvgMarker" enabled="1" locked="0" pass="0">${opts({
+    name: svgRef(o.svg),
+    size: o.sizeMm.toFixed(3),
+    size_unit: 'MM',
+    angle: '0',
+    color: rgba(st.ornamentColor || st.stroke, 1),
+    outline_color: '0,0,0,0',
+    outline_width: '0',
+    outline_width_unit: 'MM',
+    offset: '0,0',
+    offset_unit: 'MM',
+    horizontal_anchor_point: '1',
+    vertical_anchor_point: '1',
+    fixedAspectRatio: '0',
+    scale_method: 'diameter',
+  })}</layer></symbol>`;
+  const half = (o.spacingMm / 2).toFixed(3);
+  return `<layer class="MarkerLine" enabled="1" locked="0" pass="0">${opts({
+    rotate: '1',
+    placement: 'interval',
+    placements: 'Interval',
+    interval: o.spacingMm.toFixed(3),
+    interval_unit: 'MM',
+    offset: '0',
+    offset_unit: 'MM',
+    offset_along_line: half,
+    offset_along_line_unit: 'MM',
+    place_on_every_part: 'true',
+    average_angle_length: '4',
+    average_angle_unit: 'MM',
+  })}${marker}</layer>`;
+}
+
+/** Trama de litología: un `SVGFill` sobre el relleno de color (el SVG lleva su color y opacidad). */
+function patternLayer(st) {
+  const svg = patternTileSvg(st.pattern, st.patternColor || '#1f2937', st.patternOpacity ?? 1);
+  if (!svg) return '';
+  const noOutline = `<symbol type="line" name="@pat" alpha="1" clip_to_extent="1" force_rhr="0">${lineLayer({}, { width: 0, color: '#000000', opacity: 0, dash: 'no' })}</symbol>`;
+  const body = opts({
+    svgFile: svgRef(svg),
+    patternWidth: Number(st.patternSize || 5).toFixed(3),
+    patternWidth_unit: 'MM',
+    angle: '0',
+    color: rgba(st.patternColor || '#1f2937', 1),
+    svgFillColor: rgba(st.patternColor || '#1f2937', 1),
+    outline_color: '0,0,0,0',
+    svgOutlineColor: '0,0,0,0',
+    outline_width: '0',
+    svgOutlineWidth: '0',
+  });
+  return `<layer class="SVGFill" enabled="1" locked="0" pass="0">${body}${noOutline}</layer>`;
+}
+
 function lineLayer(st, { width, color, opacity, offset = 0, dash }) {
   return `<layer class="SimpleLine" enabled="1" locked="0" pass="0">${opts({
     line_color: rgba(color, opacity),
@@ -530,6 +599,7 @@ export function styleToSymbolXml(st, kind, name) {
     const layers = [];
     if (st.casing) layers.push(lineLayer(st, { width: st.strokeWidth + 2 * st.casingWidth, color: st.casingColor, opacity: st.strokeOpacity, dash: st.dash }));
     layers.push(lineLayer(st, { width: st.strokeWidth, color: st.stroke, opacity: st.strokeOpacity, dash: st.dash }));
+    if (st.ornament && st.ornament !== 'none') layers.push(ornamentLayer(st));
     return `<symbol type="line" name="${name}" alpha="${st.opacity ?? 1}" clip_to_extent="1" force_rhr="0">${layers.join('')}</symbol>`;
   }
   const fill = st.fill && st.fill !== 'none';
@@ -540,6 +610,7 @@ export function styleToSymbolXml(st, kind, name) {
     outline_color: '0,0,0,0',
     outline_width: '0',
   })}</layer>`;
+  const pattern = st.pattern && st.pattern !== 'none' ? patternLayer(st) : '';
   let outline = '';
   if (st.stroke && st.stroke !== 'none' && st.strokeWidth > 0) {
     // QGIS dibuja el contorno centrado; con un offset de medio grosor queda
@@ -547,7 +618,7 @@ export function styleToSymbolXml(st, kind, name) {
     const off = st.align === 'outside' ? st.strokeWidth / 2 : st.align === 'inside' ? -st.strokeWidth / 2 : 0;
     outline = lineLayer(st, { width: st.strokeWidth, color: st.stroke, opacity: st.strokeOpacity, offset: off, dash: st.dash });
   }
-  return `<symbol type="fill" name="${name}" alpha="${st.opacity ?? 1}" clip_to_extent="1" force_rhr="1">${fillLayer}${outline}</symbol>`;
+  return `<symbol type="fill" name="${name}" alpha="${st.opacity ?? 1}" clip_to_extent="1" force_rhr="1">${fillLayer}${pattern}${outline}</symbol>`;
 }
 
 /** Nombre legible de un estilo para la leyenda de QGIS. */
