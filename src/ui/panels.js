@@ -1,5 +1,6 @@
 /**
- * Paneles laterales: Capas, Estilo, Etiquetas, Relieve, Organizar, Atributos.
+ * Paneles laterales: Capas, Estilo, Geología, Etiquetas, Relieve, Organizar,
+ * Atributos, Georreferenciación y Layout.
  *
  * Cada panel se reconstruye entero cuando cambia algo que muestra (selección,
  * capa activa, documento confirmado). Durante un arrastre de deslizador o de
@@ -17,10 +18,12 @@ import { PALETTES, defaultHillshadeSettings, paletteLUT } from '../raster/hillsh
 import { SAME_CRITERIA, align, arrange, distribute, group, moveToLayer, selectByAttribute, selectSame, ungroup } from '../ops.js';
 import { measure, shapeBBox, unionBBox, walkShapes } from '../vector.js';
 import { h, sec, row, select, slider, num, text, color, check, btn } from './dom.js';
+import { TAB_ICONS } from './icons.js';
 
 export const TABS = {
   layers: 'Capas',
   style: 'Estilo',
+  geology: 'Geología',
   labels: 'Etiquetas',
   relief: 'Relieve',
   arrange: 'Organizar',
@@ -42,6 +45,9 @@ const LINE_PRESETS = [
   { short: 'Dique', label: 'Dique', style: { stroke: '#ff0000', strokeWidth: 0.4 } },
   { short: 'Discordancia', label: 'Discordancia (ondulada)', style: { stroke: '#000000', strokeWidth: 0.35, wavy: true, waveAmp: 0.7, waveLen: 3.6 } },
 ];
+
+/** Colores rápidos: los de la simbología geológica habitual y unos neutros. */
+const QUICK_COLORS = ['#000000', '#4b5563', '#9ca3af', '#ffffff', '#0000ff', '#ff0000', '#ff00ff', '#8b4513', '#15803d', '#86efac', '#fde047', '#f97316', '#0ea5e9', '#c4b5fd'];
 
 const FONTS = {
   'Helvetica, Arial, sans-serif': 'Helvetica / Arial',
@@ -67,7 +73,7 @@ export class Panels {
   renderTabs() {
     this.tabsEl.replaceChildren(
       ...Object.entries(TABS).map(([k, label]) =>
-        h('button', { class: k === this.tab ? 'on' : '', onclick: () => this.show(k) }, label),
+        h('button', { class: k === this.tab ? 'on' : '', onclick: () => this.show(k), 'aria-label': label }, h('span', { class: 'tab-ico', html: TAB_ICONS[k] || '' }), h('span', {}, label)),
       ),
     );
   }
@@ -89,6 +95,7 @@ export class Panels {
     const fn = {
       layers: () => this.layersPanel(),
       style: () => this.stylePanel(),
+      geology: () => this.geologyPanel(),
       labels: () => this.labelsPanel(),
       relief: () => this.reliefPanel(),
       arrange: () => this.arrangePanel(),
@@ -263,9 +270,13 @@ export class Panels {
     const pct = (k) =>
       slider({ min: 0, max: 100, value: Math.round((s[k] ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live(k)(v / 100), onchange: (v) => fin(k)(v / 100) });
 
-    const head = shapes.length
-      ? h('p', { class: 'hint' }, `Editando ${shapes.length} objeto(s) seleccionado(s).`)
-      : h('p', { class: 'hint' }, 'Sin selección: estos ajustes se usan para lo próximo que dibujes.');
+    const head = this.styleHead(shapes);
+    const quick = (k) =>
+      h(
+        'div',
+        { class: 'quick-colors' },
+        ...QUICK_COLORS.map((c) => h('button', { class: `qc${s[k] === c ? ' on' : ''}`, style: `--c:${c}`, title: c, 'aria-label': c, onclick: () => edit({ [k]: c }) })),
+      );
 
     const hasFill = s.fill && s.fill !== 'none';
     const fillSec = sec(
@@ -275,6 +286,7 @@ export class Panels {
         check('Con relleno', hasFill, (v) => edit({ fill: v ? s.lastFill || '#86efac' : 'none', lastFill: hasFill ? s.fill : s.lastFill })),
         color(hasFill ? s.fill : s.lastFill || '#86efac', live('fill'), fin('fill')),
       ),
+      quick('fill'),
       row('Opacidad', ...pct('fillOpacity')),
       row('Tipo', select({ solid: 'Sólido', linear: 'Degradado lineal', radial: 'Degradado radial' }, s.fillType || 'solid', fin('fillType'))),
     );
@@ -317,6 +329,7 @@ export class Panels {
         check('Con trazo', hasStroke, (v) => edit({ stroke: v ? s.lastStroke || '#c2410c' : 'none', lastStroke: hasStroke ? s.stroke : s.lastStroke })),
         color(hasStroke ? s.stroke : s.lastStroke || '#c2410c', live('stroke'), fin('stroke')),
       ),
+      quick('stroke'),
       row('Grosor (mm)', num(s.strokeWidth, fin('strokeWidth'), { step: 0.05, min: 0 }), ...slider({ min: 0, max: 300, value: Math.round((s.strokeWidth || 0) * 100), fmt: (v) => (v / 100).toFixed(2), oninput: (v) => live('strokeWidth')(v / 100), onchange: (v) => fin('strokeWidth')(v / 100) }).slice(0, 1)),
       row('Opacidad', ...pct('strokeOpacity')),
       row('Tipo de línea', select({ ...Object.fromEntries(Object.entries(DASHES).map(([k, d]) => [k, d.label])), ...(DASHES[s.dash] ? {} : { [s.dash]: `Personalizada (${s.dash})` }) }, s.dash || 'solid', fin('dash'))),
@@ -330,9 +343,6 @@ export class Panels {
 
     const lineSec = sec(
       'Línea abierta',
-      row('Forma', select({ straight: 'Recta', wavy: 'Ondulada (discordancia)' }, s.wavy ? 'wavy' : 'straight', (v) => edit({ wavy: v === 'wavy' }))),
-      s.wavy ? row('Amplitud (mm)', num(s.waveAmp, fin('waveAmp'), { step: 0.1, min: 0.1 })) : null,
-      s.wavy ? row('Long. onda (mm)', num(s.waveLen, fin('waveLen'), { step: 0.2, min: 0.8 })) : null,
       row('Halo de línea', check('Activado', s.casing, fin('casing')), color(s.casingColor || '#ffffff', live('casingColor'), fin('casingColor'))),
       row('Ancho halo (mm)', num(s.casingWidth, fin('casingWidth'), { step: 0.05, min: 0 })),
       row('Opacidad halo', ...slider({ min: 0, max: 100, value: Math.round((s.casingOpacity ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live('casingOpacity')(v / 100), onchange: (v) => fin('casingOpacity')(v / 100) })),
@@ -341,6 +351,54 @@ export class Panels {
       row('Final', select(MARKERS, s.markerEnd || 'none', fin('markerEnd'))),
       row('Tamaño puntas', ...slider({ min: 40, max: 400, value: Math.round((s.markerSize || 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live('markerSize')(v / 100), onchange: (v) => fin('markerSize')(v / 100) })),
     );
+
+    const objSec = sec(
+      'Objeto',
+      row('Opacidad', ...pct('opacity')),
+      row('Fusión', select(BLEND_MODES, s.blend || 'normal', fin('blend'))),
+      row('Símbolo punto', select(POINT_SHAPES, s.pointShape || 'circle', fin('pointShape'))),
+      row('Tamaño punto', num(s.pointSize, fin('pointSize'), { step: 0.1, min: 0.2 })),
+    );
+
+    const out = [head];
+    if (target?.type === 'text') out.push(this.textSection(target));
+    out.push(strokeSec, fillSec, lineSec, objSec);
+    if (shapes.length) {
+      let length = 0;
+      let area = 0;
+      for (const sh of shapes) {
+        const m = measure(sh);
+        length += m.length;
+        area += m.area;
+      }
+      out.push(
+        sec(
+          'Medidas',
+          h('p', { class: 'hint' }, `Longitud: ${fmtLen(length)} · Área: ${fmtArea(area)}`),
+          h('div', { class: 'grid-btns two' }, btn('Guardar estilo como predeterminado', () => app.setCurrentStyle(s)), btn('Invertir dirección', () => app.editor.reverseSelected())),
+        ),
+      );
+    }
+    return out;
+  }
+
+  styleHead(shapes) {
+    return shapes.length
+      ? h('p', { class: 'hint target' }, `Editando ${shapes.length} objeto(s) seleccionado(s).`)
+      : h('p', { class: 'hint target' }, 'Sin selección: estos ajustes se usan para lo próximo que dibujes.');
+  }
+
+  /* ============================================================== GEOLOGÍA */
+
+  /** Tipos de línea geológicos, ornamentos de falla y pliegue, discordancia y tramas de litología. */
+  geologyPanel() {
+    const app = this.app;
+    const { style: s, shapes } = this.shownStyle();
+    const edit = (patch, final = true) => app.editStyle(patch, final);
+    const live = (k) => (v) => edit({ [k]: v }, false);
+    const fin = (k) => (v) => edit({ [k]: v }, true);
+    const pct = (k) =>
+      slider({ min: 0, max: 100, value: Math.round((s[k] ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live(k)(v / 100), onchange: (v) => fin(k)(v / 100) });
 
     const orn = s.ornament || 'none';
     const lim = ORNAMENT_LIMITS;
@@ -396,34 +454,13 @@ export class Panels {
       );
     }
 
-    const objSec = sec(
-      'Objeto',
-      row('Opacidad', ...pct('opacity')),
-      row('Fusión', select(BLEND_MODES, s.blend || 'normal', fin('blend'))),
-      row('Símbolo punto', select(POINT_SHAPES, s.pointShape || 'circle', fin('pointShape'))),
-      row('Tamaño punto', num(s.pointSize, fin('pointSize'), { step: 0.1, min: 0.2 })),
+    const wavySec = sec(
+      'Discordancia (línea ondulada)',
+      row('Forma', select({ straight: 'Recta', wavy: 'Ondulada' }, s.wavy ? 'wavy' : 'straight', (v) => edit({ wavy: v === 'wavy' }))),
+      s.wavy ? row('Amplitud (mm)', num(s.waveAmp, fin('waveAmp'), { step: 0.1, min: 0.1 })) : null,
+      s.wavy ? row('Long. onda (mm)', num(s.waveLen, fin('waveLen'), { step: 0.2, min: 0.8 })) : null,
     );
-
-    const out = [head];
-    if (target?.type === 'text') out.push(this.textSection(target));
-    out.push(presetSec, fillSec, patSec, strokeSec, lineSec, ornSec, objSec);
-    if (shapes.length) {
-      let length = 0;
-      let area = 0;
-      for (const sh of shapes) {
-        const m = measure(sh);
-        length += m.length;
-        area += m.area;
-      }
-      out.push(
-        sec(
-          'Medidas',
-          h('p', { class: 'hint' }, `Longitud: ${fmtLen(length)} · Área: ${fmtArea(area)}`),
-          h('div', { class: 'grid-btns two' }, btn('Guardar estilo como predeterminado', () => app.setCurrentStyle(s)), btn('Invertir dirección', () => app.editor.reverseSelected())),
-        ),
-      );
-    }
-    return out;
+    return [this.styleHead(shapes), presetSec, ornSec, wavySec, patSec];
   }
 
   textSection(t) {

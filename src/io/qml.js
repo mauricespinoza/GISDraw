@@ -15,7 +15,10 @@
  * aplica con el símbolo base, en vez de romper la importación.
  */
 
-import { defaultStyle } from '../style.js';
+import { DASHES, defaultStyle } from '../style.js';
+import { ORNAMENTS } from '../ornaments.js';
+import { PATTERNS } from '../patterns.js';
+import { DOC_EPSG, DOC_WKT } from '../proj.js';
 
 /** QGIS mide en milímetros por defecto. */
 const MM_TO_PX = 96 / 25.4;
@@ -547,37 +550,120 @@ export function styleToSymbolXml(st, kind, name) {
   return `<symbol type="fill" name="${name}" alpha="${st.opacity ?? 1}" clip_to_extent="1" force_rhr="1">${fillLayer}${outline}</symbol>`;
 }
 
+/** Nombre legible de un estilo para la leyenda de QGIS. */
+export function describeStyle(st, kind) {
+  const parts = [];
+  if (st.ornament && st.ornament !== 'none') parts.push(String(ORNAMENTS[st.ornament]?.label || st.ornament).split(' (')[0]);
+  if (st.pattern && st.pattern !== 'none') parts.push(PATTERNS[st.pattern]?.label || st.pattern);
+  if (st.wavy) parts.push('Ondulada');
+  if (!parts.length) {
+    if (kind === 'polygon' && st.fill && st.fill !== 'none') parts.push(`Relleno ${st.fill}`);
+    if (st.stroke && st.stroke !== 'none') parts.push(`${kind === 'polygon' ? 'borde' : 'línea'} ${st.stroke} ${Number(st.strokeWidth || 0).toFixed(2)} mm`);
+    if (kind === 'point') parts.splice(0, parts.length, `Punto ${st.fill !== 'none' ? st.fill : st.stroke}`);
+  }
+  if (st.dash && st.dash !== 'solid' && DASHES[st.dash]) parts.push(DASHES[st.dash].label.toLowerCase());
+  const s = parts.join(', ') || 'Sin estilo';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** `<renderer-v2>` categorizado por `gd_style`: un símbolo por estilo del dibujo. */
+export function rendererXml(styles, kind, labels = []) {
+  const cats = styles
+    .map((st, i) => `<category render="true" symbol="${i}" value="${i}" label="${xmlEsc(labels[i] || describeStyle(st, kind))}" type="string"/>`)
+    .join('');
+  const syms = styles.map((st, i) => styleToSymbolXml(st, kind, String(i))).join('');
+  return `<renderer-v2 type="categorizedSymbol" attr="gd_style" symbollevels="0" enableorderby="0" forceraster="0"><categories>${cats}</categories><symbols>${syms}</symbols></renderer-v2>`;
+}
+
+/** `<labeling>` simple de QGIS para la configuración de etiquetas de una capa. */
+export function labelingXml(labelCfg, kind) {
+  if (!labelCfg?.enabled || !(labelCfg.field || labelCfg.template)) return '';
+  const field = labelCfg.template
+    ? labelCfg.template
+        .split(/(\{[^}]+\})/)
+        .filter(Boolean)
+        .map((p) => (/^\{.+\}$/.test(p) ? `"${p.slice(1, -1)}"` : `'${p.replace(/'/g, "''")}'`))
+        .join(' || ')
+    : labelCfg.field === '$nombre'
+      ? 'gd_name'
+      : labelCfg.field;
+  return `<labeling type="simple"><settings calloutType="simple"><text-style fieldName="${xmlEsc(field)}" isExpression="${
+    labelCfg.template ? 1 : 0
+  }" fontFamily="${xmlEsc(String(labelCfg.fontFamily).split(',')[0].trim().replace(/'/g, ''))}" fontSize="${labelCfg.fontSize}" fontSizeUnit="Point" fontWeight="${
+    labelCfg.fontWeight >= 700 ? 75 : 50
+  }" fontItalic="${labelCfg.italic ? 1 : 0}" textColor="${rgba(labelCfg.color)}"><text-buffer bufferDraw="${labelCfg.halo ? 1 : 0}" bufferSize="${
+    labelCfg.haloWidth
+  }" bufferSizeUnits="MM" bufferColor="${rgba(labelCfg.haloColor)}"/></text-style><placement placement="${
+    kind === 'line' ? (labelCfg.placement === 'curved' || labelCfg.placement === 'auto' ? 3 : 2) : kind === 'polygon' ? 1 : labelCfg.placement === 'over' ? 1 : 0
+  }"/></settings></labeling>`;
+}
+
 /**
  * QML categorizado por el campo `gd_style`: cada estilo distinto del dibujo
  * es una categoría. Así QGIS abre el GeoPackage con el aspecto del dibujo.
  */
-export function buildCategorizedQML(styles, kind, labelCfg = null) {
-  const cats = styles
-    .map((_, i) => `<category render="true" symbol="${i}" value="${i}" label="Estilo ${i + 1}" type="string"/>`)
-    .join('');
-  const syms = styles.map((st, i) => styleToSymbolXml(st, kind, String(i))).join('');
-  let labeling = '';
-  if (labelCfg?.enabled && (labelCfg.field || labelCfg.template)) {
-    const field = labelCfg.template
-      ? labelCfg.template
-          .split(/(\{[^}]+\})/)
-          .filter(Boolean)
-          .map((p) => (/^\{.+\}$/.test(p) ? `"${p.slice(1, -1)}"` : `'${p.replace(/'/g, "''")}'`))
-          .join(' || ')
-      : labelCfg.field;
-    labeling = `<labeling type="simple"><settings calloutType="simple"><text-style fieldName="${xmlEsc(field)}" isExpression="${
-      labelCfg.template ? 1 : 0
-    }" fontFamily="${xmlEsc(String(labelCfg.fontFamily).split(',')[0].trim())}" fontSize="${labelCfg.fontSize}" fontSizeUnit="Point" fontWeight="${
-      labelCfg.fontWeight >= 700 ? 75 : 50
-    }" fontItalic="${labelCfg.italic ? 1 : 0}" textColor="${rgba(labelCfg.color)}"><text-buffer bufferDraw="${labelCfg.halo ? 1 : 0}" bufferSize="${
-      labelCfg.haloWidth
-    }" bufferSizeUnits="MM" bufferColor="${rgba(labelCfg.haloColor)}"/></text-style><placement placement="${
-      kind === 'line' ? (labelCfg.placement === 'curved' || labelCfg.placement === 'auto' ? 3 : 2) : kind === 'polygon' ? 1 : 0
-    }"/></settings></labeling>`;
-  }
+export function buildCategorizedQML(styles, kind, labelCfg = null, labels = []) {
+  const labeling = labelingXml(labelCfg, kind);
   return `<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
 <qgis version="3.34.0" styleCategories="Symbology|Labeling" labelsEnabled="${labeling ? 1 : 0}">
-<renderer-v2 type="categorizedSymbol" attr="gd_style" symbollevels="0" enableorderby="0" forceraster="0"><categories>${cats}</categories><symbols>${syms}</symbols></renderer-v2>
+${rendererXml(styles, kind, labels)}
 ${labeling}
 </qgis>`;
+}
+
+const QGIS_GEOM = { point: ['Point', 'Point'], line: ['Line', 'LineString'], polygon: ['Polygon', 'Polygon'] };
+
+/**
+ * Definición de capas de QGIS (.qlr): árbol de capas + una `<maplayer>` por
+ * tabla del GeoPackage, con su simbología y etiquetas. La fuente es relativa
+ * (`./archivo.gpkg|layername=tabla`): QGIS la resuelve junto al .qlr, así que
+ * basta con dejar los dos archivos en la misma carpeta y arrastrar el .qlr.
+ *
+ * `tables`: [{ table, name, kind, styles, labels, labelCfg }] en orden de
+ * pintado (de abajo hacia arriba, como `doc.layers`).
+ */
+export function buildQLR(tables, { gpkgName, title = 'GISDrawer' } = {}) {
+  const ids = tables.map((t, i) => `${t.table}_${Date.now().toString(36)}${i}`);
+  const src = (t) => `./${gpkgName}|layername=${t.table}`;
+  // en QGIS el árbol va de arriba hacia abajo
+  const order = tables.map((t, i) => i).reverse();
+  const tree = order
+    .map((i) => `<layer-tree-layer id="${ids[i]}" name="${xmlEsc(tables[i].name)}" source="${xmlEsc(src(tables[i]))}" providerKey="ogr" checked="Qt::Checked" expanded="1" legend_exp=""><customproperties><Option/></customproperties></layer-tree-layer>`)
+    .join('\n      ');
+  const srs = `<srs><spatialrefsys nativeFormat="Wkt"><wkt>${xmlEsc(DOC_WKT)}</wkt><proj4>+proj=utm +zone=19 +south +datum=WGS84 +units=m +no_defs</proj4><srsid>3112</srsid><srid>${DOC_EPSG}</srid><authid>EPSG:${DOC_EPSG}</authid><description>WGS 84 / UTM zone 19S</description><projectionacronym>utm</projectionacronym><ellipsoidacronym>EPSG:7030</ellipsoidacronym><geographicflag>false</geographicflag></spatialrefsys></srs>`;
+  const layers = order
+    .map((i) => {
+      const t = tables[i];
+      const labeling = labelingXml(t.labelCfg, t.kind);
+      const [geometry, wkb] = QGIS_GEOM[t.kind];
+      return `<maplayer type="vector" geometry="${geometry}" wkbType="${wkb}" autoRefreshTime="0" autoRefreshEnabled="0" hasScaleBasedVisibilityFlag="0" minScale="100000000" maxScale="0" readOnly="0" refreshOnNotifyEnabled="0" styleCategories="AllStyleCategories" simplifyAlgorithm="0" simplifyDrawingHints="0" simplifyDrawingTol="1" simplifyLocal="1" simplifyMaxScale="1" symbologyReferenceScale="-1" labelsEnabled="${labeling ? 1 : 0}">
+      <id>${ids[i]}</id>
+      <datasource>${xmlEsc(src(t))}</datasource>
+      <keywordList><value></value></keywordList>
+      <layername>${xmlEsc(t.name)}</layername>
+      ${srs}
+      <provider encoding="UTF-8">ogr</provider>
+      <flags><Identifiable>1</Identifiable><Removable>1</Removable><Searchable>1</Searchable><Private>0</Private></flags>
+      ${rendererXml(t.styles, t.kind, t.labels)}
+      ${labeling}
+      <blendMode>0</blendMode>
+      <featureBlendMode>0</featureBlendMode>
+      <layerOpacity>${t.opacity ?? 1}</layerOpacity>
+    </maplayer>`;
+    })
+    .join('\n    ');
+  return `<!DOCTYPE qgis-layer-definition>
+<qlr>
+  <layer-tree-group expanded="1" checked="Qt::Checked" name="" groupLayer="">
+    <customproperties><Option/></customproperties>
+    <layer-tree-group expanded="1" checked="Qt::Checked" name="${xmlEsc(title)}" groupLayer="">
+      <customproperties><Option/></customproperties>
+      ${tree}
+    </layer-tree-group>
+  </layer-tree-group>
+  <maplayers>
+    ${layers}
+  </maplayers>
+</qlr>
+`;
 }

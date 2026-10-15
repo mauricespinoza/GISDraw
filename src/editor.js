@@ -11,11 +11,15 @@
  *    apoyado nunca dibujan por error. Para pantallas táctiles sin lápiz hay un
  *    ajuste "el dedo dibuja".
  *  - Ratón: botón izquierdo = herramienta, central o barra espaciadora =
- *    desplazar, derecho = terminar el trazo en curso (como en QGIS), rueda =
- *    zoom; en trackpad, dos dedos desplazan y el pellizco hace zoom.
+ *    desplazar, derecho = terminar el trazo en curso (como en QGIS) o, sin
+ *    trazo en curso, menú contextual; rueda = zoom; en trackpad, dos dedos
+ *    desplazan y el pellizco hace zoom.
+ *  - Mantener el dedo (o el lápiz con selección/nodos) quieto ~0,5 s abre el
+ *    mismo menú contextual que el botón derecho.
  */
 
 import { addShapes, allTopShapes, findTopShape, layerOfShape, mapShapes, removeShapes, replaceShapes } from './doc.js';
+import { splitPath } from './ops.js';
 import { pickShape, shapesInBox, shapesInLasso, shapeDistance, flatRings } from './hit.js';
 import { SnapIndex, buildGraph, tracePath } from './snapping.js';
 import { nodesD, shapeD, esc } from './style.js';
@@ -52,8 +56,10 @@ export const TOOLS = {
   ellipse: { label: 'Elipse', key: 'e' },
   text: { label: 'Texto', key: 't' },
   point: { label: 'Punto', key: 'o' },
+  scissors: { label: 'Tijera (cortar trazo)', key: 'c' },
   eyedropper: { label: 'Cuentagotas', key: 'i' },
   pan: { label: 'Mano', key: 'h' },
+  zoom: { label: 'Zoom (Alt = alejar)', key: 'z' },
 };
 
 const DRAW_TOOLS = new Set(['pen', 'polygon', 'pencil', 'line', 'arrow', 'rect', 'ellipse', 'text', 'point']);
@@ -61,6 +67,16 @@ const HANDLE_KEYS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 const SNAP_PX = 12;
 const TAP_MS = 350;
 const TAP_MOVE = 8;
+const LONG_PRESS_MS = 550;
+const MIN_TEXT_PX = 16; // tamaño mínimo en pantalla de un texto nuevo
+
+/** Redondea hacia arriba a un tamaño tipográfico "limpio". */
+export function niceFontSize(pt) {
+  if (pt <= 12) return Math.ceil(pt * 2) / 2;
+  if (pt <= 100) return Math.ceil(pt / 2) * 2;
+  if (pt <= 1000) return Math.ceil(pt / 10) * 10;
+  return Math.ceil(pt / 100) * 100;
+}
 
 export class Editor {
   constructor({ history, view, host, settings, getCurrentStyle, onChange, onMessage, onEditText }) {
@@ -256,10 +272,19 @@ export class Editor {
     const sp = this.screenPoint(e);
     this.pointers.set(e.pointerId, { sp, type: e.pointerType, t: performance.now(), start: sp });
     if (e.pointerType === 'pen') this.penSeen = true;
+    this.onPointerStart?.();
+
+    // mantener apretado = menú contextual (dedo; lápiz solo con selección y nodos)
+    this.clearLongPress();
+    if (this.pointers.size === 1 && (e.pointerType === 'touch' || (e.pointerType === 'pen' && ['select', 'node', 'lasso', 'scissors'].includes(this.tool)))) {
+      this.lp = { id: e.pointerId, sp };
+      this.lpTimer = setTimeout(() => this.longPress(), LONG_PRESS_MS);
+    }
 
     // dos dedos: gesto de cámara, cancela lo que hubiera empezado el primero
     const touches = [...this.pointers.values()].filter((p) => p.type === 'touch');
     if (touches.length >= 2) {
+      this.clearLongPress();
       if (this.drag && this.drag.mode !== 'pinch') this.cancelDrag();
       const [a, b] = touches;
       this.drag = { mode: 'pinch', dist: Math.hypot(a.sp[0] - b.sp[0], a.sp[1] - b.sp[1]), mid: mid(a.sp, b.sp) };
@@ -273,6 +298,7 @@ export class Editor {
     }
     if (e.pointerType === 'mouse' && e.button === 2) {
       if (this.draft) this.finishDraft(this.tool === 'polygon');
+      else this.openContextMenu(sp, e);
       return;
     }
     if (this.tool === 'pan' || (!this.isToolPointer(e) && e.pointerType === 'touch')) {
@@ -286,6 +312,7 @@ export class Editor {
     const sp = this.screenPoint(e);
     const p = this.pointers.get(e.pointerId);
     if (p) p.sp = sp;
+    if (this.lp && this.lp.id === e.pointerId && Math.hypot(sp[0] - this.lp.sp[0], sp[1] - this.lp.sp[1]) > TAP_MOVE) this.clearLongPress();
     const d = this.drag;
 
     if (d?.mode === 'pinch') {
@@ -315,6 +342,7 @@ export class Editor {
   }
 
   onUp(e, cancelled = false) {
+    if (this.lp?.id === e.pointerId) this.clearLongPress();
     const p = this.pointers.get(e.pointerId);
     this.pointers.delete(e.pointerId);
     const d = this.drag;
@@ -338,6 +366,44 @@ export class Editor {
       return;
     }
     this.toolUp(e, this.screenPoint(e));
+  }
+
+  clearLongPress() {
+    clearTimeout(this.lpTimer);
+    this.lp = null;
+  }
+
+  longPress() {
+    const lp = this.lp;
+    this.lp = null;
+    if (!lp || !this.pointers.has(lp.id) || this.drag?.mode === 'pinch') return;
+    // abandona lo que hubiera empezado el toque (desplazar, mover, recuadro)
+    if (this.drag) this.cancelDrag();
+    navigator.vibrate?.(12);
+    this.openContextMenu(lp.sp, null);
+  }
+
+  /** Menú contextual: selecciona lo que está bajo el puntero y avisa a la app. */
+  openContextMenu(sp, e) {
+    if (!this.onContextMenu) return;
+    const hit = pickShape(this.doc, sp, this.view, this.units(), e?.pointerType === 'mouse' ? 6 : 12);
+    let node = null;
+    if (this.tool === 'node' && this.nodeTarget()) {
+      const shape = this.nodeTarget();
+      const rings = [-1, ...(shape.holes || []).map((_, i) => i)];
+      for (const ring of rings) {
+        this.ringNodes(shape, ring).forEach((n, i) => {
+          const [x, y] = this.view.toScreen(n.x, n.y);
+          if (!node && Math.hypot(sp[0] - x, sp[1] - y) < 14) node = { id: shape.id, ring, index: i };
+        });
+      }
+      if (node) {
+        this.activeNode = node;
+        this.changed();
+      }
+    }
+    if (!node && hit && !this.selection.has(hit.shape.id)) this.setSelection([hit.shape.id]);
+    this.onContextMenu(sp, { hit: hit?.shape || null, node, wp: this.view.toWorld(...sp) });
   }
 
   fingerTap(sp) {
@@ -368,7 +434,8 @@ export class Editor {
   onWheel(e) {
     e.preventDefault();
     const sp = this.screenPoint(e);
-    const zoomy = e.ctrlKey || e.metaKey || (Math.abs(e.deltaY) >= 40 && Number.isInteger(e.deltaY) && e.deltaX === 0) || e.deltaMode === 1;
+    // Alt + rueda = zoom, como en Illustrator
+    const zoomy = e.ctrlKey || e.metaKey || e.altKey || (Math.abs(e.deltaY) >= 40 && Number.isInteger(e.deltaY) && e.deltaX === 0) || e.deltaMode === 1;
     if (zoomy) {
       const k = Math.exp((e.deltaMode === 1 ? e.deltaY * 30 : e.deltaY) * (e.ctrlKey ? 0.01 : 0.0018));
       this.view.zoomAt(k, sp[0], sp[1]);
@@ -392,6 +459,11 @@ export class Editor {
       case 'lasso':
         this.drag = { mode: 'lasso', pts: [wp] };
         return;
+      case 'zoom':
+        this.drag = { mode: 'zoombox', start: wp, sp0: sp };
+        return;
+      case 'scissors':
+        return this.scissorsAt(sp, wp);
       case 'eyedropper': {
         const hit = pickShape(this.doc, sp, this.view, this.units(), 10, { includeLocked: true });
         if (hit) this.applyEyedropper(hit.shape);
@@ -417,22 +489,12 @@ export class Editor {
         this.preview = { kind: this.tool, start: snapped, end: snapped };
         return;
       }
-      case 'text': {
-        const l = this.ensureDrawableLayer();
-        if (!l) return;
-        const hit = pickShape(this.doc, sp, this.view, this.units(), 6);
-        if (hit && hit.shape.type === 'text') {
-          this.setSelection([hit.shape.id]);
-          this.onEditText(hit.shape);
-          return;
-        }
-        const st = this.getCurrentStyle();
-        const t = makeText(wp[0], wp[1], 'Texto', { ...st, fill: st.stroke !== 'none' ? st.stroke : '#111827', fillOpacity: 1, fillType: 'solid', stroke: 'none' }, st.fontSize || 10);
-        this.history.commit(addShapes(this.doc, l.id, [t]));
-        this.setSelection([t.id]);
-        this.onEditText(t, true);
+      case 'text':
+        // el cuadro de texto se abre al SOLTAR: si se enfoca al apretar, el
+        // propio clic le quita el foco y el texto se cierra sin poder escribir
+        if (!this.ensureDrawableLayer()) return;
+        this.drag = { mode: 'text', sp0: sp, wp };
         return;
-      }
       case 'point': {
         const l = this.ensureDrawableLayer();
         if (!l) return;
@@ -506,6 +568,7 @@ export class Editor {
         return;
       }
       case 'marquee':
+      case 'zoombox':
         d.end = wp;
         this.preview = { kind: 'marquee', start: d.start, end: wp };
         this.changed();
@@ -590,6 +653,16 @@ export class Editor {
       case 'pen-handle':
         this.updateHover(sp);
         return;
+      case 'zoombox': {
+        this.preview = null;
+        const box = rectOf(d.start, d.end || d.start);
+        if (box.w / this.view.mpp < 6 && box.h / this.view.mpp < 6) this.view.zoomAt(e.altKey ? 2 : 0.5, sp[0], sp[1]);
+        else this.view.fit(box);
+        this.changed();
+        return;
+      }
+      case 'text':
+        return this.textAt(d.sp0, d.wp);
       case 'pencil':
         return this.finishPencil(d);
       case 'create':
@@ -980,6 +1053,49 @@ export class Editor {
     } else this.changed();
   }
 
+  /** Tamaño de un texto nuevo: el de dibujo, pero nunca menor que lo legible a la escala de la vista. */
+  newTextSize() {
+    const base = this.getCurrentStyle().fontSize || 10;
+    const minPt = MIN_TEXT_PX / this.units().ptToPx;
+    return base >= minPt ? base : niceFontSize(minPt);
+  }
+
+  textAt(sp, wp) {
+    const l = this.ensureDrawableLayer();
+    if (!l) return;
+    const hit = pickShape(this.doc, sp, this.view, this.units(), 6);
+    if (hit && hit.shape.type === 'text') {
+      this.setSelection([hit.shape.id]);
+      this.onEditText(hit.shape);
+      return;
+    }
+    const st = this.getCurrentStyle();
+    const t = makeText(wp[0], wp[1], '', { ...st, fill: st.stroke !== 'none' ? st.stroke : '#111827', fillOpacity: 1, fillType: 'solid', stroke: 'none' }, this.newTextSize());
+    t.text = '';
+    this.history.commit(addShapes(this.doc, l.id, [t]));
+    this.setSelection([t.id]);
+    this.onEditText(t, true);
+  }
+
+  scissorsAt(sp, wp) {
+    const hit = pickShape(this.doc, sp, this.view, this.units(), 10);
+    if (!hit || hit.shape.type !== 'path') return this.onMessage('Toca una línea o polígono para cortarlo');
+    const near = nearestOnPath(hit.shape.nodes, hit.shape.closed, { x: wp[0], y: wp[1] });
+    if (!near || near.dist / this.view.mpp > 12) return;
+    // cerca de un vértice: cortar en el vértice
+    let { segIndex, t } = near;
+    const a = hit.shape.nodes[segIndex];
+    const b = hit.shape.nodes[(segIndex + 1) % hit.shape.nodes.length];
+    if (Math.hypot(a.x - near.point.x, a.y - near.point.y) / this.view.mpp < 8) t = 0;
+    else if (Math.hypot(b.x - near.point.x, b.y - near.point.y) / this.view.mpp < 8) t = 1;
+    const r = splitPath(this.doc, hit.shape.id, segIndex, t);
+    if (r.error) return this.onMessage(r.error);
+    this.history.commit(r.doc);
+    this.snapDirty = true;
+    this.setSelection(r.ids);
+    this.onMessage(hit.shape.closed ? 'Polígono abierto en el punto' : 'Trazo cortado en dos');
+  }
+
   applyEyedropper(shape) {
     const style = shape.style ? { ...shape.style } : null;
     if (!style) return;
@@ -1118,7 +1234,17 @@ export class Editor {
       this.onCommandKey?.(e);
       return;
     }
+    if (this.onPlainKey?.(e)) return;
     const key = e.key.toLowerCase();
+    // Mayús+C: convertir punto de ancla (esquina ↔ curva), como en Illustrator
+    if (key === 'c' && e.shiftKey) {
+      const a = this.activeNode;
+      if (a) this.toggleSmooth(a.id, a.ring, a.index);
+      else this.onMessage('Elige un nodo con la herramienta Nodos (A)');
+      e.preventDefault();
+      return;
+    }
+    if (e.shiftKey) return;
     if (key === 'k') {
       this.settings.trace = !this.settings.trace;
       this.onMessage(`Trace ${this.settings.trace ? 'activado' : 'desactivado'}`);

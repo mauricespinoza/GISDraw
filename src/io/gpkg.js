@@ -165,8 +165,14 @@ export function sanitizeTableName(name) {
   return /^[a-z_]/.test(s) ? s || 'capa' : `c_${s}`;
 }
 
-/** Exporta las capas vectoriales a un GeoPackage (Uint8Array). */
-export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1 } = {}) {
+const DEFAULT_NAMES = new Set(['Línea', 'Polígono', 'Rectángulo', 'Elipse', 'Segmento', 'Flecha', 'Trazo libre', 'Polígono libre', 'Punto', 'Texto', 'Grupo']);
+
+/**
+ * Exporta las capas vectoriales a un GeoPackage (Uint8Array). Si se pasa
+ * `manifest` (un arreglo), se le agrega una entrada por tabla con su
+ * simbología, para armar el .qlr de QGIS.
+ */
+export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1, manifest = null } = {}) {
   const SQL = await loadSql();
   const db = new SQL.Database();
   db.exec(SCHEMA);
@@ -193,6 +199,7 @@ export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1 } = {})
       // estilos distintos -> índice
       const styles = [];
       const keyOf = new Map();
+      const namesOf = [];
       let minX = Infinity;
       let minY = Infinity;
       let maxX = -Infinity;
@@ -206,7 +213,9 @@ export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1 } = {})
         if (!keyOf.has(k)) {
           keyOf.set(k, styles.length);
           styles.push(st);
+          namesOf.push(new Set());
         }
+        namesOf[keyOf.get(k)].add(f.shape.type === 'text' ? '' : f.shape.name || '');
         const flat = f.geometry.type === 'Point' ? [f.geometry.coordinates] : f.geometry.type === 'LineString' ? f.geometry.coordinates : f.geometry.coordinates.flat();
         for (const [x, y] of flat) {
           if (x < minX) minX = x;
@@ -238,10 +247,17 @@ export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1 } = {})
         DOC_EPSG,
       ]);
       db.run('INSERT INTO gpkg_geometry_columns VALUES (?,?,?,?,0,0)', [table, 'geom', GEOM_NAME[kind], DOC_EPSG]);
+      // textos: en QGIS son etiquetas del campo gd_text sobre un punto invisible
+      const texts = subset.filter((f) => f.shape.type === 'text');
+      const textOnly = texts.length && texts.length === subset.length;
+      const qStyles = textOnly ? styles.map((st) => ({ ...st, fill: 'none', stroke: 'none' })) : styles;
+      const labelCfg = textOnly ? textLabelCfg(texts[0].shape) : layer.labels;
+      const legend = textOnly ? styles.map(() => 'Textos') : legendLabels(namesOf);
       db.run(
         'INSERT INTO layer_styles (f_table_name, f_geometry_column, styleName, styleQML, styleSLD, useAsDefault, description) VALUES (?,?,?,?,?,1,?)',
-        [table, 'geom', layer.name, buildCategorizedQML(styles, kind, layer.labels), '', 'GISDrawer'],
+        [table, 'geom', layer.name, buildCategorizedQML(qStyles, kind, labelCfg, legend), '', 'GISDrawer'],
       );
+      manifest?.push({ table, name: kinds.length > 1 ? `${layer.name} (${SUFFIX[kind]})` : layer.name, kind, styles: qStyles, labels: legend, labelCfg, opacity: layer.opacity });
       tables++;
     }
   }
@@ -252,4 +268,29 @@ export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1 } = {})
   const bytes = db.export();
   db.close();
   return bytes;
+}
+
+/** Etiquetado QGIS que reproduce un texto del dibujo. */
+function textLabelCfg(t) {
+  return {
+    enabled: true,
+    field: 'gd_text',
+    fontFamily: t.fontFamily,
+    fontSize: t.fontSize,
+    fontWeight: t.fontWeight,
+    italic: t.italic,
+    color: t.style?.fill && t.style.fill !== 'none' ? t.style.fill : '#000000',
+    halo: t.halo,
+    haloColor: t.haloColor || '#ffffff',
+    haloWidth: t.haloWidth ?? 0.5,
+    placement: 'over',
+  };
+}
+
+/** Rótulo de leyenda por estilo: el nombre de sus objetos si todos comparten uno propio. */
+function legendLabels(namesOf) {
+  return namesOf.map((set) => {
+    const names = [...set];
+    return names.length === 1 && names[0] && !DEFAULT_NAMES.has(names[0]) ? names[0] : '';
+  });
 }

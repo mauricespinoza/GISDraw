@@ -9,13 +9,14 @@ import { UTM19S, formatDMS, parseDMS, makeUtm } from '../src/proj.js';
 import { makeNode, makePath, makeRectPath, makeEllipsePath, makePoint, flattenNodes, measure, ringArea, splitNodes, scaleShape, rotateShape, shapeBBox } from '../src/vector.js';
 import { defaultStyle, pathToSvg, dashArray } from '../src/style.js';
 import { newDocument, addShapes, History, makeVectorLayer, addLayer, removeShapes } from '../src/doc.js';
-import { align, arrange, distribute, group, ungroup, selectSame, selectByAttribute, pasteShapes, copyShapes } from '../src/ops.js';
+import { align, arrange, distribute, group, ungroup, selectSame, selectByAttribute, pasteShapes, copyShapes, joinPaths, splitPath, setShapeFlag, resetShapeFlag } from '../src/ops.js';
+import { niceFontSize } from '../src/editor.js';
 import { polylabel, labelText } from '../src/labels.js';
 import { hillshade, compose, paletteLUT, elevationRange } from '../src/raster/hillshade.js';
 import { decodeTerrarium, parseAsciiGrid, gridSampler } from '../src/raster/dem.js';
 import { SnapIndex, buildGraph, tracePath } from '../src/snapping.js';
 import { shapeGeometry, geometryToShapes } from '../src/io/features.js';
-import { evalFilter, qgisExprToTemplate } from '../src/io/qml.js';
+import { evalFilter, qgisExprToTemplate, buildQLR, describeStyle } from '../src/io/qml.js';
 import { sanitizeTableName } from '../src/io/gpkg.js';
 
 let pass = 0;
@@ -233,6 +234,63 @@ const near = (a, b, tol, msg) => ok(Math.abs(a - b) <= tol, `${msg}: ${a} ≠ ${
   ok(!evalFilter(['any', ['==', ['get', 'u'], 'a'], ['==', ['get', 'u'], 'b']], { u: 'c' }), 'filtro any');
   ok(qgisExprToTemplate(`"codigo" || ' (' || "edad" || ')'`) === '{codigo} ({edad})', 'expresión QGIS a plantilla');
   ok(sanitizeTableName('Geología – Unidades 2') === 'geologia_unidades_2', `nombre de tabla: ${sanitizeTableName('Geología – Unidades 2')}`);
+}
+
+/* ------------------------------------------------- unir, cortar, ocultar */
+{
+  const a = makePath([makeNode(0, 0), makeNode(10, 0)]);
+  const b = makePath([makeNode(20, 0), makeNode(10.2, 0)]);
+  let doc = addShapes(newDocument(), newDocument().activeLayerId, []);
+  doc = addShapes(doc, doc.activeLayerId, [a, b]);
+  const r = joinPaths(doc, new Set([a.id, b.id]), 0.5);
+  const items = r.doc.layers.find((l) => l.id === doc.activeLayerId).items;
+  ok(items.length === 1 && items[0].id === a.id, 'unir deja un trazo');
+  ok(items[0].nodes.length === 3 && items[0].nodes[2].x === 20, `unir funde extremos cercanos e invierte el segundo: ${items[0].nodes.map((n) => n.x)}`);
+  const far = joinPaths(doc, new Set([a.id, b.id]), 0.01);
+  ok(far.doc.layers.find((l) => l.id === doc.activeLayerId).items[0].nodes.length === 4, 'unir lejos agrega un tramo');
+  const one = joinPaths(addShapes(newDocument(), newDocument().activeLayerId, []), new Set(), 0);
+  ok(one.error, 'unir sin selección da error');
+
+  const line = makePath([makeNode(0, 0), makeNode(10, 0), makeNode(20, 0)]);
+  let d2 = addShapes(newDocument(), newDocument().activeLayerId, []);
+  d2 = addShapes(d2, d2.activeLayerId, [line]);
+  const cut = splitPath(d2, line.id, 0, 0.5);
+  const parts = cut.doc.layers.find((l) => l.id === d2.activeLayerId).items;
+  ok(parts.length === 2 && parts[0].nodes.length === 2 && parts[1].nodes.length === 3, 'tijera parte una línea en dos');
+  near(parts[0].nodes[1].x, 5, 1e-9, 'tijera corta en el punto');
+  ok(parts[1].nodes[0].x === 5 && JSON.stringify(parts[1].style) === JSON.stringify(line.style) && parts[1].id !== line.id, 'la segunda parte conserva el estilo con id propio');
+  ok(splitPath(d2, line.id, 0, 0).error, 'tijera en el extremo no corta');
+  const onNode = splitPath(d2, line.id, 0, 1);
+  ok(onNode.doc.layers.find((l) => l.id === d2.activeLayerId).items.map((s) => s.nodes.length).join() === '2,2', 'tijera sobre un vértice');
+
+  const sq = makeRectPath(0, 0, 10, 10);
+  let d3 = addShapes(newDocument(), newDocument().activeLayerId, []);
+  d3 = addShapes(d3, d3.activeLayerId, [sq]);
+  const opened = splitPath(d3, sq.id, 1, 0.5).doc.layers.find((l) => l.id === d3.activeLayerId).items[0];
+  ok(!opened.closed && opened.nodes.length === 6, `tijera abre un polígono: ${opened.nodes.length}`);
+  ok(opened.nodes[0].x === opened.nodes[5].x && opened.nodes[0].y === opened.nodes[5].y, 'el polígono abierto empieza y termina en el corte');
+
+  const hidden = setShapeFlag(d3, new Set([sq.id]), 'visible', false);
+  ok(hidden.layers.find((l) => l.id === d3.activeLayerId).items[0].visible === false, 'ocultar');
+  const shown = resetShapeFlag(hidden, 'visible');
+  ok(shown.ids.length === 1 && shown.doc.layers.find((l) => l.id === d3.activeLayerId).items[0].visible === true, 'mostrar todo');
+}
+
+/* ------------------------------------------------- texto y QLR */
+{
+  ok(niceFontSize(3.2) === 3.5 && niceFontSize(37) === 38 && niceFontSize(431) === 440, 'tamaños de letra limpios');
+  const qlr = buildQLR(
+    [
+      { table: 'contactos', name: 'Contactos', kind: 'line', styles: [{ ...defaultStyle(), stroke: '#000000', ornament: 'thrust' }], labels: [''], labelCfg: null },
+      { table: 'unidades', name: 'Unidades & co', kind: 'polygon', styles: [{ ...defaultStyle(), fill: '#86efac', pattern: 'none' }], labels: ['Kia'], labelCfg: { enabled: true, field: 'codigo', fontFamily: 'Helvetica', fontSize: 8, color: '#000000', haloColor: '#ffffff', haloWidth: 0.5, halo: true } },
+    ],
+    { gpkgName: 'mapa.gpkg', title: 'Mapa' },
+  );
+  ok(qlr.includes('<qlr>') && qlr.includes('./mapa.gpkg|layername=unidades'), 'QLR apunta al GeoPackage');
+  ok(qlr.indexOf('layername=unidades') < qlr.indexOf('layername=contactos'), 'QLR: la capa de más arriba primero');
+  ok(qlr.includes('Unidades &amp; co') && qlr.includes('label="Kia"') && qlr.includes('EPSG:32719'), 'QLR: nombres escapados, rótulos y SRS');
+  ok(qlr.includes('fieldName="codigo"') && qlr.includes('labelsEnabled="1"'), 'QLR: etiquetas');
+  ok(/Cabalgamiento/.test(describeStyle({ ...defaultStyle(), ornament: 'thrust' }, 'line')), 'rótulo de leyenda de una falla');
 }
 
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLARON` : ''}`);
