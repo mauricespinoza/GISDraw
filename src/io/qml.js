@@ -221,6 +221,32 @@ export function symbolToStyle(symbolEl, refScale = 25000) {
         }
       }
     }
+    for (const ml of layers.filter((l) => l.getAttribute('class') === 'MarkerLine')) {
+      const inner = ml.querySelector('symbol > layer[class="SvgMarker"]');
+      const svg = inner ? decodeSvgRef(layerProps(inner).name) : null;
+      const gd = svg ? Object.fromEntries([...svg.matchAll(/data-gd(-[\w-]+)?="([^"]*)"/g)].map((m) => [m[1] ? m[1].slice(1) : 'kind', m[2]])) : null;
+      if (gd?.kind === 'wave') {
+        st.wavy = true;
+        st.waveAmp = Number(gd.amp) || st.waveAmp;
+        st.waveLen = Number(gd.len) || st.waveLen;
+        st.stroke = gd.stroke || '#000000';
+        st.strokeWidth = Number(gd.width) || 0.35;
+        st.strokeOpacity = Number(gd.opacity ?? 1);
+        st.casing = gd.casing === '1';
+        if (st.casing) {
+          st.casingColor = gd['casing-color'] || '#ffffff';
+          st.casingWidth = Number(gd['casing-width']) || st.casingWidth;
+        }
+      } else if (gd?.kind === 'orn' && ORNAMENTS[gd.type]) {
+        st.ornament = gd.type;
+        st.ornamentSide = gd.side === 'right' ? 'right' : 'left';
+        st.ornamentSize = Number(gd.size) || 1;
+        st.ornamentSpacing = Number(gd.spacing) || ORNAMENTS[gd.type].spacing;
+        st.ornamentGap = Number(gd.gap) || 0.8;
+        st.ornamentHalo = gd.halo !== '0';
+        st.ornamentColor = gd.color || '';
+      }
+    }
     if (arrows.length) {
       const p = layerProps(arrows[0]);
       const c = parseQgisColor(p.color) || null;
@@ -499,6 +525,17 @@ function opts(map) {
     .join('')}</Option>`;
 }
 
+/** Inverso de `svgRef`: el SVG de una ruta `base64:…` (o null). */
+function decodeSvgRef(ref) {
+  if (!ref || !String(ref).startsWith('base64:')) return null;
+  try {
+    const bin = atob(String(ref).slice(7));
+    return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+  } catch {
+    return null;
+  }
+}
+
 /** SVG como ruta incrustada de QGIS (`base64:…`): no depende de archivos aparte. */
 function svgRef(svg) {
   const bytes = new TextEncoder().encode(svg);
@@ -514,13 +551,49 @@ function svgRef(svg) {
  */
 function ornamentLayer(st) {
   const o = ornamentSymbolSvg(st);
-  if (!o) return '';
-  const marker = `<symbol type="marker" name="@orn" alpha="1" clip_to_extent="1" force_rhr="0"><layer class="SvgMarker" enabled="1" locked="0" pass="0">${opts({
-    name: svgRef(o.svg),
-    size: o.sizeMm.toFixed(3),
+  return o ? markerLineXml(o.svg, o.sizeMm, o.spacingMm, st.ornamentColor || st.stroke) : '';
+}
+
+/**
+ * Línea ondulada (discordancia): un ciclo de la onda como SVG repetido cada
+ * longitud de onda con un `MarkerLine` girado con la traza, empezando a media
+ * longitud: los ciclos se encadenan en la misma fase que dibuja GISDrawer. El
+ * halo de línea, si lo hay, va dentro del SVG, también ondulado.
+ */
+export function waveSvg(st) {
+  const L = st.waveLen;
+  const A = st.waveAmp;
+  const w = st.strokeWidth || 0.1;
+  const cw = st.casing ? w + 2 * (st.casingWidth || 0) : 0;
+  const S = Math.round((Math.max(L / 2, A + Math.max(w, cw) / 2) + 0.05) * 1000) / 1000;
+  const pts = [];
+  for (let i = 0; i <= 32; i++) {
+    const x = -L / 2 + (L * i) / 32;
+    // GISDrawer desplaza a la derecha del avance A·sen(2πd/L); el ciclo n va centrado en d = L/2 + nL
+    pts.push(`${x.toFixed(4)} ${(-A * Math.sin((2 * Math.PI * x) / L)).toFixed(4)}`);
+  }
+  const d = `M${pts.join('L')}`;
+  const casing = cw
+    ? `<path d="${d}" fill="none" stroke="${st.casingColor || '#ffffff'}" stroke-opacity="${st.casingOpacity ?? 1}" stroke-width="${cw}" stroke-linecap="round" stroke-linejoin="round"/>`
+    : '';
+  const W = (2 * S).toFixed(3);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${W}" viewBox="${-S} ${-S} ${W} ${W}" data-gd="wave" data-gd-amp="${A}" data-gd-len="${L}" data-gd-stroke="${st.stroke}" data-gd-width="${w}" data-gd-opacity="${st.strokeOpacity ?? 1}" data-gd-casing="${st.casing ? 1 : 0}" data-gd-casing-color="${st.casingColor || ''}" data-gd-casing-width="${st.casingWidth || 0}">${casing}<path d="${d}" fill="none" stroke="${st.stroke}" stroke-opacity="${st.strokeOpacity ?? 1}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+function waveLayer(st) {
+  const svg = waveSvg(st);
+  const size = Number(/width="([\d.]+)"/.exec(svg)[1]);
+  return markerLineXml(svg, size, st.waveLen, st.stroke);
+}
+
+/** `MarkerLine` que repite un SVG cada `interval` mm desde media separación, girado con la línea. */
+function markerLineXml(svg, sizeMm, interval, color) {
+  const marker = `<symbol type="marker" name="@m" alpha="1" clip_to_extent="1" force_rhr="0"><layer class="SvgMarker" enabled="1" locked="0" pass="0">${opts({
+    name: svgRef(svg),
+    size: sizeMm.toFixed(3),
     size_unit: 'MM',
     angle: '0',
-    color: rgba(st.ornamentColor || st.stroke, 1),
+    color: rgba(color, 1),
     outline_color: '0,0,0,0',
     outline_width: '0',
     outline_width_unit: 'MM',
@@ -531,16 +604,15 @@ function ornamentLayer(st) {
     fixedAspectRatio: '0',
     scale_method: 'diameter',
   })}</layer></symbol>`;
-  const half = (o.spacingMm / 2).toFixed(3);
   return `<layer class="MarkerLine" enabled="1" locked="0" pass="0">${opts({
     rotate: '1',
     placement: 'interval',
     placements: 'Interval',
-    interval: o.spacingMm.toFixed(3),
+    interval: interval.toFixed(3),
     interval_unit: 'MM',
     offset: '0',
     offset_unit: 'MM',
-    offset_along_line: half,
+    offset_along_line: (interval / 2).toFixed(3),
     offset_along_line_unit: 'MM',
     place_on_every_part: 'true',
     average_angle_length: '4',
@@ -597,8 +669,11 @@ export function styleToSymbolXml(st, kind, name) {
   }
   if (kind === 'line') {
     const layers = [];
-    if (st.casing) layers.push(lineLayer(st, { width: st.strokeWidth + 2 * st.casingWidth, color: st.casingColor, opacity: st.strokeOpacity, dash: st.dash }));
-    layers.push(lineLayer(st, { width: st.strokeWidth, color: st.stroke, opacity: st.strokeOpacity, dash: st.dash }));
+    if (st.wavy && st.waveAmp > 0 && st.waveLen > 0) layers.push(waveLayer(st));
+    else {
+      if (st.casing) layers.push(lineLayer(st, { width: st.strokeWidth + 2 * st.casingWidth, color: st.casingColor, opacity: st.strokeOpacity, dash: st.dash }));
+      layers.push(lineLayer(st, { width: st.strokeWidth, color: st.stroke, opacity: st.strokeOpacity, dash: st.dash }));
+    }
     if (st.ornament && st.ornament !== 'none') layers.push(ornamentLayer(st));
     return `<symbol type="line" name="${name}" alpha="${st.opacity ?? 1}" clip_to_extent="1" force_rhr="0">${layers.join('')}</symbol>`;
   }

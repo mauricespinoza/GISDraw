@@ -3,7 +3,7 @@
  * paneles y archivos.
  */
 
-import { History, addLayer, findLayer, findTopShape, layerOfShape, makeRasterLayer, makeVectorLayer, mapShapes, newDocument, updateLayer, allTopShapes } from './doc.js';
+import { History, addLayer, addShapes, findLayer, findTopShape, layerOfShape, makeRasterLayer, makeVectorLayer, mapShapes, newDocument, updateLayer, allTopShapes } from './doc.js';
 import { View, paperUnits } from './view.js';
 import { Editor, TOOLS } from './editor.js';
 import { StageRenderer } from './render.js';
@@ -21,6 +21,7 @@ import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles } from './io/
 import { parseQML, styleFor } from './io/qml.js';
 import { parseAsciiGrid } from './raster/dem.js';
 import { lonLatToTransform } from './io/crs.js';
+import { selectionSvg } from './io/illustrator.js';
 import { APP_VERSION } from './version.js';
 
 const SETTINGS_KEY = 'gd.settings';
@@ -84,6 +85,7 @@ class App {
     this.buildTopbar();
     this.buildContextMenu();
     this.setupTooltips();
+    this.setupClipboard();
     this.observeSize();
     this.restore();
   }
@@ -419,12 +421,16 @@ class App {
       item('GeoTIFF imagen (orto, mapa escaneado)…', () => this.importImage()),
       item('Georreferenciar imagen (JPG/PNG/TIFF)…', () => this.startGeoref()),
       item('Estilo QGIS (.qml / .qlr) a la capa activa…', () => this.applyQmlToLayer(this.history.doc.activeLayerId)),
+      item('Proyecto FieldDraw (.fdproj.json / .zip / GeoJSON)…', () => this.importFieldDraw()),
+      item('SVG / Illustrator (.svg), una capa por capa…', () => this.importSvgFile()),
       h('div', { class: 'mh' }, 'Exportar'),
       item('GeoPackage (todas las capas, con estilo QGIS)', () => this.exportGpkg()),
       item('Simbología QGIS (.qlr) + GeoPackage', () => this.exportQLR()),
       item('Estilo QGIS (.qml) de la capa activa', () => this.exportQML()),
       item('GeoJSON de la capa activa (WGS84)', () => this.exportGeoJSON(true)),
       item('GeoJSON de la capa activa (UTM 19S)', () => this.exportGeoJSON(false)),
+      item('Illustrator con capas (.jsx, lámina del layout)', () => this.layout.exportAs('jsx')),
+      item('SVG de la lámina con capas (Illustrator, Inkscape)', () => this.layout.exportAs('svg')),
       item('Imagen PNG de la vista', () => this.exportView('png')),
       item('SVG de la vista (vectorial)', () => this.exportView('svg')),
       h('div', { class: 'mh' }, 'Vista'),
@@ -610,8 +616,8 @@ class App {
       ]);
     }
     groups.push([
-      this.clipboard.length ? it('Pegar', 'Ctrl+V', () => this.paste(false)) : null,
-      this.clipboard.length ? it('Pegar en el lugar', 'Ctrl+F', () => this.paste(true)) : null,
+      this.clipboard.length || navigator.clipboard?.readText ? it('Pegar', 'Ctrl+V', () => this.paste(false)) : null,
+      this.clipboard.length || navigator.clipboard?.readText ? it('Pegar en el lugar', 'Ctrl+F', () => this.paste(true)) : null,
       it('Seleccionar todo', 'Ctrl+A', () => ed.selectAll()),
       n ? it('Deseleccionar', 'Ctrl+Mayús+A', () => ed.setSelection([])) : null,
     ]);
@@ -685,6 +691,39 @@ class App {
     if (!r.ids.length) return this.message('No hay objetos ocultos');
     this.history.commit(r.doc);
     this.editor.setSelection(r.ids);
+  }
+
+  /* ------------------------------------------------------ portapapeles */
+
+  setupClipboard() {
+    const editable = (t) => t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+    const put = (e, svg) => {
+      if (!svg) return;
+      e.clipboardData.setData('text/plain', svg);
+      try {
+        e.clipboardData.setData('image/svg+xml', svg);
+      } catch {
+        /* tipo no admitido por el navegador: basta el texto */
+      }
+      e.preventDefault();
+    };
+    document.addEventListener('copy', (e) => {
+      if (editable(e.target) || !this.editor.selection.size) return;
+      put(e, this.copy({ toSystem: false }));
+    });
+    document.addEventListener('cut', (e) => {
+      if (editable(e.target) || !this.editor.selection.size) return;
+      put(e, this.cut({ toSystem: false }));
+    });
+    document.addEventListener('paste', (e) => {
+      if (editable(e.target)) return;
+      e.preventDefault();
+      const dt = e.clipboardData;
+      const text = dt?.getData('image/svg+xml') || dt?.getData('text/plain') || dt?.getData('text/html') || '';
+      const inPlace = !!this.pasteInPlaceNext;
+      this.pasteInPlaceNext = false;
+      this.pasteText(text, inPlace).catch((err) => this.message(`Pegar: ${err.message}`, 6000));
+    });
   }
 
   /* ------------------------------------------------------ ayuda */
@@ -765,18 +804,70 @@ class App {
     } else this.history.preview(next);
   }
 
-  copy() {
+  /**
+   * Copia lo seleccionado. Además del portapapeles interno, deja en el del
+   * sistema un SVG en puntos (Illustrator lo pega como dibujo editable) que
+   * lleva dentro las formas de GISDrawer (al pegarlo aquí vuelve exacto y
+   * georreferenciado). Devuelve ese SVG.
+   */
+  copy({ toSystem = true } = {}) {
     this.clipboard = copyShapes(this.history.doc, this.editor.selection);
-    this.message(`${this.clipboard.length} objeto(s) copiado(s)`);
     this.updateContextBar();
+    if (!this.clipboard.length) return null;
+    const svg = selectionSvg(this.clipboard, { refScale: this.history.doc.refScale, est: this.editor.est(), name: this.layerOf(this.clipboard[0].id)?.name || 'GISDrawer' });
+    if (toSystem && svg) navigator.clipboard?.writeText(svg).catch(() => null);
+    this.message(`${this.clipboard.length} objeto(s) copiado(s) · se pueden pegar en Illustrator`);
+    return svg;
   }
 
-  cut() {
-    this.copy();
+  cut(opts) {
+    const svg = this.copy(opts);
     this.editor.deleteSelection();
+    return svg;
   }
 
-  paste(inPlace, where = 'front') {
+  /** Pegar desde un botón o Ctrl+F/B: el portapapeles del sistema si se puede leer, si no el interno. */
+  async paste(inPlace, where = 'front') {
+    let text = '';
+    try {
+      text = (await navigator.clipboard?.readText()) || '';
+    } catch {
+      /* sin permiso: queda el portapapeles interno */
+    }
+    return this.pasteText(text, inPlace, where);
+  }
+
+  /**
+   * Pega texto del portapapeles: SVG (de Illustrator, Inkscape, un navegador
+   * o el propio GISDrawer) se convierte en dibujo; cualquier otra cosa deja
+   * pasar al portapapeles interno.
+   */
+  async pasteText(text, inPlace = false, where = 'front') {
+    if (/<svg[\s>]/i.test(text || '')) {
+      const { importSvg } = await import('./io/svgImport.js');
+      const doc = this.history.doc;
+      const r = importSvg(text, { refScale: doc.refScale, center: [this.view.cx, this.view.cy] });
+      if (r.gisdrawer) {
+        this.clipboard = r.gisdrawer.shapes;
+        return this.pasteInternal(inPlace, where);
+      }
+      if (!r.shapes.length) return this.message('El SVG del portapapeles no trae formas');
+      const layer = this.editor.ensureDrawableLayer();
+      if (!layer) return;
+      const ids = new Set(r.shapes.map((x) => x.id));
+      const next = addShapes(doc, layer.id, r.shapes);
+      this.history.commit(where === 'back' ? arrange(next, ids, 'back') : next);
+      this.editor.setSelection(ids);
+      this.editor.snapDirty = true;
+      const [w, hgt] = r.sizeMm;
+      this.message(`${r.shapes.length} objeto(s) pegados desde SVG (${w.toFixed(0)} × ${hgt.toFixed(0)} mm de papel a 1:${doc.refScale.toLocaleString('es-CL')})${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, r.warnings.length ? 9000 : 4000);
+      return;
+    }
+    if (this.clipboard.length) return this.pasteInternal(inPlace, where);
+    this.message('El portapapeles no trae dibujo. Desde Illustrator: Preferencias → Gestión del portapapeles → «Copiar como: código SVG».', 9000);
+  }
+
+  pasteInternal(inPlace, where = 'front') {
     if (!this.clipboard.length) return;
     const layer = this.editor.ensureDrawableLayer();
     if (!layer) return;
@@ -799,9 +890,14 @@ class App {
     if (e.key === 'F10') return run(() => this.showPanel('style'));
     if (k === 'z' && !e.shiftKey) return run(() => this.history.undo());
     if ((k === 'z' && e.shiftKey) || k === 'y') return run(() => this.history.redo());
-    if (k === 'c') return run(() => this.copy());
-    if (k === 'x') return run(() => this.cut());
-    if (k === 'v') return run(() => this.paste(e.shiftKey || e.altKey));
+    // Ctrl+C/X/V los atienden los eventos copy/cut/paste del navegador (ver
+    // setupClipboard): son los únicos que leen y escriben el portapapeles del
+    // sistema sin pedir permiso, y por ahí entra lo copiado en Illustrator.
+    if (k === 'c' || k === 'x') return;
+    if (k === 'v') {
+      this.pasteInPlaceNext = e.shiftKey || e.altKey;
+      return;
+    }
     // Ctrl+F / Ctrl+B: pegar en el lugar, delante o detrás (Illustrator)
     if (k === 'f') return run(() => this.paste(true));
     if (k === 'b') return run(() => this.paste(true, 'back'));
@@ -1038,6 +1134,52 @@ class App {
     this.message(`${all.length} elemento(s) importados${warnings.length ? ` · ${warnings.length} aviso(s): ${warnings.slice(0, 2).join(' / ')}` : ''}`, warnings.length ? 9000 : 3000);
   }
 
+  /** Proyecto de FieldDraw: una capa por tipo (unidades, trazas, medidas, puntos de control), con su simbología. */
+  async importFieldDraw() {
+    const [f] = await pickFiles('.json,.fdproj,.zip,.geojson');
+    if (!f) return;
+    this.message('Leyendo proyecto de FieldDraw…', 0);
+    const { readFieldDrawFile, importFieldDraw } = await import('./io/fielddraw.js');
+    const r = importFieldDraw(await readFieldDrawFile(f), { refScale: this.history.doc.refScale });
+    if (!r.count) return this.message('El proyecto no trae elementos dibujables');
+    let doc = this.history.doc;
+    const all = [];
+    for (const L of r.layers) {
+      const layer = makeVectorLayer(L.name, { items: L.items, fields: L.fields });
+      if (L.labels) layer.labels = { ...layer.labels, ...L.labels };
+      doc = addLayer(doc, layer, doc.activeLayerId);
+      all.push(...L.items);
+    }
+    this.history.commit(doc);
+    this.zoomToShapes(all);
+    this.message(`FieldDraw «${r.name}»: ${r.count} elemento(s) en ${r.layers.length} capa(s)${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, r.warnings.length ? 9000 : 4000);
+  }
+
+  /** Archivo SVG (Illustrator, Inkscape…): una capa de GISDrawer por cada capa de primer nivel. */
+  async importSvgFile() {
+    const [f] = await pickFiles('.svg');
+    if (!f) return;
+    const { importSvg } = await import('./io/svgImport.js');
+    const doc0 = this.history.doc;
+    const r = importSvg(await f.text(), { refScale: doc0.refScale, center: [this.view.cx, this.view.cy] });
+    if (r.gisdrawer) {
+      this.clipboard = r.gisdrawer.shapes;
+      return this.pasteInternal(true);
+    }
+    let doc = doc0;
+    const all = [];
+    for (const L of r.layers) {
+      if (!L.shapes.length) continue;
+      const layer = makeVectorLayer(L.name || f.name.replace(/\.svg$/i, ''), { items: L.shapes });
+      doc = addLayer(doc, layer, doc.activeLayerId);
+      all.push(...L.shapes);
+    }
+    if (!all.length) return this.message('El SVG no trae formas');
+    this.history.commit(doc);
+    this.zoomToShapes(all);
+    this.message(`${all.length} objeto(s) en ${r.layers.length} capa(s) desde ${f.name}${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, 6000);
+  }
+
   async importGeoJSON() {
     const files = await pickFiles('.geojson,.json', true);
     const { importGeoJSON } = await import('./io/geojson.js');
@@ -1264,7 +1406,7 @@ const SHORTCUTS = [
   ]],
   ['Color', [['X', 'Alternar relleno / trazo'], ['Mayús+X', 'Intercambiar relleno y trazo'], ['D', 'Colores predeterminados'], ['/', 'Ninguno']]],
   ['Edición', [
-    ['Ctrl+Z / Ctrl+Mayús+Z', 'Deshacer / rehacer'], ['Ctrl+C / X / V', 'Copiar / cortar / pegar'], ['Ctrl+F / Ctrl+B', 'Pegar en el lugar delante / detrás'],
+    ['Ctrl+Z / Ctrl+Mayús+Z', 'Deshacer / rehacer'], ['Ctrl+C / X / V', 'Copiar / cortar / pegar (también desde y hacia Illustrator)'], ['Ctrl+F / Ctrl+B', 'Pegar en el lugar delante / detrás'],
     ['Ctrl+D', 'Duplicar'], ['Alt+arrastrar', 'Duplicar al mover'], ['Supr', 'Eliminar'], ['Flechas', 'Mover 1 px (Mayús: 10)'],
     ['Ctrl+A / Ctrl+Mayús+A', 'Seleccionar todo / nada'], ['Ctrl+G / Ctrl+Mayús+G', 'Agrupar / desagrupar'], ['Ctrl+J', 'Unir o cerrar trazos'],
     ['Ctrl+7 / Ctrl+Alt+7', 'Máscara de recorte / liberar'], ['Ctrl+] / Ctrl+[', 'Adelante / atrás (Mayús: al frente / al fondo)'],

@@ -10,7 +10,7 @@
  * "multiplicar" sale igual en pantalla, en SVG y en PDF.
  */
 
-import { composeLayout, defaultLayout, frameExtent, pageGeometry, PAGES } from '../layout/compose.js';
+import { composeLayout, defaultLayout, frameExtent, pageGeometry, PAGES, SYMBOL_SCALES, symbolFactor } from '../layout/compose.js';
 import { computeHillshadeImage, imageFiles } from '../raster/rasterView.js';
 import { drawBasemap, BASEMAPS } from '../raster/basemap.js';
 import { lonLatBBox } from '../raster/dem.js';
@@ -72,7 +72,7 @@ export class LayoutEditor {
     let group = null;
     const flush = () => {
       if (group) {
-        out.push({ index: group.index, href: group.canvas.toDataURL('image/png'), opacity: 1 });
+        out.push({ index: group.index, href: group.canvas.toDataURL('image/png'), opacity: 1, name: group.names.reverse().join(' + ') });
         group = null;
       }
     };
@@ -89,8 +89,9 @@ export class LayoutEditor {
         const canvas = document.createElement('canvas');
         canvas.width = wpx;
         canvas.height = hpx;
-        group = { index: i, canvas, ctx: canvas.getContext('2d') };
+        group = { index: i, canvas, ctx: canvas.getContext('2d'), names: [] };
       }
+      group.names.push(l.name);
       group.ctx.globalAlpha = l.opacity;
       group.ctx.globalCompositeOperation = l.blend && l.blend !== 'normal' ? l.blend : 'source-over';
       group.ctx.drawImage(c, 0, 0, wpx, hpx);
@@ -178,10 +179,21 @@ export class LayoutEditor {
   async exportAs(kind) {
     const L = this.L;
     this.app.message(`Generando ${kind.toUpperCase()} a ${L.dpi} dpi…`, 0);
-    const { svg, geometry } = await this.build(L.dpi);
-    const name = (L.title || 'mapa').replace(/[^\w\-áéíóúñÁÉÍÓÚÑ]+/g, '_');
+    const built = await this.build(L.dpi);
+    const { svg, geometry } = built;
+    const name =
+      String(L.title || 'mapa')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\w-]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'mapa';
     if (kind === 'svg') {
       download(svg, `${name}.svg`, 'image/svg+xml');
+    } else if (kind === 'jsx') {
+      const { illustratorJsx } = await import('../io/illustrator.js');
+      download(illustratorJsx(built, { title: L.title || 'Mapa' }), `${name}_illustrator.jsx`, 'text/plain');
+      this.app.message('Script de Illustrator descargado: en Illustrator, Archivo → Scripts → Otro script… y elige el archivo. Crea una capa por cada capa de la lámina.', 9000);
+      return;
     } else if (kind === 'png') {
       const scale = L.dpi / 25.4;
       const canvas = document.createElement('canvas');
@@ -214,6 +226,30 @@ export class LayoutEditor {
     this.app.message(`${kind.toUpperCase()} exportado`);
   }
 
+  /** Armonía de tamaños entre la escala de referencia del dibujo y la de la lámina. */
+  symbolSection(L) {
+    const ref = this.app.history.doc.refScale;
+    const f = symbolFactor(ref, L);
+    const fmt = (v) => Number(v).toLocaleString('es-CL');
+    return sec(
+      'Tamaño de símbolos y textos',
+      row('Modo', select(SYMBOL_SCALES, L.symbolScale || 'auto', (v) => this.set({ symbolScale: v }))),
+      L.symbolScale === 'custom' ? row('Factor ×', num(L.symbolFactor, (v) => v > 0 && this.set({ symbolFactor: v }), { step: 0.05, min: 0.05 })) : null,
+      h(
+        'p',
+        { class: 'hint' },
+        `Dibujo a 1:${fmt(ref)}, lámina a 1:${fmt(L.scale)}: grosores, ornamentos, tramas y textos al ${Math.round(f * 100)} % de su tamaño en el estilo. «Automático» toma el punto medio entre dejarlos fijos en papel y escalarlos con el mapa, para que el cambio de escala no sea brusco.`,
+      ),
+      ref !== L.scale
+        ? btn(`Usar 1:${fmt(L.scale)} como escala de referencia del dibujo`, () => {
+            if (!confirm(`¿Cambiar la escala de referencia del dibujo de 1:${fmt(ref)} a 1:${fmt(L.scale)}? Los tamaños en pantalla pasarán a medirse a esa escala.`)) return;
+            this.app.history.commit({ ...this.app.history.doc, refScale: L.scale });
+            this.schedule(0);
+          })
+        : null,
+    );
+  }
+
   /* ---------------------------------------------------------------- panel */
 
   panel() {
@@ -238,8 +274,8 @@ export class LayoutEditor {
           btn('Centrar en la vista', () => this.set({ center: [Math.round(v.cx), Math.round(v.cy)] })),
           btn('Escala de la vista', () => this.set({ scale: Math.round(v.scale / 500) * 500 || 500 })),
         ),
-        h('p', { class: 'hint' }, 'Los símbolos y textos salen al tamaño en papel definido en el estilo (mm, pt).'),
       ),
+      this.symbolSection(L),
       sec(
         'Grilla y coordenadas',
         row('Grilla', select({ none: 'Sin grilla', utm: 'UTM (m)', geo: 'Geográfica (° \' ")', both: 'UTM + geográfica' }, L.grid, set('grid'))),
@@ -275,6 +311,8 @@ export class LayoutEditor {
           btn('SVG', () => this.exportAs('svg').catch((e) => this.app.message(e.message, 6000))),
           btn('PNG', () => this.exportAs('png').catch((e) => this.app.message(e.message, 6000))),
         ),
+        btn('Illustrator con capas (.jsx)', () => this.exportAs('jsx').catch((e) => this.app.message(e.message, 6000)), 'primary'),
+        h('p', { class: 'hint' }, 'El SVG lleva un grupo con nombre por cada capa de la lámina. El script .jsx (Archivo → Scripts → Otro script… en Illustrator) arma el documento con una capa real de Illustrator por cada una: capas del mapa, etiquetas, grilla, marco, título, leyenda…'),
         btn('Actualizar vista previa', () => this.schedule(0)),
       ),
     ];
