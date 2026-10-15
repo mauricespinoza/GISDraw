@@ -19,6 +19,7 @@
  * no hay `DOMParser`.
  */
 
+import { normalizeRuns } from '../richText.js';
 import { makeGroup, makePath, makeText } from '../vector.js';
 import { defaultStyle } from '../style.js';
 
@@ -825,10 +826,11 @@ function textShapes(el, M, cs, opacity, kMm, computed) {
         const t = c.textContent.replace(/[\r\n\t]+/g, ' ');
         if (!t.trim() && !line) continue;
         if (!line) {
-          line = { text: '', style };
+          line = { text: '', style, segs: [] };
           lines.push(line);
         }
         line.text += t;
+        line.segs.push({ t, style });
       } else if (c.nodeType === 1 && c.tagName.toLowerCase().replace(/^svg:/, '') === 'tspan') {
         const st = computed(c, style);
         const x = c.hasAttribute('x') ? parseFloat(c.getAttribute('x')) : inheritedX;
@@ -836,7 +838,7 @@ function textShapes(el, M, cs, opacity, kMm, computed) {
         const dy = parseFloat(c.getAttribute('dy')) || 0;
         const yy = (y ?? curY ?? 0) + dy;
         if (curY == null || Math.abs(yy - curY) > 1e-6) {
-          line = { text: '', style: st };
+          line = { text: '', style: st, segs: [] };
           lines.push(line);
           curY = yy;
         }
@@ -849,9 +851,45 @@ function textShapes(el, M, cs, opacity, kMm, computed) {
   const y0 = parseFloat(el.getAttribute('y')) || 0;
   curY = el.hasAttribute('y') ? y0 : null;
   visit(el, cs, x0, el.hasAttribute('y') ? y0 : null);
-  const text = lines.map((l) => l.text.replace(/\s+$/, '')).join('\n').replace(/^\n+|\n+$/g, '');
+  // texto y tramos: cada trozo con estilo propio (color, tamaño, negrita, cursiva) distinto del primero
+  const keep = lines.filter((l) => l.text.trim());
+  if (!keep.length) return [];
+  const st0 = keep[0].segs[0]?.style || keep[0].style || cs;
+  const baseFs = parseFloat(st0['font-size'] ?? cs['font-size'] ?? 16) || 16;
+  const isBold = (st) => {
+    const w = String(st['font-weight'] ?? cs['font-weight'] ?? '400');
+    return w === 'bold' || Number(w) >= 600 || /bold|black|heavy/i.test(String(st['font-family'] ?? ''));
+  };
+  const isItalic = (st) => /italic|oblique/i.test(String(st['font-style'] ?? cs['font-style'] ?? '')) || /italic|oblique/i.test(String(st['font-family'] ?? ''));
+  const colorOf = (st) => {
+    const f = parseColor(st.fill ?? cs.fill ?? '#000000');
+    return f && f !== 'none' ? f.color : '#000000';
+  };
+  const base = { color: colorOf(st0), bold: isBold(st0), italic: isItalic(st0) };
+  let text = '';
+  const runs = [];
+  keep.forEach((l, i) => {
+    if (i) text += '\n';
+    const lineLen = l.text.replace(/\s+$/, '').length;
+    let pos = 0;
+    for (const sg of l.segs) {
+      const t = sg.t.slice(0, Math.max(0, lineLen - pos));
+      pos += sg.t.length;
+      if (!t) continue;
+      const r = { s: text.length, e: text.length + t.length };
+      const sc = (parseFloat(sg.style['font-size'] ?? baseFs) || baseFs) / baseFs;
+      if (Math.abs(sc - 1) > 0.02) r.scale = +sc.toFixed(3);
+      if (t.trim()) {
+        const c = colorOf(sg.style);
+        if (c !== base.color) r.color = c;
+        if (isBold(sg.style) !== base.bold) r.bold = isBold(sg.style);
+        if (isItalic(sg.style) !== base.italic) r.italic = isItalic(sg.style);
+      }
+      if (r.scale || r.color || r.bold !== undefined || r.italic !== undefined) runs.push(r);
+      text += t;
+    }
+  });
   if (!text.trim()) return [];
-  const st0 = lines[0]?.style || cs;
   const pos = first || { x: x0, y: y0 };
   const p = apply(M, pos.x, pos.y);
   const fsU = parseFloat(st0['font-size'] ?? cs['font-size'] ?? 16) || 16;
@@ -873,6 +911,7 @@ function textShapes(el, M, cs, opacity, kMm, computed) {
     t.haloColor = sw.color;
     t.haloWidth = +(((parseFloat(st0['stroke-width'] ?? cs['stroke-width'] ?? 1) || 1) * scaleOf(M) * kMm) / 2).toFixed(3);
   } else t.halo = false;
+  if (runs.length) t.runs = normalizeRuns(runs, text.length);
   t.name = text.split('\n')[0].slice(0, 40);
   return [t];
 }

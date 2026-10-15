@@ -464,3 +464,9 @@ svg2pdf.
 ## Texto con formato por tramos
 
 Al editar un texto (doble clic en el mapa o en un cuadro del layout) aparece una barra: selecciona parte de las letras y cambia su **color**, **tamaño (pt)**, **negrita** o **cursiva** sin afectar el resto (`Aa` quita el formato). Sin selección afecta a todo el texto. El formato se guarda en `shape.runs` (`{s,e,color,scale,bold,italic}`), sale como `<tspan>` en SVG/Illustrator y se conserva al pasar un texto del layout a una capa.
+
+## Portapapeles
+
+- **Ctrl+C / Ctrl+X / Ctrl+V** funcionan dentro de la app (conservan formato, tramos de texto y grupos; cada pegado sucesivo se desplaza un poco más) y con el sistema: lo copiado se deja como SVG (Illustrator lo pega editable).
+- **Pegar SVG** de Illustrator: un texto con varios estilos (color, tamaño, negrita, cursiva) entra como un solo texto con tramos.
+- **Pegar imágenes** (recortes de pantalla, imágenes copiadas de un navegador o documento, `<img>` con datos incrustados): entran como capa de imagen en el centro de la vista, sin diálogos; luego se pueden georreferenciar desde Archivo. Los botones Pegar del menú también leen imágenes del portapapeles.

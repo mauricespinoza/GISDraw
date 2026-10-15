@@ -720,16 +720,21 @@ class App {
       if (editable(e.target)) return;
       e.preventDefault();
       const dt = e.clipboardData;
-      const text = dt?.getData('image/svg+xml') || dt?.getData('text/plain') || dt?.getData('text/html') || '';
-      // un recorte de pantalla o una imagen copiada llega como archivo de imagen
-      const img = [...(dt?.files || []), ...[...(dt?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile())].find((f) => f && /^image\//.test(f.type) && f.type !== 'image/svg+xml');
-      if (img && !/<svg[\s>]/i.test(text)) {
-        this.pasteImage(img).catch((err) => this.message(`Pegar imagen: ${err.message}`, 6000));
-        return;
-      }
       const inPlace = !!this.pasteInPlaceNext;
       this.pasteInPlaceNext = false;
-      this.pasteText(text, inPlace).catch((err) => this.message(`Pegar: ${err.message}`, 6000));
+      const text = dt?.getData('image/svg+xml') || dt?.getData('text/plain') || '';
+      const html = dt?.getData('text/html') || '';
+      const files = [...(dt?.files || []), ...[...(dt?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile())];
+      const img = files.find((f) => f && /^image\//.test(f.type) && f.type !== 'image/svg+xml');
+      const run = async () => {
+        if (img && !/<svg[\s>]/i.test(text)) return this.pasteImage(img);
+        if (/<svg[\s>]/i.test(text || html)) return this.pasteText(/<svg[\s>]/i.test(text) ? text : html, inPlace);
+        // una imagen dentro de HTML (<img src="data:...">) copiada de una página o documento
+        const m = /<img[^>]+src=["'](data:image\/[^"']+)["']/i.exec(html);
+        if (m && !this.clipboard.length) return this.pasteImage(await (await fetch(m[1])).blob());
+        return this.pasteText(text || html, inPlace);
+      };
+      run().catch((err) => this.message(`Pegar: ${err.message}`, 6000));
     });
   }
 
@@ -819,6 +824,7 @@ class App {
    */
   copy({ toSystem = true } = {}) {
     this.clipboard = copyShapes(this.history.doc, this.editor.selection);
+    this.pasteN = 0;
     this.updateContextBar();
     if (!this.clipboard.length) return null;
     const svg = selectionSvg(this.clipboard, { refScale: this.history.doc.refScale, est: this.editor.est(), name: this.layerOf(this.clipboard[0].id)?.name || 'GISDrawer' });
@@ -839,11 +845,10 @@ class App {
    * se ofrece georreferenciarla; si no, queda como capa de imagen en la vista
    * (y se puede georreferenciar después desde Archivo).
    */
-  async pasteImage(file) {
+  async pasteImage(file, { georef = false } = {}) {
     const n = this.history.doc.layers.filter((l) => l.kind === 'image').length + 1;
     const name = `Recorte ${n}`;
-    const ok = confirm(`Se pegó una imagen (${file.type.replace('image/', '').toUpperCase()}).\n\nAceptar = georreferenciarla con puntos de control.\nCancelar = colocarla en la vista como capa de imagen «${name}».`);
-    if (ok) return this.startGeoref(file);
+    if (georef) return this.startGeoref(file);
     const bitmap = await createImageBitmap(file);
     const v = this.view;
     const wM = Math.min(v.w * 0.6, (v.h * 0.6 * bitmap.width) / bitmap.height) * v.mpp;
@@ -859,16 +864,28 @@ class App {
     const fv = layers.findIndex((x) => x.kind === 'vector');
     layers.splice(fv < 0 ? layers.length : fv, 0, l);
     this.history.commit({ ...doc, layers });
-    this.message(`Imagen pegada como capa «${name}». Para ubicarla con precisión: Archivo → Georreferenciar imagen.`, 7000);
+    this.lastPastedImage = file;
+    this.message(`Imagen pegada como capa «${name}» en el centro de la vista. Para ubicarla con precisión: Archivo → Georreferenciar imagen.`, 7000);
   }
 
   /** Pegar desde un botón o Ctrl+F/B: el portapapeles del sistema si se puede leer, si no el interno. */
   async paste(inPlace, where = 'front') {
     let text = '';
     try {
-      text = (await navigator.clipboard?.readText()) || '';
+      if (navigator.clipboard?.read) {
+        for (const item of await navigator.clipboard.read()) {
+          const img = item.types.find((t) => /^image\//.test(t) && t !== 'image/svg+xml');
+          if (item.types.includes('image/svg+xml')) text = await (await item.getType('image/svg+xml')).text();
+          else if (item.types.includes('text/plain')) text = await (await item.getType('text/plain')).text();
+          if (img && !/<svg[\s>]/i.test(text)) return this.pasteImage(await item.getType(img));
+        }
+      } else text = (await navigator.clipboard?.readText()) || '';
     } catch {
-      /* sin permiso: queda el portapapeles interno */
+      try {
+        text = (await navigator.clipboard?.readText()) || '';
+      } catch {
+        /* sin permiso: queda el portapapeles interno */
+      }
     }
     return this.pasteText(text, inPlace, where);
   }
@@ -885,6 +902,7 @@ class App {
       const r = importSvg(text, { refScale: doc.refScale, center: [this.view.cx, this.view.cy] });
       if (r.gisdrawer) {
         this.clipboard = r.gisdrawer.shapes;
+        this.pasteN = 0;
         return this.pasteInternal(inPlace, where);
       }
       if (!r.shapes.length) return this.message('El SVG del portapapeles no trae formas');
@@ -907,7 +925,7 @@ class App {
     if (!this.clipboard.length) return;
     const layer = this.editor.ensureDrawableLayer();
     if (!layer) return;
-    const r = pasteShapes(this.history.doc, this.clipboard, layer.id, { inPlace, offset: inPlace ? 0 : 12 * this.view.mpp });
+    const r = pasteShapes(this.history.doc, this.clipboard, layer.id, { inPlace, offset: inPlace ? 0 : 12 * this.view.mpp * (this.pasteN = (this.pasteN || 0) + 1) });
     const ids = new Set(r.ids);
     this.history.commit(where === 'back' ? arrange(r.doc, ids, 'back') : r.doc);
     this.editor.setSelection(ids);
