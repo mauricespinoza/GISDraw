@@ -912,13 +912,13 @@ class App {
       const v = ta.value;
       const current = findTopShape(this.history.doc, shape.id)?.shape;
       if (!current) return;
-      if (!save || !v.trim()) {
-        if (isNew || !v.trim()) {
-          this.history.commit(mapShapes(this.history.doc, [shape.id], () => null));
-          this.editor.setSelection([]);
-        }
+      // Esc descarta: un texto nuevo desaparece, uno existente queda como estaba
+      if ((!save && isNew) || (save && !v.trim())) {
+        this.history.commit(mapShapes(this.history.doc, [shape.id], () => null));
+        this.editor.setSelection([]);
         return;
       }
+      if (!save) return;
       if (v !== current.text) this.history.commit(mapShapes(this.history.doc, [shape.id], (s) => ({ ...s, text: v, name: v.split('\n')[0].slice(0, 40) })));
       if (isNew) this.editor.setTool('select');
     };
