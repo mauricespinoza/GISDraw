@@ -1,6 +1,6 @@
 # GISDrawer — dibujo vectorial georreferenciado
 
-Un programa de dibujo tipo Illustrator donde **todo está en coordenadas reales**:
+Un programa de dibujo donde **todo está en coordenadas reales**:
 el documento vive en **WGS84 / UTM 19S (EPSG:32719)**, las coordenadas se leen
 por defecto en **grados sexagesimales**, y lo que se dibuja se exporta como dato
 GIS (GeoPackage con simbología QGIS, GeoJSON) o como lámina impresa (PDF, SVG,
