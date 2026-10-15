@@ -317,6 +317,12 @@ píxeles cubre más terreno, y Terrarium parte de ~30 m en tierra.
 
 **Mover y escalar en el layout**: en la vista de layout, un clic sobre un objeto vectorial del mapa (Mayús suma más) lo selecciona; arrástralo para moverlo, o arrastra el cuadrito de su esquina inferior derecha para escalarlo (proporcional, con la esquina superior izquierda fija). Las flechas lo desplazan y Supr lo elimina. Esto modifica la geometría real del dibujo (se puede deshacer con Ctrl+Z). Los elementos propios de la lámina (título, leyenda, norte, escalas, datos, cuadros de texto) también se mueven y se escalan con su cuadrito.
 
+**Relieve en caché**: en la vista principal el relieve sombreado se calcula una sola vez y se reutiliza: mover o hacer zoom solo desplaza y escala esa imagen, sin recalcular (así el paneo es fluido). El botón **↻ Redraw** de la barra superior (visible cuando hay un relieve) lo recalcula para la vista actual; se pone ámbar cuando la imagen en caché ya no cubre la vista o está a otra escala. Cambiar los ajustes de la capa también lo recalcula.
+
+**Bloquear elementos del layout**: cada elemento seleccionado tiene un candado en su esquina superior izquierda; bloqueado no se mueve, escala ni borra, y arrastrar sobre él dentro del marco mueve el mapa. «Bloquear posición y tamaño de todos los elementos» (panel Layout) lo aplica a todos.
+
+**Imágenes pegadas en el layout**: un clic sobre una imagen (capa de imagen que no cubra todo el marco) la selecciona; se arrastra para moverla y el cuadrito de su esquina inferior derecha la reescala. La posición se guarda en la capa (se deshace con Ctrl+Z).
+
 **Escalas**: la escala gráfica (barra) y la numérica («Escala 1:25.000») son dos elementos independientes; cada uno puede llevar un fondo sólido del color que elijas (panel Layout → Elementos).
 
 **Varios objetos a la vez**: con varios objetos seleccionados, trazo, grosor, relleno, opacidad, halo y demás del panel Estilo se aplican a todos; si hay textos, aparece además una sección con fuente, tamaño, negrita/cursiva y halo de texto para todos.

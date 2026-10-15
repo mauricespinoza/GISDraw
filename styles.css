@@ -115,6 +115,12 @@ body {
   border-color: #475569;
 }
 
+.tb.stale {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #1f2937;
+}
+
 .tb.icon {
   font-size: 18px;
   padding: 0 8px;

@@ -12,13 +12,13 @@
 
 import { openRichEditor } from './richEditor.js';
 import { composeLayout, defaultLayout, fitFrame, layoutTextShape, frameExtent, elementTransform, pageGeometry, pageToGround, PAGES, SYMBOL_SCALES, symbolFactor } from '../layout/compose.js';
-import { allTopShapes, findTopShape, mapShapes } from '../doc.js';
+import { allTopShapes, findLayer, findTopShape, mapShapes, updateLayer } from '../doc.js';
 import { pickShape } from '../hit.js';
 import { makeText, newId, scaleShape, shapeBBox, translateShape, unionBBox } from '../vector.js';
 import { addShapes } from '../doc.js';
 import { applyStyle, deleteStyle, getStyle, importStyles, listStyles, parseStyleFile, pickStyle, saveStyle, styleFile } from '../layout/styles.js';
 import { defaultStyle } from '../style.js';
-import { computeHillshadeImage, imageFiles } from '../raster/rasterView.js';
+import { computeHillshadeImage, imageRect } from '../raster/rasterView.js';
 import { drawBasemap, BASEMAPS } from '../raster/basemap.js';
 import { lonLatBBox } from '../raster/dem.js';
 import { View } from '../view.js';
@@ -45,7 +45,7 @@ export class LayoutEditor {
       btn('－', () => this.zoomBy(0.8), 'sm'),
       btn('▭ Marco automático', () => this.resetFrame(), 'sm'),
       (this.textBtn = btn('T Cuadro de texto', () => this.startAddText(), 'sm')),
-      h('span', { class: 'lp-hint' }, 'Arrastra dentro del marco = mover el mapa · rueda = zoom · vértices del marco = tamaño · arrastra un elemento (o un objeto vectorial del mapa) para moverlo · cuadrito de su esquina inferior = escalarlo · Supr lo elimina'),
+      h('span', { class: 'lp-hint' }, 'Arrastra dentro del marco = mover el mapa · rueda = zoom · vértices del marco = tamaño · arrastra un elemento (o un objeto vectorial del mapa) para moverlo · cuadrito de su esquina inferior = escalarlo · candado = bloquearlo · imágenes pegadas: clic y arrastrar · Supr lo elimina'),
     );
     this.el.append(this.stage, this.bar);
     document.getElementById('viewport').append(this.el);
@@ -92,7 +92,11 @@ export class LayoutEditor {
             this.app.editor.deleteSelection();
             this.select(null);
             this.schedule(0);
-          } else if (this.sel && this.sel !== 'frame') this.deleteElement(this.sel);
+          } else if (this.sel?.startsWith('image:')) this.app.message('Para quitar la imagen elimina su capa en la pestaña Capas');
+          else if (this.sel && this.sel !== 'frame') {
+            if (this.isLocked(this.sel)) this.app.message('Elemento bloqueado: desbloquéalo con el candado');
+            else this.deleteElement(this.sel);
+          }
         } else if (e.key === 'Escape') {
           stop();
           this.adding = false;
@@ -104,7 +108,10 @@ export class LayoutEditor {
           const dx = e.key === 'ArrowLeft' ? -k : e.key === 'ArrowRight' ? k : 0;
           const dy = e.key === 'ArrowUp' ? -k : e.key === 'ArrowDown' ? k : 0;
           if (this.sel === 'shapes') this.transformVectors(dx, dy);
-          else if (this.sel && this.sel !== 'frame') this.nudgeElement(this.sel, dx, dy);
+          else if (this.sel?.startsWith('image:')) this.transformImage(dx, dy);
+          else if (this.sel && this.sel !== 'frame') {
+            if (!this.isLocked(this.sel)) this.nudgeElement(this.sel, dx, dy);
+          }
           else this.panByMm(-dx, -dy);
         }
       },
@@ -126,6 +133,72 @@ export class LayoutEditor {
   inFrame(p) {
     const g = this.geom;
     return p[0] >= g.fx && p[0] <= g.fx + g.fw && p[1] >= g.fy && p[1] <= g.fy + g.fh;
+  }
+
+  /* ------------------------------------------------ bloqueo de elementos */
+
+  isLocked(name) {
+    const L = this.L;
+    return !!(L.lockAll || L.locks?.[name]);
+  }
+
+  toggleLock(name) {
+    const locks = { ...(this.L.locks || {}) };
+    if (locks[name]) delete locks[name];
+    else locks[name] = true;
+    this.set({ locks });
+    this.app.message(locks[name] ? 'Elemento bloqueado: ya no se mueve ni se escala por accidente' : 'Elemento desbloqueado', 2500);
+    this.app.panels?.render();
+  }
+
+  /* ------------------------------------------ imágenes raster dentro del marco */
+
+  /** Rectángulo de una capa de imagen en mm de página: {x, y, w, h}. */
+  imagePageRect(layer) {
+    const img = imageRect(layer);
+    if (!img) return null;
+    const c = this.vctx();
+    const [x0, y0] = c.toPage(img.x0, img.y1);
+    const [x1, y1] = c.toPage(img.x1, img.y0);
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+
+  /**
+   * Capa de imagen visible bajo el punto, la de más arriba.
+   * Las que cubren todo el marco no cuentan: son fondo y ahí se arrastra el mapa.
+   */
+  pickImage(p) {
+    const g = this.geom;
+    const layers = this.app.history.doc.layers;
+    for (let i = layers.length - 1; i >= 0; i--) {
+      const l = layers[i];
+      if (l.kind !== 'image' || !l.visible) continue;
+      const r = this.imagePageRect(l);
+      if (!r || p[0] < r.x || p[0] > r.x + r.w || p[1] < r.y || p[1] > r.y + r.h) continue;
+      if (r.x <= g.fx && r.y <= g.fy && r.x + r.w >= g.fx + g.fw && r.y + r.h >= g.fy + g.fh) continue;
+      return l;
+    }
+    return null;
+  }
+
+  selectedImage() {
+    const id = this.sel?.startsWith('image:') ? this.sel.slice(6) : null;
+    const l = id && findLayer(this.app.history.doc, id);
+    return l?.kind === 'image' ? l : null;
+  }
+
+  /** Mueve (dx, dy mm de página) y/o escala (s, esquina sup. izq. fija) la imagen seleccionada. */
+  transformImage(dx, dy, s = 1) {
+    const l = this.selectedImage();
+    const r = l && this.imagePageRect(l);
+    if (!r) return;
+    const c = this.vctx();
+    const ext = frameExtent(c.L, c.g);
+    const toGround = (px, py) => [ext.minX + (px - c.g.fx) / c.k, ext.maxY - (py - c.g.fy) / c.k];
+    const [x0, y1] = toGround(r.x + dx, r.y + dy);
+    const [x1, y0] = toGround(r.x + dx + r.w * s, r.y + dy + r.h * s);
+    this.app.history.commit(updateLayer(this.app.history.doc, l.id, (ly) => ({ ...ly, settings: { ...ly.settings, bounds: [x0, y0, x1, y1] } })));
+    this.schedule(0);
   }
 
   /* ------------------------------------- objetos vectoriales dentro del marco */
@@ -230,12 +303,22 @@ export class LayoutEditor {
       this.deleteElement(this.sel);
       return;
     }
+    if (handle === 'lock') {
+      this.toggleLock(this.sel);
+      return;
+    }
+    if (handle === 'isc') {
+      const l = this.selectedImage();
+      const r = l && this.imagePageRect(l);
+      if (r) this.gesture = { mode: 'iscale', start: [0, 0], r, s: 1 };
+      return;
+    }
     if (handle === 'vsc') {
       const b = this.vectorBox();
       if (b) this.gesture = { mode: 'vscale', start: [0, 0], box: b, w0: Math.max(1e-3, b.w), h0: Math.max(1e-3, b.h), s: 1 };
       return;
     }
-    if (handle === 'sc' && this.sel && this.sel !== 'frame') {
+    if (handle === 'sc' && this.sel && this.sel !== 'frame' && !this.isLocked(this.sel)) {
       const eo = this.elementGroup(this.sel)?.querySelector(':scope > .eo');
       if (eo) {
         const lb = eo.getBBox(); // en coordenadas locales (sin la transformación propia)
@@ -254,9 +337,14 @@ export class LayoutEditor {
       return;
     }
     const el = e.target.closest?.('[data-el]');
-    if (el && e.pointerType !== 'touch-pan') {
+    const lockedEl = el && this.isLocked(el.dataset.el);
+    if (el && e.pointerType !== 'touch-pan' && !(lockedEl && this.inFrame(p))) {
       const name = el.dataset.el;
       this.select(name);
+      if (lockedEl) {
+        this.gesture = null;
+        return;
+      }
       this.gesture = { mode: 'move', el: name, start: p, base: [...(this.L.offsets?.[name] || [0, 0])] };
       return;
     }
@@ -265,6 +353,12 @@ export class LayoutEditor {
       if (v) {
         this.selectVector(v, e.shiftKey);
         if (this.sel === 'shapes') this.gesture = { mode: 'vmove', start: p };
+        return;
+      }
+      const img = this.pickImage(p);
+      if (img) {
+        this.select(`image:${img.id}`);
+        this.gesture = { mode: 'imove', start: p };
         return;
       }
       this.select('frame');
@@ -285,6 +379,12 @@ export class LayoutEditor {
       const g = this.elementGroup(gs.el)?.querySelector(':scope > .eo');
       if (g) g.setAttribute('transform', `translate(${gs.base[0] + dx} ${gs.base[1] + dy})`);
       gs.delta = [dx, dy];
+      this.drawOverlay();
+    } else if (gs.mode === 'imove') {
+      gs.delta = [dx, dy];
+      this.drawOverlay();
+    } else if (gs.mode === 'iscale') {
+      gs.s = Math.max(0.05, Math.min(40, Math.max((p[0] - gs.r.x) / gs.r.w, (p[1] - gs.r.y) / gs.r.h)));
       this.drawOverlay();
     } else if (gs.mode === 'vmove') {
       gs.delta = [dx, dy];
@@ -317,6 +417,12 @@ export class LayoutEditor {
     if (gs.mode === 'move' && gs.delta) {
       const o = { ...(this.L.offsets || {}), [gs.el]: [+(gs.base[0] + gs.delta[0]).toFixed(2), +(gs.base[1] + gs.delta[1]).toFixed(2)] };
       this.set({ offsets: o });
+    } else if (gs.mode === 'imove') {
+      if (gs.delta && Math.hypot(...gs.delta) > 0.3) this.transformImage(gs.delta[0], gs.delta[1]);
+      else this.drawOverlay();
+    } else if (gs.mode === 'iscale') {
+      if (Math.abs(gs.s - 1) > 0.005) this.transformImage(0, 0, gs.s);
+      else this.drawOverlay();
     } else if (gs.mode === 'vmove') {
       if (gs.delta && Math.hypot(...gs.delta) > 0.3) this.transformVectors(gs.delta[0], gs.delta[1]);
       else this.drawOverlay();
@@ -504,6 +610,17 @@ export class LayoutEditor {
         const n = add('rect', { x: x - hs / 2, y: y - hs / 2, width: hs, height: hs, fill: '#fff', stroke: '#0ea5e9', 'stroke-width': 1.5 * u, 'data-h': k, class: 'lp-handle' });
         n.style.cursor = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize' }[k];
       }
+    } else if (this.sel?.startsWith('image:')) {
+      const l = this.selectedImage();
+      const r0 = l && this.imagePageRect(l);
+      if (!r0) return;
+      const gs = this.gesture;
+      let b = r0;
+      if (gs?.mode === 'imove' && gs.delta) b = { ...r0, x: r0.x + gs.delta[0], y: r0.y + gs.delta[1] };
+      if (gs?.mode === 'iscale') b = { ...r0, w: r0.w * gs.s, h: r0.h * gs.s };
+      add('rect', { x: b.x, y: b.y, width: b.w, height: b.h, fill: 'rgba(14,165,233,.06)', stroke: '#0ea5e9', 'stroke-width': 1.4 * u, 'stroke-dasharray': `${4 * u} ${3 * u}`, 'pointer-events': 'none' });
+      const hs = 8 * u;
+      add('rect', { x: b.x + b.w - hs / 2, y: b.y + b.h - hs / 2, width: hs, height: hs, fill: '#fff', stroke: '#0ea5e9', 'stroke-width': 1.5 * u, 'data-h': 'isc', class: 'lp-handle' }).style.cursor = 'nwse-resize';
     } else if (this.sel === 'shapes') {
       const b0 = this.vectorBox();
       if (!b0) return;
@@ -528,9 +645,18 @@ export class LayoutEditor {
       add('rect', { x: b.x - pad, y: b.y - pad, width: b.width + 2 * pad, height: b.height + 2 * pad, fill: 'none', stroke: '#0ea5e9', 'stroke-width': 1.4 * u, 'stroke-dasharray': `${4 * u} ${3 * u}` });
       const r = 7 * u;
       const hs = 8 * u;
-      add('rect', { x: b.x + b.width + pad - hs / 2, y: b.y + b.height + pad - hs / 2, width: hs, height: hs, fill: '#fff', stroke: '#0ea5e9', 'stroke-width': 1.5 * u, 'data-h': 'sc', class: 'lp-handle' }).style.cursor = 'nwse-resize';
-      add('circle', { cx: b.x + b.width + pad, cy: b.y - pad, r, fill: '#ef4444', stroke: '#fff', 'stroke-width': 1.2 * u, 'data-h': 'del', class: 'lp-handle' }).style.cursor = 'pointer';
-      add('path', { d: `M${b.x + b.width + pad - r * 0.45} ${b.y - pad - r * 0.45}l${r * 0.9} ${r * 0.9}m0 ${-r * 0.9}l${-r * 0.9} ${r * 0.9}`, stroke: '#fff', 'stroke-width': 1.6 * u, 'stroke-linecap': 'round', 'pointer-events': 'none' });
+      const locked = this.isLocked(this.sel);
+      // candado: bloquea o libera este elemento (si está bloqueado no se mueve, escala ni borra)
+      const lx = b.x - pad;
+      const ly = b.y - pad;
+      add('circle', { cx: lx, cy: ly, r, fill: locked ? '#0ea5e9' : '#64748b', stroke: '#fff', 'stroke-width': 1.2 * u, 'data-h': 'lock', class: 'lp-handle' }).style.cursor = 'pointer';
+      add('rect', { x: lx - r * 0.4, y: ly - r * 0.1, width: r * 0.8, height: r * 0.6, fill: '#fff', 'pointer-events': 'none' });
+      add('path', { d: `M${lx - r * 0.24} ${ly - r * 0.1}v${-r * 0.2}a${r * 0.24} ${r * 0.24} 0 0 1 ${r * 0.48} 0${locked ? `v${r * 0.2}` : ''}`, fill: 'none', stroke: '#fff', 'stroke-width': 1.1 * u, 'pointer-events': 'none' });
+      if (!locked) {
+        add('rect', { x: b.x + b.width + pad - hs / 2, y: b.y + b.height + pad - hs / 2, width: hs, height: hs, fill: '#fff', stroke: '#0ea5e9', 'stroke-width': 1.5 * u, 'data-h': 'sc', class: 'lp-handle' }).style.cursor = 'nwse-resize';
+        add('circle', { cx: b.x + b.width + pad, cy: b.y - pad, r, fill: '#ef4444', stroke: '#fff', 'stroke-width': 1.2 * u, 'data-h': 'del', class: 'lp-handle' }).style.cursor = 'pointer';
+        add('path', { d: `M${b.x + b.width + pad - r * 0.45} ${b.y - pad - r * 0.45}l${r * 0.9} ${r * 0.9}m0 ${-r * 0.9}l${-r * 0.9} ${r * 0.9}`, stroke: '#fff', 'stroke-width': 1.6 * u, 'stroke-linecap': 'round', 'pointer-events': 'none' });
+      }
     }
   }
 
@@ -623,7 +749,7 @@ export class LayoutEditor {
       return canvas;
     }
     if (l.kind === 'image') {
-      const img = imageFiles.get(l.settings.fileId);
+      const img = imageRect(l);
       if (!img) return null;
       const [ax, ay] = v.toScreen(img.x0, img.y1);
       const [bx, by] = v.toScreen(img.x1, img.y0);
@@ -685,7 +811,7 @@ export class LayoutEditor {
     this.geom = geometry;
     this.live = { s: 1, tx: 0, ty: 0 };
     this.content.innerHTML = svg.replace(/width="[\d.]+mm" height="[\d.]+mm"/, 'width="100%" height="100%"');
-    if (this.sel && this.sel !== 'frame' && this.sel !== 'shapes' && !this.elementGroup(this.sel)) this.sel = null;
+    if (this.sel && this.sel !== 'frame' && this.sel !== 'shapes' && !this.sel.startsWith('image:') && !this.elementGroup(this.sel)) this.sel = null;
     this.drawOverlay();
     this.app.message('');
     const after = this.afterPreview;
@@ -1066,6 +1192,9 @@ export class LayoutEditor {
         row('Autor', text(L.author, set('author'))),
         row('Fecha', text(L.date, set('date'))),
         row('Notas', text(L.notes, set('notes'))),
+        check('Bloquear posición y tamaño de todos los elementos', !!L.lockAll, set('lockAll')),
+        this.sel && !this.sel.startsWith('image:') && this.sel !== 'frame' && this.sel !== 'shapes' ? check(`Bloquear solo el elemento seleccionado (${this.sel.startsWith('text:') ? 'texto' : this.sel})`, !!L.locks?.[this.sel], () => this.toggleLock(this.sel)) : null,
+        h('p', { class: 'hint' }, 'Un elemento bloqueado no se mueve al arrastrar (el clic sobre él dentro del marco arrastra el mapa). El candado de su caja de selección también lo bloquea o libera.'),
         check('Título', L.showTitle !== false, set('showTitle')),
         check('Datos (autor, fecha, sistema, notas, fuentes)', L.showInfo !== false, set('showInfo')),
         check('Norte (verdadero, con convergencia)', L.north, set('north')),
