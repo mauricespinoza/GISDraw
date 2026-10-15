@@ -20,6 +20,7 @@ import { toDocTransform } from './crs.js';
 import { decodeGeoPackageBinary, encodeGeoPackageBinary } from './wkb.js';
 import { geometryToShapes, guessName, layerFeatures } from './features.js';
 import { buildCategorizedQML, parseQML, styleFor } from './qml.js';
+import { classIndex, rendererLabel } from '../symbology.js';
 import { defaultStyle } from '../style.js';
 
 function rowsOf(db, sql, params = []) {
@@ -215,7 +216,7 @@ export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1, manife
           styles.push(st);
           namesOf.push(new Set());
         }
-        namesOf[keyOf.get(k)].add(f.shape.type === 'text' ? '' : f.shape.name || '');
+        namesOf[keyOf.get(k)].add(f.shape.type === 'text' ? '' : (layer.renderer && rendererLabel(layer.renderer, f.shape)) || f.shape.name || '');
         const flat = f.geometry.type === 'Point' ? [f.geometry.coordinates] : f.geometry.type === 'LineString' ? f.geometry.coordinates : f.geometry.coordinates.flat();
         for (const [x, y] of flat) {
           if (x < minX) minX = x;
@@ -253,11 +254,12 @@ export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1, manife
       const qStyles = textOnly ? styles.map((st) => ({ ...st, fill: 'none', stroke: 'none' })) : styles;
       const labelCfg = textOnly ? textLabelCfg(texts[0].shape) : layer.labels;
       const legend = textOnly ? styles.map(() => 'Textos') : legendLabels(namesOf);
+      const fieldSpec = textOnly ? null : fieldRendererSpec(layer.renderer, subset, fields, types);
       db.run(
         'INSERT INTO layer_styles (f_table_name, f_geometry_column, styleName, styleQML, styleSLD, useAsDefault, description) VALUES (?,?,?,?,?,1,?)',
-        [table, 'geom', layer.name, buildCategorizedQML(qStyles, kind, labelCfg, legend), '', 'GISDrawer'],
+        [table, 'geom', layer.name, buildCategorizedQML(qStyles, kind, labelCfg, legend, fieldSpec), '', 'GISDrawer'],
       );
-      manifest?.push({ table, name: kinds.length > 1 ? `${layer.name} (${SUFFIX[kind]})` : layer.name, kind, styles: qStyles, labels: legend, labelCfg, opacity: layer.opacity });
+      manifest?.push({ table, name: kinds.length > 1 ? `${layer.name} (${SUFFIX[kind]})` : layer.name, kind, styles: qStyles, labels: legend, labelCfg, fieldSpec, opacity: layer.opacity });
       tables++;
     }
   }
@@ -268,6 +270,38 @@ export async function exportGeoPackage(doc, { layerIds = null, tol = 0.1, manife
   const bytes = db.export();
   db.close();
   return bytes;
+}
+
+/**
+ * Renderizador de QGIS sobre el campo de la simbología por campo de la capa,
+ * con el estilo real de un objeto de cada clase. Null si el campo no es una
+ * columna de la tabla o si en un graduado quedan objetos sin clase (QGIS no
+ * los dibujaría): entonces se usa el renderizador por estilos.
+ */
+function fieldRendererSpec(r, subset, fields, types) {
+  if (!r?.classes?.length || !fields.includes(r.field)) return null;
+  const byClass = new Map();
+  let other = null;
+  for (const f of subset) {
+    const i = classIndex(r, f.shape);
+    if (i < 0) other ||= f.shape.style || {};
+    else if (!byClass.has(i)) byClass.set(i, f.shape.style || {});
+  }
+  if (!byClass.size) return null;
+  if (r.mode === 'graduated' && other) return null;
+  const classes = [...byClass.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([i, style]) => {
+      const c = r.classes[i];
+      return r.mode === 'graduated' ? { lower: c.min, upper: c.max, label: c.label, style } : { key: c.key, label: c.label, style };
+    });
+  return {
+    mode: r.mode,
+    attr: r.field,
+    numeric: types[fields.indexOf(r.field)] === 'REAL',
+    classes,
+    other: r.mode === 'categorized' && other ? { label: r.other?.label || 'Otros valores', style: other } : null,
+  };
 }
 
 /** Etiquetado QGIS que reproduce un texto del dibujo. */

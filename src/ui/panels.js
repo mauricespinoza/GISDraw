@@ -17,6 +17,8 @@ import { DEM_SOURCES, OPENTOPO_TYPES } from '../raster/dem.js';
 import { PALETTES, defaultHillshadeSettings, paletteLUT } from '../raster/hillshade.js';
 import { SAME_CRITERIA, align, arrange, distribute, group, moveToLayer, selectByAttribute, selectSame, ungroup } from '../ops.js';
 import { measure, shapeBBox, unionBBox, walkShapes } from '../vector.js';
+import { LABEL_SEPARATORS, labelText } from '../labels.js';
+import { RAMPS, applyRenderer, buildRenderer, clearRenderer, countClasses, defaultRendererOptions, fieldChoices, rampCss } from '../symbology.js';
 import { h, sec, row, select, slider, num, text, color, check, btn } from './dom.js';
 import { TAB_ICONS } from './icons.js';
 
@@ -52,6 +54,10 @@ const QUICK_COLORS = ['#000000', '#4b5563', '#9ca3af', '#ffffff', '#0000ff', '#f
 /** Grosor máximo del trazo (mm de papel) y su escala cuadrática en el deslizador (0–1000). */
 const MAX_STROKE = 30;
 const widthOf = (v) => +(MAX_STROKE * (v / 1000) ** 2).toFixed(2);
+
+/** Tamaño máximo del símbolo de punto (mm de papel), también en escala cuadrática. */
+const MAX_POINT = 60;
+const pointOf = (v) => Math.max(0.2, +(MAX_POINT * (v / 1000) ** 2).toFixed(2));
 
 const FONTS = {
   'Helvetica, Arial, sans-serif': 'Helvetica / Arial',
@@ -362,7 +368,9 @@ export class Panels {
       row('Opacidad', ...pct('opacity')),
       row('Fusión', select(BLEND_MODES, s.blend || 'normal', fin('blend'))),
       row('Símbolo punto', select(POINT_SHAPES, s.pointShape || 'circle', fin('pointShape'))),
-      row('Tamaño punto', num(s.pointSize, fin('pointSize'), { step: 0.1, min: 0.2 })),
+      row('Tamaño punto', num(s.pointSize, fin('pointSize'), { step: 0.1, min: 0.2 }), ...slider({ min: 0, max: 1000, value: Math.round(Math.sqrt((s.pointSize || 2.5) / MAX_POINT) * 1000), fmt: (v) => `${pointOf(v)} mm`, oninput: (v) => live('pointSize')(pointOf(v)), onchange: (v) => fin('pointSize')(pointOf(v)) })),
+      h('p', { class: 'hint' }, `Símbolo de punto hasta ${MAX_POINT} mm (el campo numérico admite más).`),
+      ...this.fieldSymbology(shapes),
     );
 
     const out = [head];
@@ -492,6 +500,84 @@ export class Panels {
     );
   }
 
+  /** Objeto de muestra para la vista previa de etiquetas: el seleccionado de la capa o el primero con texto. */
+  sampleShape(layer) {
+    const sel = this.app.editor.selectedShapes().find((s) => layer.items.some((x) => x.id === s.id));
+    if (sel) return sel;
+    return layer.items.find((s) => s.attrs && Object.keys(s.attrs).length) || layer.items[0] || null;
+  }
+
+  /* ======================================= SIMBOLOGÍA POR CAMPO (QGIS) */
+
+  /**
+   * Categorizado / Graduado sobre un campo de atributos de la capa del objeto
+   * seleccionado (o la activa). La configuración y las clases se guardan en la
+   * capa; «Clasificar y aplicar» pinta cada objeto según su clase.
+   */
+  fieldSymbology(shapes) {
+    const app = this.app;
+    const doc = this.doc;
+    const sel = shapes[0] ? app.layerOf(shapes[0].id) : null;
+    const layer = sel?.kind === 'vector' ? sel : findLayer(doc, doc.activeLayerId);
+    if (!layer || layer.kind !== 'vector') return [];
+    const opts = (this.symOpts ||= {});
+    const r = layer.renderer;
+    const o = (opts[layer.id] ||= { ...defaultRendererOptions(), ...(r ? { field: r.field, mode: r.mode, ramp: r.ramp, reverse: r.reverse, method: r.method, n: r.n, target: r.target } : {}) });
+    const fields = fieldChoices(layer);
+    const refresh = () => this.render();
+    const run = () => {
+      try {
+        const rr = buildRenderer(layer.items, o);
+        app.history.commit(applyRenderer(this.doc, layer.id, rr));
+        app.message(`Simbología por «${o.field}»: ${rr.classes.length} clase(s)`, 3500);
+      } catch (e) {
+        app.message(e.message, 6000);
+      }
+    };
+    const out = [
+      h('h3', {}, 'Simbología por campo de atributos'),
+      h('p', { class: 'hint' }, `Capa «${layer.name}» (${layer.items.length} objetos). Pinta cada objeto según el valor de un campo, como el renderizador Categorizado o Graduado de QGIS.`),
+      row('Campo', select({ '': '— elegir campo —', ...fields }, o.field, (v) => { o.field = v; refresh(); })),
+      row('Tipo', select({ categorized: 'Categorizado (un color por valor)', graduated: 'Graduado (clases numéricas)' }, o.mode, (v) => { o.mode = v; refresh(); })),
+      row('Rampa', select(Object.fromEntries(Object.entries(RAMPS).map(([k, v]) => [k, v.label])), o.ramp, (v) => { o.ramp = v; refresh(); })),
+      row('', h('div', { class: 'palette-bar', style: { background: rampCss(o.ramp, o.reverse) } }), check('Invertir', o.reverse, (v) => { o.reverse = v; refresh(); })),
+    ];
+    if (o.mode === 'graduated') {
+      out.push(
+        row('Método', select({ quantile: 'Cuantiles (igual cantidad)', equal: 'Intervalos iguales', pretty: 'Cortes redondos', jenks: 'Cortes naturales (Jenks)' }, o.method, (v) => (o.method = v))),
+        row('Clases', num(o.n, (v) => (o.n = Math.max(2, Math.min(30, Math.round(v)))), { step: 1, min: 2, max: 30 })),
+      );
+    }
+    out.push(
+      row('Aplicar a', select({ auto: 'Automático (relleno en polígonos y puntos, trazo en líneas)', fill: 'Relleno', stroke: 'Trazo', both: 'Relleno y trazo' }, o.target, (v) => (o.target = v))),
+      btn('Clasificar y aplicar', run, 'primary'),
+    );
+    if (r) {
+      const { counts, other } = countClasses(r, layer.items);
+      const setClass = (i, patch) => {
+        const classes = r.classes.map((c, j) => (j === i ? { ...c, ...patch } : c));
+        app.history.commit(applyRenderer(this.doc, layer.id, { ...r, classes }));
+      };
+      out.push(
+        h('h4', { class: 'pat-h' }, `Clases de «${r.field}» (${r.mode === 'graduated' ? 'graduado' : 'categorizado'})`),
+        ...r.classes.map((c, i) =>
+          h('div', { class: 'cls-row' }, color(c.color, null, (v) => setClass(i, { color: v })), text(c.label, (v) => setClass(i, { label: v || c.label })), h('span', { class: 'cnt', title: 'objetos' }, String(counts[i]))),
+        ),
+        other
+          ? h('div', { class: 'cls-row' }, color(r.other?.color || '#9ca3af', null, (v) => app.history.commit(applyRenderer(this.doc, layer.id, { ...r, other: { ...(r.other || {}), color: v } }))), h('span', { class: 'lbl' }, r.other?.label || 'Otros valores'), h('span', { class: 'cnt' }, String(other)))
+          : null,
+        h(
+          'div',
+          { class: 'grid-btns two' },
+          btn('Reaplicar', () => app.history.commit(applyRenderer(this.doc, layer.id, r))),
+          btn('Quitar clasificación', () => app.history.commit(clearRenderer(this.doc, layer.id)), 'danger'),
+        ),
+        h('p', { class: 'hint' }, 'Los colores ya aplicados quedan en cada objeto. Los rótulos de clase salen en la leyenda del layout y, al exportar a QGIS, como un renderizador Categorizado/Graduado sobre el campo.'),
+      );
+    }
+    return out;
+  }
+
   /* ============================================================= ETIQUETAS */
 
   labelsPanel() {
@@ -507,7 +593,10 @@ export class Panels {
       if (final) app.history.commit(next);
       else app.history.preview(next);
     };
-    const fields = { '': '— elegir campo —', $nombre: 'Nombre del objeto', ...Object.fromEntries((layer.fields || []).map((f) => [f, f])) };
+    const fields = { '': '— elegir campo —', ...fieldChoices(layer) };
+    const addField = (f) => f && set({ fields: [...(c.fields || []), f] });
+    const sample = this.sampleShape(layer);
+    const preview = sample ? labelText(sample, c) : '';
     return [
       sec(
         'Capa',
@@ -521,11 +610,25 @@ export class Panels {
         check('Etiquetar esta capa', c.enabled, (v) => set({ enabled: v })),
       ),
       sec(
-        'Texto',
+        'Texto de la etiqueta',
         row('Campo', select(fields, c.field, (v) => set({ field: v }))),
-        row('Plantilla', text(c.template, (v) => set({ template: v }), '{codigo} ({edad})')),
-        h('p', { class: 'hint' }, 'La plantilla combina campos entre llaves y manda sobre el campo. Campos de la capa: ' + ((layer.fields || []).join(', ') || '—')),
+        h('h4', { class: 'pat-h' }, 'Combinar varios campos'),
+        ...(c.fields || []).map((f, i) =>
+          row(
+            `${i + 1}.`,
+            select({ ...fields, [f]: f }, f, (v) => set({ fields: c.fields.map((x, j) => (j === i ? v : x)) })),
+            btn('↑', () => i > 0 && set({ fields: c.fields.map((x, j) => (j === i - 1 ? c.fields[i] : j === i ? c.fields[i - 1] : x)) }), 'sm'),
+            btn('✕', () => set({ fields: c.fields.filter((_, j) => j !== i) }), 'sm'),
+          ),
+        ),
+        row('Añadir', select({ '': '+ elegir campo…', ...fieldChoices(layer) }, '', addField)),
+        (c.fields || []).length > 1 ? row('Separador', select(Object.fromEntries(Object.entries(LABEL_SEPARATORS).map(([k, v]) => [k, v[0]])), c.sep || 'space', (v) => set({ sep: v }))) : null,
+        h('h4', { class: 'pat-h' }, 'Plantilla (avanzado)'),
+        row('Plantilla', text(c.template, (v) => set({ template: v }), '{codigo} ({edad:1} Ma)')),
+        row('Insertar', select({ '': '+ campo en la plantilla…', ...fieldChoices(layer) }, '', (f) => f && set({ template: `${c.template || ''}{${f}}` }))),
+        h('p', { class: 'hint' }, 'Prioridad: plantilla, luego varios campos, luego el campo único. Con varios campos se omiten los vacíos (sin separadores sueltos). En la plantilla: {campo:2} fija decimales, {campo|upper} (también lower, title) cambia las mayúsculas y {codigo||nombre} usa el segundo si el primero está vacío.'),
         check('MAYÚSCULAS', c.upper, (v) => set({ upper: v })),
+        h('p', { class: 'hint target' }, sample ? `Vista previa (${sample.name || 'objeto'}): ${preview || '(vacío)'}` : 'Sin objetos para la vista previa.'),
       ),
       sec(
         'Tipografía',

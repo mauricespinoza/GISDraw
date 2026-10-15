@@ -170,7 +170,8 @@ falla y pliegue, discordancia ondulada y tramas de litología.
   encima, con color, tamaño (mm) y opacidad propios. Salen en el PDF y en la
   leyenda.
 - **Puntas de flecha** de inicio y fin (flecha, abierta, aguda, círculo, cuadrado, barra) y su tamaño.
-- Opacidad y **modo de fusión** por objeto y por capa.
+- Opacidad y **modo de fusión** por objeto y por capa. **Tamaño de punto** de
+  0,2 hasta 60 mm con deslizador (el campo numérico admite más).
 - Grosores en **mm** y textos en **pt**, medidos en el papel a la **escala de
   referencia** del documento: lo que se ve a 1:25 000 es lo que se imprime.
 
@@ -207,9 +208,34 @@ En *Organizar → Topología*, sobre la selección o la capa activa:
 Junto con el **trace** y el **snapping**, es el flujo de un mapa geológico:
 contactos que se siguen unos a otros y unidades que salen de ellos.
 
+## Simbología por campo de atributos
+
+En *Estilo → Objeto → Simbología por campo*: como el renderizador de QGIS,
+pinta cada objeto de la capa según el valor de un campo.
+
+- **Categorizado**: un color por valor distinto (hasta 200), con los vacíos como
+  «(vacío)».
+- **Graduado**: clases numéricas por cuantiles, intervalos iguales, cortes
+  redondos o cortes naturales (Jenks), de 2 a 30 clases.
+- 13 rampas (cualitativas: geológica, pareada, categórica, contraste;
+  degradadas: viridis, magma, espectral, rojo-amarillo-verde, azules, verdes,
+  naranjas, rojos, hipsométrica), invertibles.
+- Aplicar a relleno, trazo o ambos (o automático: relleno en polígonos y puntos,
+  trazo en líneas). Cada clase se puede recolorear y renombrar en la tabla, que
+  muestra cuántos objetos tiene. También sirven `$nombre` y `$tipo` como campo.
+- La leyenda del layout usa los rótulos de clase y su orden; al exportar a QGIS
+  (GeoPackage, .qlr) sale como un renderizador Categorizado o Graduado
+  **sobre el campo**, con el símbolo real de cada clase.
+
 ## Etiquetas
 
-Por capa: un **campo** o una **plantilla** (`{codigo} ({edad})`), fuente,
+Por capa: un **campo**, **varios campos combinados** (se eligen en una lista,
+con separador —espacio, guion, coma, barra, paréntesis «a (b, c)»— y los vacíos
+se omiten sin dejar separadores sueltos) o una **plantilla**
+(`{codigo} ({edad:1} Ma)`: `{campo:2}` fija decimales, `{campo|upper}` /
+`lower` / `title` cambia las mayúsculas y `{codigo||nombre}` usa el segundo si
+el primero está vacío), con vista previa en vivo; a QGIS pasa como expresión.
+Además fuente,
 tamaño, negrita/cursiva, color, **halo**, placa de fondo, mayúsculas.
 Ubicación profesional: puntos arriba a la derecha; **líneas curvadas sobre el
 tramo más recto, siempre legibles de izquierda a derecha**, con repetición

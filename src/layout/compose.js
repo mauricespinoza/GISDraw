@@ -19,7 +19,8 @@
 
 import { fromLonLat, toLonLat, formatDMSShort } from '../proj.js';
 import { esc, shapeToSvg } from '../style.js';
-import { renderLabels, labelText } from '../labels.js';
+import { renderLabels, labelText, hasLabelSource } from '../labels.js';
+import { classIndex, rendererLabel } from '../symbology.js';
 import { lonLatBBox } from '../raster/dem.js';
 import { makeNode, makePath, makePoint, walkShapes } from '../vector.js';
 import { xmlId } from '../io/illustrator.js';
@@ -505,11 +506,14 @@ export function legendEntries(vectors) {
       const kind = s.type === 'point' ? 'point' : s.closed ? 'polygon' : 'line';
       const key = `${kind}|${JSON.stringify(s.style)}`;
       const cfg = l.labels || {};
-      const label = (l.legendField && s.attrs?.[l.legendField]) || (cfg.field || cfg.template ? labelText(s, { ...cfg, upper: false }) : '') || s.name || l.name;
-      if (!seen.has(key)) seen.set(key, { kind, style: s.style, labels: new Set([label]) });
+      // con simbología por campo, la leyenda lleva el rótulo de la clase
+      const cls = l.renderer ? rendererLabel(l.renderer, parent || s) : null;
+      const label = cls || (l.legendField && s.attrs?.[l.legendField]) || (hasLabelSource(cfg) ? labelText(s, { ...cfg, upper: false }) : '') || s.name || l.name;
+      const order = l.renderer ? classIndex(l.renderer, parent || s) : 0;
+      if (!seen.has(key)) seen.set(key, { kind, style: s.style, labels: new Set([label]), order: order < 0 ? 1e6 : order });
       else seen.get(key).labels.add(label);
     });
-    const entries = [...seen.values()].map((e) => ({ ...e, label: e.labels.size === 1 ? [...e.labels][0] : [...e.labels].slice(0, 3).join(', ') + (e.labels.size > 3 ? '…' : '') }));
+    const entries = [...seen.values()].sort((a, b) => a.order - b.order).map((e) => ({ ...e, label: e.labels.size === 1 ? [...e.labels][0] : [...e.labels].slice(0, 3).join(', ') + (e.labels.size > 3 ? '…' : '') }));
     if (entries.length) groups.push({ layer: l.name, entries });
   }
   return groups;
