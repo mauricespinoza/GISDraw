@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>GISDrawer</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icons/icon-180.png" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <div class="brand">GIS<b>Drawer</b></div>
+        <div class="menu-wrap">
+          <button id="btn-file" class="tb" aria-haspopup="true">Archivo ▾</button>
+          <div id="menu-file" class="menu" hidden></div>
+        </div>
+        <button id="btn-undo" class="tb icon" title="Deshacer (Ctrl+Z)">↶</button>
+        <button id="btn-redo" class="tb icon" title="Rehacer (Ctrl+Mayús+Z)">↷</button>
+        <span class="sep"></span>
+        <button id="btn-snap" class="tb toggle" title="Snapping (S)">Snap</button>
+        <button id="btn-trace" class="tb toggle" title="Trace: seguir la geometría existente (K)">Trace</button>
+        <button id="btn-finger" class="tb toggle" title="El dedo dibuja (para pantallas sin lápiz)">Dedo ✍︎</button>
+        <span class="sep"></span>
+        <label class="scale-box" title="Escala de la vista">1:<input id="in-scale" inputmode="numeric" /></label>
+        <span class="grow"></span>
+        <div id="coords" class="coords"></div>
+        <button id="btn-panel" class="tb" title="Mostrar/ocultar panel">☰</button>
+      </header>
+      <nav id="toolbar"></nav>
+      <main id="viewport">
+        <div id="stage"></div>
+        <div id="input-host"></div>
+        <div id="contextbar" hidden></div>
+        <div id="status" hidden></div>
+        <div id="attribution"></div>
+        <textarea id="text-editor" hidden></textarea>
+      </main>
+      <aside id="panel">
+        <div id="tabs"></div>
+        <div id="panel-body"></div>
+      </aside>
+    </div>
+    <input type="file" id="file-input" hidden />
+    <script type="module" src="src/main.js"></script>
+  </body>
+</html>
