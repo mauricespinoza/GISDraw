@@ -18,8 +18,10 @@
  *    mismo menú contextual que el botón derecho.
  */
 
-import { addShapes, allTopShapes, findTopShape, layerOfShape, mapShapes, removeShapes, replaceShapes } from './doc.js';
+import { addShapes, allTopShapes, findTopShape, inLockedLayer, layerOfShape, mapShapes, removeShapes, replaceShapes } from './doc.js';
 import { splitPath } from './ops.js';
+import { layoutText, textCorners } from './textLayout.js';
+import { measureText } from './labels.js';
 import { pickShape, shapesInBox, shapesInLasso, shapeDistance, flatRings } from './hit.js';
 import { SnapIndex, buildGraph, tracePath } from './snapping.js';
 import { nodesD, shapeD, esc } from './style.js';
@@ -129,8 +131,15 @@ export class Editor {
     this.changed();
   }
 
+  /** La selección nunca incluye objetos de capas bloqueadas: no se mueven, ni se restilan, ni se borran. */
   setSelection(ids) {
-    this.selection = new Set(ids);
+    const all = [...ids];
+    const free = all.filter((id) => !inLockedLayer(this.doc, id));
+    if (free.length < all.length) {
+      const name = layerOfShape(this.doc, all.find((id) => inLockedLayer(this.doc, id)))?.name;
+      this.onMessage(`La capa «${name}» está bloqueada: sus objetos no se pueden seleccionar ni editar`);
+    }
+    this.selection = new Set(free);
     this.activeNode = null;
     this.changed();
   }
@@ -141,7 +150,7 @@ export class Editor {
 
   /** Tras deshacer o cambiar el documento: limpiar ids que ya no existen. */
   pruneSelection() {
-    const alive = new Set(allTopShapes(this.doc, { visibleOnly: false }).map((x) => x.shape.id));
+    const alive = new Set(allTopShapes(this.doc, { visibleOnly: false, unlockedOnly: false }).filter((x) => !x.layer.locked).map((x) => x.shape.id));
     for (const id of [...this.selection]) if (!alive.has(id)) this.selection.delete(id);
     this.snapDirty = true;
   }
@@ -558,6 +567,37 @@ export class Editor {
         this.history.preview(replaceShapes(d.base, map));
         return;
       }
+      case 'tscale': {
+        // estirar un texto = cambiar su tamaño de letra, con la esquina (o borde) opuesta fija
+        const { frame: f, handle } = d;
+        const hp = f.pos[handle];
+        const opp = [2 * f.center[0] - hp[0], 2 * f.center[1] - hp[1]];
+        const vx = hp[0] - opp[0];
+        const vy = hp[1] - opp[1];
+        const k = Math.max(0.05, Math.min(60, ((sp[0] - opp[0]) * vx + (sp[1] - opp[1]) * vy) / (vx * vx + vy * vy || 1)));
+        const [ox, oy] = this.view.toWorld(opp[0], opp[1]);
+        this.history.preview(replaceShapes(d.base, new Map([[d.shape.id, scaleShape(d.shape, { x: ox, y: oy }, k, k)]])));
+        return;
+      }
+      case 'twidth': {
+        // estirar un lado = ancho del cuadro de texto: el texto se reajusta a la nueva medida
+        const { frame: f, handle, shape } = d;
+        const a = ((shape.rotation || 0) * Math.PI) / 180;
+        const ux = [Math.cos(a), Math.sin(a)];
+        const dist = (sp[0] - d.start[0]) * ux[0] + (sp[1] - d.start[1]) * ux[1];
+        const left = f.rot(f.m.x0, 0); // borde izquierdo de la primera línea base (px)
+        let leftPx = [left[0], left[1]];
+        let widthPx = f.m.width;
+        if (handle === 'e') widthPx = Math.max(24, widthPx + dist);
+        else {
+          const w2 = Math.max(24, widthPx - dist);
+          leftPx = [leftPx[0] + ux[0] * (widthPx - w2), leftPx[1] + ux[1] * (widthPx - w2)];
+          widthPx = w2;
+        }
+        const [wx, wy] = this.view.toWorld(leftPx[0], leftPx[1]);
+        this.history.preview(replaceShapes(d.base, new Map([[shape.id, { ...shape, x: wx, y: wy, boxWidth: +(widthPx / f.u.mmToPx).toFixed(2) }]])));
+        return;
+      }
       case 'scale': {
         const { box, handle } = d;
         const ax = handle.includes('w') ? box.x + box.w : handle.includes('e') ? box.x : box.x + box.w / 2;
@@ -650,6 +690,8 @@ export class Editor {
         this.snapDirty = true;
         return;
       case 'scale':
+      case 'tscale':
+      case 'twidth':
       case 'rotate':
       case 'node':
       case 'bezier':
@@ -705,7 +747,36 @@ export class Editor {
     this.setSelection(s);
   }
 
+  /** El texto seleccionado, si es el único objeto: su caja sigue la orientación del texto. */
+  singleText() {
+    if (this.selection.size !== 1) return null;
+    const s = this.selectedShapes()[0];
+    return s && s.type === 'text' && !s.locked ? s : null;
+  }
+
+  /** Caja girada de un texto en pantalla (px): esquinas, puntos medios y asa de giro. */
+  textFrame(shape) {
+    const u = this.units();
+    const [ax, ay] = this.view.toScreen(shape.x, shape.y);
+    const fs = shape.fontSize * u.ptToPx;
+    const m = layoutText(shape, fs, u.mmToPx, (t, size) => measureText(t, size, shape.fontFamily, shape.fontWeight || 400, !!shape.italic));
+    const { corners, center, rot } = textCorners(m, ax, ay, shape.rotation || 0);
+    const [nw, ne, se, sw] = corners;
+    const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const n = mid(nw, ne);
+    const up = [nw[0] - sw[0], nw[1] - sw[1]];
+    const len = Math.hypot(up[0], up[1]) || 1;
+    const pos = { nw, ne, se, sw, n, e: mid(ne, se), s: mid(se, sw), w: mid(sw, nw), rotate: [n[0] + (up[0] / len) * 26, n[1] + (up[1] / len) * 26] };
+    return { m, ax, ay, fs, u, corners, center, rot, pos };
+  }
+
   handleAt(sp) {
+    const text = this.singleText();
+    if (text) {
+      const f = this.textFrame(text);
+      for (const k of [...HANDLE_KEYS, 'rotate']) if (Math.hypot(sp[0] - f.pos[k][0], sp[1] - f.pos[k][1]) < 12) return `T${k}`;
+      return null;
+    }
     const box = this.selectionBox();
     if (!box) return null;
     const P = (x, y) => this.view.toScreen(x, y);
@@ -721,6 +792,21 @@ export class Editor {
   selectDown(e, sp, wp, shift) {
     const add = shift || this.addMode;
     const handle = this.selection.size ? this.handleAt(sp) : null;
+    if (handle?.startsWith('T')) {
+      const text = this.singleText();
+      const f = this.textFrame(text);
+      const k = handle.slice(1);
+      this.history.begin();
+      if (k === 'rotate') {
+        const [cx, cy] = this.view.toWorld(f.center[0], f.center[1]);
+        this.drag = { mode: 'rotate', start: wp, center: { x: cx, y: cy }, shapes: [text], base: this.doc };
+      } else if (k === 'e' || k === 'w') {
+        this.drag = { mode: 'twidth', handle: k, shape: text, frame: f, start: sp, base: this.doc };
+      } else {
+        this.drag = { mode: 'tscale', handle: k, shape: text, frame: f, base: this.doc };
+      }
+      return;
+    }
     if (handle) {
       const shapes = this.selectedShapes().filter((s) => !s.locked);
       if (!shapes.length) return;
@@ -1307,7 +1393,20 @@ export class Editor {
       }
     }
     const box = this.selectionBox();
-    if (box && this.tool === 'select') {
+    const single = this.tool === 'select' ? this.singleText() : null;
+    if (single) {
+      // caja del texto girada con él, con asas para estirar (tamaño), ensanchar (cuadro) y girar
+      const f = this.textFrame(single);
+      const pt = (p) => `${r2(p[0])},${r2(p[1])}`;
+      out.push(`<polygon points="${f.corners.map(pt).join(' ')}" fill="none" stroke="#0ea5e9" stroke-dasharray="4 3"/>`);
+      for (const k of HANDLE_KEYS) {
+        const [hx, hy] = f.pos[k];
+        const side = k === 'e' || k === 'w';
+        out.push(`<rect class="h" x="${r2(hx - 5)}" y="${r2(hy - 5)}" width="10" height="10" ${side ? 'rx="5"' : ''} fill="${side ? '#0ea5e9' : '#fff'}" stroke="#0ea5e9" stroke-width="1.5" transform="rotate(${single.rotation || 0} ${r2(hx)} ${r2(hy)})"/>`);
+      }
+      out.push(`<line x1="${r2(f.pos.n[0])}" y1="${r2(f.pos.n[1])}" x2="${r2(f.pos.rotate[0])}" y2="${r2(f.pos.rotate[1])}" stroke="#0ea5e9"/>`);
+      out.push(`<circle cx="${r2(f.pos.rotate[0])}" cy="${r2(f.pos.rotate[1])}" r="6" fill="#fff" stroke="#0ea5e9" stroke-width="1.5"/>`);
+    } else if (box && this.tool === 'select') {
       const [x0, y0] = P(box.x, box.y + box.h);
       const [x1, y1] = P(box.x + box.w, box.y);
       out.push(`<rect x="${r2(x0)}" y="${r2(y0)}" width="${r2(x1 - x0)}" height="${r2(y1 - y0)}" fill="none" stroke="#0ea5e9" stroke-dasharray="4 3"/>`);
@@ -1346,8 +1445,10 @@ export class Editor {
     if (this.draft) {
       const nodes = this.draft.nodes;
       let d = nodesD(nodes, false, P);
-      const color = esc(this.getCurrentStyle().stroke !== 'none' ? this.getCurrentStyle().stroke : '#0ea5e9');
-      const w = Math.max(1, this.getCurrentStyle().strokeWidth * units.mmToPx);
+      // el borrador toma el color del trazo (o, si no hay trazo, el del relleno)
+      const cs = this.getCurrentStyle();
+      const color = esc(cs.stroke !== 'none' ? cs.stroke : cs.fill && cs.fill !== 'none' ? cs.fill : '#0ea5e9');
+      const w = Math.max(1, cs.strokeWidth * units.mmToPx);
       if (this.hover?.tracePreview) {
         out.push(
           `<path d="M${this.hover.tracePreview.map((p) => P(p[0], p[1]).map(r2).join(' ')).join('L')}" fill="none" stroke="#22c55e" stroke-width="${r2(

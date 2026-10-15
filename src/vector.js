@@ -21,6 +21,7 @@
  */
 
 import { defaultStyle, defaultTextStyle } from './style.js';
+import { approxMeasure, layoutText } from './textLayout.js';
 
 let counter = 0;
 export function newId(prefix = 's') {
@@ -85,6 +86,11 @@ export function makeText(x, y, text, style, fontSize = 10) {
     fontWeight: 400,
     italic: false,
     anchor: 'start',
+    align: 'left', // left | center | right | justify (justificar necesita boxWidth)
+    boxWidth: null, // mm de papel; >0 = cuadro de texto con ajuste de línea
+    lineHeight: 1.2, // múltiplo del tamaño
+    letterSpacing: 0, // milésimas de em
+    wordSpacing: 0, // milésimas de em
     rotation: 0, // grados, horario en pantalla
     halo: true,
     haloColor: '#ffffff',
@@ -188,7 +194,10 @@ export function scaleShape(shape, origin, sx, sy) {
     y: origin.y + (p.y - origin.y) * sy,
   }));
   if (shape.type === 'text') {
-    out.fontSize = Math.max(1, shape.fontSize * Math.sqrt(Math.abs(sx * sy)));
+    const k = Math.sqrt(Math.abs(sx * sy));
+    out.fontSize = Math.max(1, Math.round(shape.fontSize * k * 100) / 100);
+    // un cuadro de texto crece con el estirado: el ajuste de línea se mantiene
+    if (shape.boxWidth > 0) out.boxWidth = Math.round(shape.boxWidth * k * 10) / 10;
   }
   return out;
 }
@@ -395,12 +404,17 @@ export function shapeBBox(shape, est = null) {
       return { x: shape.x - r, y: shape.y - r, w: 2 * r, h: 2 * r };
     }
     case 'text': {
-      const lines = String(shape.text || '').split('\n');
+      // caja girada del texto (estimada sin lienzo) y su caja envolvente en el mundo
       const sizeM = est ? est.ptToM * shape.fontSize : 0;
-      const w = Math.max(...lines.map((l) => l.length)) * sizeM * 0.55;
-      const h = lines.length * sizeM * 1.2;
-      const x = shape.anchor === 'middle' ? shape.x - w / 2 : shape.anchor === 'end' ? shape.x - w : shape.x;
-      return { x, y: shape.y - h + sizeM, w, h };
+      const m = layoutText(shape, sizeM, est ? est.mmToM : 0, approxMeasure);
+      // en el mundo y crece hacia el norte: el eje y local (hacia abajo) se invierte
+      const a = ((shape.rotation || 0) * Math.PI) / 180;
+      const c = Math.cos(a);
+      const s = Math.sin(a);
+      const pts = [[m.x0, m.top], [m.x0 + m.width, m.top], [m.x0 + m.width, m.top + m.height], [m.x0, m.top + m.height]].map(([lx, ly]) => [shape.x + lx * c - ly * s, shape.y - (lx * s + ly * c)]);
+      const xs = pts.map((p) => p[0]);
+      const ys = pts.map((p) => p[1]);
+      return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
     }
     case 'group': {
       const kids = shape.clip ? [shape.children[0]] : shape.children;

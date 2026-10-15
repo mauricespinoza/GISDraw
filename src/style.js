@@ -24,6 +24,7 @@
 import { ornamentsSvg } from './ornaments.js';
 import { patternDef } from './patterns.js';
 import { flattenNodes } from './vector.js';
+import { anchorOf, hardSpaces, layoutText, measureText } from './textLayout.js';
 
 export const DASHES = {
   solid: { label: 'Continua', pattern: null },
@@ -366,7 +367,14 @@ export function pathToSvg(shape, ctx, extraAttrs = '') {
     }
     if (hasStroke) {
       const align = s.align || 'outside';
+      // halo del trazo (como el de una línea): una banda a cada lado, por debajo, que deja el centro con el color del trazo
+      const cw = s.casing ? (s.casingWidth || 0) * ctx.mmToPx : 0;
+      const casing = (wide) => {
+        const dash = dashArray(s, wPx);
+        return `<path d="${d}" fill="none" stroke="${esc(s.casingColor || '#ffffff')}" stroke-opacity="${(s.casingOpacity ?? 1) * (s.strokeOpacity ?? 1)}" stroke-width="${r2(wide)}" stroke-linecap="${capFor(s)}" stroke-linejoin="${s.join || 'round'}"${dash ? ` stroke-dasharray="${dash}"` : ''}`;
+      };
       if (align === 'center') {
+        if (cw > 0) group.push(`${casing(wPx + 2 * cw)}/>`);
         group.push(`<path d="${d}" fill="none" ${strokeAttrs(s, wPx)}/>`);
       } else {
         const cid = `${ctx.uid}c${shape.id}`;
@@ -376,6 +384,7 @@ export function pathToSvg(shape, ctx, extraAttrs = '') {
         ctx.defs.push(
           `<clipPath id="${cid}" clipPathUnits="userSpaceOnUse"><path d="${align === 'outside' ? big : ''}${d}" clip-rule="evenodd"/></clipPath>`,
         );
+        if (cw > 0) group.push(`${casing(2 * (wPx + cw))} clip-path="url(#${cid})"/>`);
         group.push(`<path d="${d}" fill="none" ${strokeAttrs(s, 2 * wPx)} clip-path="url(#${cid})"/>`);
       }
     }
@@ -451,15 +460,27 @@ export function textToSvg(shape, ctx, extraAttrs = '') {
   const [x, y] = ctx.P(shape.x, shape.y);
   const fs = shape.fontSize * ctx.ptToPx;
   if (fs < 0.8) return '';
-  const lines = String(shape.text || '').split('\n');
-  const tspans = lines
-    .map((l, i) => `<tspan x="${r2(x)}" dy="${i === 0 ? 0 : r2(fs * 1.2)}">${esc(l) || ' '}</tspan>`)
+  const m = layoutText(shape, fs, ctx.mmToPx, (t, size) => measureText(t, size, shape.fontFamily, shape.fontWeight || 400, !!shape.italic));
+  const boxed = m.boxed;
+  const anchor = anchorOf(shape);
+  // x de cada renglón: en un cuadro, el borde izquierdo / centro / borde derecho; sin cuadro, el ancla
+  const lineX = boxed ? (m.align === 'center' ? m.boxW / 2 : m.align === 'right' ? m.boxW : 0) : 0;
+  const tspans = m.lines
+    .map((l, i) => {
+      const dy = i === 0 ? 0 : r2(m.lh);
+      if (l.words) {
+        return l.words.map((w, k) => `<tspan x="${r2(x + w.x)}" ${k === 0 ? `dy="${dy}" ` : 'dy="0" '}text-anchor="start">${esc(hardSpaces(w.t))}</tspan>`).join('');
+      }
+      return `<tspan x="${r2(x + lineX)}" dy="${dy}">${esc(hardSpaces(l.t)) || ' '}</tspan>`;
+    })
     .join('');
   const rot = shape.rotation ? ` transform="rotate(${shape.rotation} ${r2(x)} ${r2(y)})"` : '';
   const opacity = s.opacity != null && s.opacity < 1 ? ` opacity="${s.opacity}"` : '';
-  const common = `x="${r2(x)}" y="${r2(y)}"${rot} font-family="${esc(shape.fontFamily)}" font-size="${r2(fs)}" font-weight="${shape.fontWeight || 400}"${
+  const spacing =
+    (m.track ? ` letter-spacing="${r2(m.track)}"` : '') + (m.wordGap ? ` word-spacing="${r2(m.wordGap)}"` : '');
+  const common = `x="${r2(x + lineX)}" y="${r2(y)}"${rot} font-family="${esc(shape.fontFamily)}" font-size="${r2(fs)}" font-weight="${shape.fontWeight || 400}"${
     shape.italic ? ' font-style="italic"' : ''
-  } text-anchor="${shape.anchor || 'start'}"`;
+  } text-anchor="${boxed && m.align === 'justify' ? 'start' : anchor}"${spacing} xml:space="preserve"`;
   // El halo es un texto APARTE por debajo, con el trazo del grosor del halo; el
   // texto de relleno va encima y lo tapa por dentro. Así el halo solo se ve por
   // fuera de las letras sin depender de `paint-order`, que el PDF no respeta.

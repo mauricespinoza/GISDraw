@@ -44,7 +44,7 @@ export function arrange(doc, ids, mode) {
   return {
     ...doc,
     layers: doc.layers.map((l) => {
-      if (l.kind !== 'vector' || !l.items.some((s) => ids.has(s.id))) return l;
+      if (l.kind !== 'vector' || l.locked || !l.items.some((s) => ids.has(s.id))) return l;
       let items = l.items.slice();
       if (mode === 'front') {
         items = [...items.filter((s) => !ids.has(s.id)), ...items.filter((s) => ids.has(s.id))];
@@ -142,7 +142,7 @@ export function group(doc, ids, { clip = false } = {}) {
   // por capa: se agrupa lo de la capa con más elementos seleccionados
   let target = null;
   for (const l of doc.layers) {
-    if (l.kind !== 'vector') continue;
+    if (l.kind !== 'vector' || l.locked) continue;
     const n = l.items.filter((s) => ids.has(s.id)).length;
     if (n && (!target || n > target.n)) target = { l, n };
   }
@@ -175,7 +175,7 @@ export function ungroup(doc, ids) {
   const next = {
     ...doc,
     layers: doc.layers.map((l) => {
-      if (l.kind !== 'vector' || !l.items.some((s) => ids.has(s.id) && s.type === 'group')) return l;
+      if (l.kind !== 'vector' || l.locked || !l.items.some((s) => ids.has(s.id) && s.type === 'group')) return l;
       const items = [];
       for (const s of l.items) {
         if (ids.has(s.id) && s.type === 'group') {
@@ -195,9 +195,12 @@ export function ungroup(doc, ids) {
 
 /** Mueve la selección a otra capa (arriba de todo en esa capa). */
 export function moveToLayer(doc, ids, layerId) {
+  const target = doc.layers.find((l) => l.id === layerId);
+  if (!target || target.locked) return doc;
   const moving = [];
-  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) if (ids.has(shape.id)) moving.push(shape);
-  const removed = replaceShapes(doc, new Map([...ids].map((id) => [id, null])));
+  // lo de capas bloqueadas no se mueve
+  for (const { shape, layer } of allTopShapes(doc, { visibleOnly: false })) if (ids.has(shape.id) && !layer.locked) moving.push(shape);
+  const removed = replaceShapes(doc, new Map(moving.map((s) => [s.id, null])));
   return {
     ...removed,
     layers: removed.layers.map((l) => (l.id === layerId ? { ...l, items: [...l.items, ...moving] } : l)),
@@ -368,6 +371,7 @@ export function joinPaths(doc, ids, tol = 0) {
 export function splitPath(doc, id, seg, t) {
   const found = findTopShape(doc, id);
   const shape = found?.shape;
+  if (found?.layer?.locked) return { error: `La capa «${found.layer.name}» está bloqueada` };
   if (!shape || shape.type !== 'path' || shape.locked) return { error: 'Solo se pueden cortar trazos' };
   if (shape.holes?.length) return { error: 'Un polígono con huecos no se puede abrir con la tijera' };
   // cortar sobre un vértice existente no inserta otro

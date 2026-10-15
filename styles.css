@@ -1389,3 +1389,23 @@ body {
   color: #475569;
   font-size: 13px;
 }
+
+/* ------------------------------------------- edición de texto en el layout */
+
+.lp-edit {
+  position: absolute;
+  z-index: 9;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.2), 0 8px 24px rgba(0, 0, 0, 0.25);
+  white-space: pre;
+  resize: none;
+  overflow: hidden;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+  color: #111827;
+}

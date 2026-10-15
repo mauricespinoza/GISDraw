@@ -10,9 +10,12 @@
  * "multiplicar" sale igual en pantalla, en SVG y en PDF.
  */
 
-import { composeLayout, defaultLayout, fitFrame, frameExtent, pageGeometry, pageToGround, PAGES, SYMBOL_SCALES, symbolFactor } from '../layout/compose.js';
+import { composeLayout, defaultLayout, fitFrame, layoutTextShape, frameExtent, pageGeometry, pageToGround, PAGES, SYMBOL_SCALES, symbolFactor } from '../layout/compose.js';
 import { allTopShapes } from '../doc.js';
-import { shapeBBox, unionBBox } from '../vector.js';
+import { makeText, newId, shapeBBox, unionBBox } from '../vector.js';
+import { addShapes } from '../doc.js';
+import { applyStyle, deleteStyle, getStyle, importStyles, listStyles, parseStyleFile, pickStyle, saveStyle, styleFile } from '../layout/styles.js';
+import { defaultStyle } from '../style.js';
 import { computeHillshadeImage, imageFiles } from '../raster/rasterView.js';
 import { drawBasemap, BASEMAPS } from '../raster/basemap.js';
 import { lonLatBBox } from '../raster/dem.js';
@@ -39,6 +42,7 @@ export class LayoutEditor {
       btn('＋', () => this.zoomBy(1.25), 'sm'),
       btn('－', () => this.zoomBy(0.8), 'sm'),
       btn('▭ Marco automático', () => this.resetFrame(), 'sm'),
+      (this.textBtn = btn('T Cuadro de texto', () => this.startAddText(), 'sm')),
       h('span', { class: 'lp-hint' }, 'Arrastra dentro del marco = mover el mapa · rueda = zoom · vértices del marco = tamaño · arrastra un elemento para moverlo · Supr lo elimina'),
     );
     this.el.append(this.stage, this.bar);
@@ -63,6 +67,10 @@ export class LayoutEditor {
     st.addEventListener('pointercancel', (e) => this.onUp(e, true));
     st.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     st.addEventListener('contextmenu', (e) => e.preventDefault());
+    st.addEventListener('dblclick', (e) => {
+      const el = e.target.closest?.('[data-el^="text:"]');
+      if (el) this.editText(el.dataset.el.slice(5));
+    });
     // en captura: con el layout abierto, Supr / flechas no deben tocar el dibujo de atrás
     window.addEventListener(
       'keydown',
@@ -81,6 +89,8 @@ export class LayoutEditor {
           if (this.sel && this.sel !== 'frame') this.deleteElement(this.sel);
         } else if (e.key === 'Escape') {
           stop();
+          this.adding = false;
+          this.textBtn?.classList.remove('on');
           this.select(null);
         } else if (e.key.startsWith('Arrow')) {
           stop();
@@ -112,8 +122,12 @@ export class LayoutEditor {
   }
 
   select(sel) {
+    const changed = sel !== this.sel;
     this.sel = sel;
     this.drawOverlay();
+    // el panel muestra los controles del cuadro de texto seleccionado
+    if (changed && this.app.panels?.tab === 'layout' && (sel?.startsWith('text:') || this.prevSelText)) this.app.panels.render();
+    this.prevSelText = !!sel?.startsWith('text:');
   }
 
   elementGroup(name) {
@@ -123,6 +137,13 @@ export class LayoutEditor {
   onDown(e) {
     if (!this.geom || (e.pointerType === 'mouse' && e.button > 1)) return;
     const p = this.mm(e);
+    if (this.adding) {
+      this.adding = false;
+      this.stage.style.cursor = '';
+      this.textBtn?.classList.remove('on');
+      this.addText(p);
+      return;
+    }
     const handle = e.target.closest?.('[data-h]')?.dataset.h;
     try {
       this.stage.setPointerCapture?.(e.pointerId);
@@ -299,6 +320,17 @@ export class LayoutEditor {
   }
 
   deleteElement(name) {
+    if (name?.startsWith('text:')) {
+      const id = name.slice(5);
+      const L = this.L;
+      const o = { ...(L.offsets || {}) };
+      delete o[name];
+      this.sel = null;
+      this.set({ texts: (L.texts || []).filter((t) => t.id !== id), offsets: o });
+      this.app.message('Cuadro de texto eliminado (Ctrl+Z lo recupera)', 3000);
+      this.app.panels?.render();
+      return;
+    }
     const patch = { title: { showTitle: false }, legend: { legend: false }, north: { north: false }, scalebar: { scalebar: false }, info: { showInfo: false } }[name];
     if (!patch) return;
     this.sel = null;
@@ -523,6 +555,275 @@ export class LayoutEditor {
     if (this.sel && this.sel !== 'frame' && !this.elementGroup(this.sel)) this.sel = null;
     this.drawOverlay();
     this.app.message('');
+    const after = this.afterPreview;
+    this.afterPreview = null;
+    after?.();
+  }
+
+  /* ----------------------------------------------- cuadros de texto del layout */
+
+  startAddText() {
+    this.adding = !this.adding;
+    this.textBtn?.classList.toggle('on', this.adding);
+    this.stage.style.cursor = this.adding ? 'text' : '';
+    if (this.adding) this.app.message('Haz clic en la hoja donde va el texto (Esc cancela)', 4000);
+  }
+
+  textById(id) {
+    return (this.L.texts || []).find((t) => t.id === id);
+  }
+
+  /** Cambia un cuadro de texto; `final` falso = vista previa mientras se arrastra un deslizador. */
+  updateText(id, patch, final = true) {
+    const L = this.L;
+    const texts = (L.texts || []).map((t) => (t.id === id ? { ...t, ...patch } : t));
+    const doc = this.app.history.doc;
+    const next = { ...doc, layout: { ...L, texts } };
+    if (final) this.app.history.commit(next);
+    else this.app.history.preview(next);
+    this.schedule(final ? 0 : 120);
+  }
+
+  addText(p) {
+    const L = this.L;
+    const t = {
+      id: newId('lt'),
+      x: +p[0].toFixed(1),
+      y: +p[1].toFixed(1),
+      text: 'Texto',
+      fontSize: 10,
+      fontFamily: L.fontFamily,
+      fontWeight: 400,
+      italic: false,
+      align: 'left',
+      anchor: 'start',
+      boxWidth: null,
+      lineHeight: 1.2,
+      letterSpacing: 0,
+      wordSpacing: 0,
+      rotation: 0,
+      color: '#111827',
+      halo: false,
+      haloColor: '#ffffff',
+      haloWidth: 0.5,
+    };
+    this.afterPreview = () => {
+      this.select(`text:${t.id}`);
+      this.editText(t.id, true);
+    };
+    this.set({ texts: [...(L.texts || []), t] });
+  }
+
+  /** Edita el texto sobre la propia hoja (cuadro de edición encima del texto). */
+  editText(id, isNew = false) {
+    const t = this.textById(id);
+    const gEl = this.elementGroup(`text:${id}`);
+    if (!t || !gEl) return;
+    this.closeEditor?.();
+    const r = gEl.getBoundingClientRect();
+    const host = this.el.getBoundingClientRect();
+    const sr = this.stage.getBoundingClientRect();
+    const pxPerMm = sr.width / this.geom.W;
+    const ta = h('textarea', { class: 'lp-edit', spellcheck: false });
+    ta.value = t.text || '';
+    const fpx = Math.max(13, t.fontSize * 0.352778 * pxPerMm);
+    Object.assign(ta.style, {
+      left: `${Math.max(4, r.left - host.left - 6)}px`,
+      top: `${Math.max(4, r.top - host.top - 6)}px`,
+      fontSize: `${fpx}px`,
+      fontFamily: t.fontFamily,
+      fontWeight: t.fontWeight || 400,
+      fontStyle: t.italic ? 'italic' : 'normal',
+      lineHeight: String(t.lineHeight || 1.2),
+      letterSpacing: `${((t.letterSpacing || 0) / 1000) * fpx}px`,
+      textAlign: t.align === 'justify' ? 'justify' : t.align || 'left',
+      width: `${Math.max(140, r.width + 24, t.boxWidth ? t.boxWidth * pxPerMm + 16 : 0)}px`,
+    });
+    this.el.append(ta);
+    const fit = () => {
+      ta.style.height = 'auto';
+      ta.style.height = `${ta.scrollHeight + 2}px`;
+    };
+    fit();
+    ta.addEventListener('input', fit);
+    const opened = performance.now();
+    const focus = () => {
+      ta.focus({ preventScroll: true });
+      ta.select();
+    };
+    focus();
+    requestAnimationFrame(focus);
+    let closed = false;
+    const close = (save) => {
+      if (closed) return;
+      closed = true;
+      this.closeEditor = null;
+      const v = ta.value;
+      ta.remove();
+      if (!save && isNew) return this.deleteElement(`text:${id}`);
+      if (save && !v.trim()) return this.deleteElement(`text:${id}`);
+      if (save && v !== t.text) this.updateText(id, { text: v });
+    };
+    this.closeEditor = () => close(true);
+    ta.addEventListener('blur', () => {
+      if (performance.now() - opened < 400) return setTimeout(focus, 0);
+      close(true);
+    });
+    ta.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close(false);
+      } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        close(true);
+      }
+    });
+  }
+
+  /**
+   * Convierte un cuadro de texto del layout en un texto del mapa, en una capa
+   * vectorial, en la coordenada del terreno que queda bajo él. El tamaño se
+   * deshace del factor de símbolos del layout, así a esa escala se ve igual.
+   */
+  textToLayer(id, layerId, remove) {
+    const doc = this.app.history.doc;
+    const layer = doc.layers.find((l) => l.id === layerId);
+    const t = this.textById(id);
+    if (!layer || layer.kind !== 'vector' || !t) return this.app.message('Elige una capa vectorial');
+    if (layer.locked) return this.app.message(`La capa «${layer.name}» está bloqueada`);
+    const L = this.L;
+    const g = this.geom;
+    const off = L.offsets?.[`text:${id}`] || [0, 0];
+    const [gx, gy] = pageToGround(L, g, t.x + off[0], t.y + off[1]);
+    const f = symbolFactor(doc.refScale, L);
+    const shape = makeText(gx, gy, t.text || '', { ...defaultStyle(), fill: t.color || '#111827', fillOpacity: 1, fillType: 'solid', stroke: 'none' }, +(t.fontSize / f).toFixed(2));
+    Object.assign(shape, {
+      fontFamily: t.fontFamily,
+      fontWeight: t.fontWeight || 400,
+      italic: !!t.italic,
+      align: t.align,
+      anchor: t.anchor || 'start',
+      boxWidth: t.boxWidth ? +(t.boxWidth / f).toFixed(2) : null,
+      lineHeight: t.lineHeight,
+      letterSpacing: t.letterSpacing,
+      wordSpacing: t.wordSpacing,
+      rotation: t.rotation || 0,
+      halo: !!t.halo,
+      haloColor: t.haloColor || '#ffffff',
+      haloWidth: (t.haloWidth ?? 0.5) / f,
+      name: String(t.text || 'Texto').split('\n')[0].slice(0, 40),
+    });
+    let next = addShapes(doc, layerId, [shape]);
+    if (remove) {
+      const o = { ...(L.offsets || {}) };
+      delete o[`text:${id}`];
+      next = { ...next, layout: { ...L, texts: (L.texts || []).filter((x) => x.id !== id), offsets: o } };
+      this.sel = null;
+    }
+    this.app.history.commit(next);
+    this.schedule(0);
+    this.app.message(`Texto añadido a la capa «${layer.name}»${remove ? ' y quitado del layout' : ''}`, 4000);
+  }
+
+  /* --------------------------------------------------- estilos de layout */
+
+  stylesSection() {
+    const L = this.L;
+    const list = listStyles();
+    const names = Object.fromEntries(list.map((s) => [s.name, s.name]));
+    this.styleChoice = this.styleChoice && names[this.styleChoice] ? this.styleChoice : list[0]?.name || '';
+    return sec(
+      'Estilos de layout',
+      list.length ? row('Estilo', select({ ...names }, this.styleChoice, (v) => (this.styleChoice = v))) : h('p', { class: 'hint' }, 'Aún no hay estilos guardados.'),
+      h(
+        'div',
+        { class: 'grid-btns two' },
+        btn('Guardar como estilo…', () => {
+          const name = prompt('Nombre del estilo de layout', this.styleChoice || 'Mi estilo');
+          if (!name) return;
+          try {
+            saveStyle(name, L);
+            this.styleChoice = name.trim();
+            this.app.message(`Estilo «${name.trim()}» guardado`, 3000);
+            this.app.panels.render();
+          } catch (e) {
+            this.app.message(e.message, 5000);
+          }
+        }, 'primary'),
+        list.length ? btn('Aplicar', () => this.applyNamedStyle(this.styleChoice)) : null,
+      ),
+      list.length
+        ? h(
+            'div',
+            { class: 'grid-btns three' },
+            btn('Borrar', () => {
+              if (!confirm(`¿Borrar el estilo «${this.styleChoice}»?`)) return;
+              deleteStyle(this.styleChoice);
+              this.app.panels.render();
+            }, 'danger'),
+            btn('Exportar…', () => {
+              const st = getStyle(this.styleChoice);
+              if (st) download(styleFile(this.styleChoice, st), `${this.styleChoice.replace(/[^\w-]+/g, '_')}.gdlayout.json`, 'application/json');
+            }),
+            btn('Importar…', () => this.importStyleFile()),
+          )
+        : btn('Importar estilo…', () => this.importStyleFile()),
+      h('p', { class: 'hint' }, 'Un estilo guarda la página, la grilla, los elementos y su posición, el marco, el tamaño de símbolos y los cuadros de texto. No guarda la escala, el centro ni el título, autor, fecha y notas del mapa.'),
+    );
+  }
+
+  applyNamedStyle(name) {
+    const st = getStyle(name);
+    if (!st) return;
+    const L = this.L;
+    // el marco guardado cambia el terreno visible: el centro se conserva (el mapa no se mueve)
+    this.app.history.commit({ ...this.app.history.doc, layout: applyStyle(L, st) });
+    this.schedule(0);
+    this.app.message(`Estilo «${name}» aplicado`, 3000);
+  }
+
+  async importStyleFile() {
+    const { pickFiles } = await import('../io/store.js');
+    const [f] = await pickFiles('.json');
+    if (!f) return;
+    try {
+      const items = parseStyleFile(await f.text());
+      importStyles(items);
+      this.styleChoice = items[0].name;
+      this.app.message(`${items.length} estilo(s) importado(s)`, 3000);
+      this.app.panels.render();
+    } catch (e) {
+      this.app.message(e.message, 6000);
+    }
+  }
+
+  /** Controles del cuadro de texto seleccionado, con «Añadir a capa». */
+  textSection() {
+    const id = this.sel?.slice(5);
+    const t = this.textById(id);
+    if (!t) return null;
+    const set = (patch, final = true) => this.updateText(id, patch, final);
+    const a = ((t.rotation || 0) * Math.PI) / 180;
+    const moveLocal = (dmm) => ({ x: +(t.x + dmm * Math.cos(a)).toFixed(2), y: +(t.y + dmm * Math.sin(a)).toFixed(2) });
+    const doc = this.app.history.doc;
+    const vectors = doc.layers.filter((l) => l.kind === 'vector' && !l.locked);
+    this.targetLayer = vectors.find((l) => l.id === this.targetLayer)?.id || (vectors.find((l) => l.id === doc.activeLayerId) || vectors[0])?.id || '';
+    const del = btn('Eliminar cuadro de texto', () => this.deleteElement(this.sel), 'danger');
+    return sec(
+      'Cuadro de texto del layout',
+      h('p', { class: 'hint' }, 'Doble clic en la hoja para escribir sobre el texto. Se mueve arrastrándolo.'),
+      ...this.app.panels.textControls({ ...t, name: undefined }, set, { color: [t.color || '#111827', (v, final) => set({ color: v }, final)], moveLocal }),
+      vectors.length
+        ? sec(
+            'Añadir a una capa del mapa',
+            row('Capa', select(Object.fromEntries(vectors.map((l) => [l.id, l.name])), this.targetLayer, (v) => (this.targetLayer = v))),
+            h('div', { class: 'grid-btns two' }, btn('Añadir copia', () => this.textToLayer(id, this.targetLayer, false)), btn('Pasar a la capa', () => this.textToLayer(id, this.targetLayer, true), 'primary')),
+            h('p', { class: 'hint' }, 'El texto pasa al mapa en la coordenada del terreno que queda bajo él, con el tamaño que lo deja igual en esta escala. «Pasar» lo quita del layout.'),
+          )
+        : h('p', { class: 'hint' }, 'No hay capas vectoriales desbloqueadas donde añadirlo.'),
+      del,
+    );
   }
 
   /**
@@ -621,6 +922,8 @@ export class LayoutEditor {
     const set = (k) => (v) => this.set({ [k]: v });
     const v = this.app.view;
     return [
+      this.sel?.startsWith('text:') ? this.textSection() : null,
+      this.stylesSection(),
       sec(
         'Página',
         row('Tamaño', select(Object.keys(PAGES), L.page, set('page'))),
@@ -691,6 +994,6 @@ export class LayoutEditor {
         h('p', { class: 'hint' }, 'El SVG lleva un grupo con nombre por cada capa de la lámina. El script .jsx (Archivo → Scripts → Otro script… en Illustrator) arma el documento con una capa real de Illustrator por cada una: capas del mapa, etiquetas, grilla, marco, título, leyenda…'),
         btn('Actualizar vista previa', () => this.schedule(0)),
       ),
-    ];
+    ].filter(Boolean);
   }
 }

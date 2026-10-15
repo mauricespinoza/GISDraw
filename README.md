@@ -126,6 +126,18 @@ predeterminado, intercambiar y ninguno.
 lo que se lee en pantalla (16 px); si la vista está muy alejada de la escala
 de referencia, el tamaño en pt sube a un valor redondo.
 
+## Texto
+
+Un texto es «de punto» (el ancla es el inicio, el centro o el final del
+renglón) o «de área» (con **ancho de cuadro**: el texto se ajusta de línea al
+ancho). Opciones: alineación izquierda, centro, derecha y **justificado**,
+**interlineado**, **espaciado de letras** y de **palabras** (milésimas de em,
+como el «tracking» de Illustrator), negrita, cursiva, rotación y halo. **Varios
+espacios seguidos se respetan**. La caja de selección **sigue la orientación
+del texto**: estirar una esquina cambia el tamaño de letra (con la esquina
+opuesta fija), estirar el borde izquierdo o derecho cambia el ancho del cuadro
+y el asa superior gira.
+
 ## Estilo
 
 Grosor del trazo hasta **30 mm** (deslizador de escala cuadrática: fino hasta
@@ -145,7 +157,9 @@ falla y pliegue, discordancia ondulada y tramas de litología.
   lo que está fuera de la forma: engrosar el borde nunca tapa el relleno, ni
   siquiera si el relleno es transparente, y en los huecos crece hacia el hueco.
   También se puede alinear centrado o hacia adentro.
-- **Halo de línea** (casing) en líneas abiertas: se agrega a cada lado, por
+- **Halo del trazo** (casing), en la sección Trazo: en líneas y también en el
+  borde de los polígonos (por fuera, por dentro o a cada lado según la
+  alineación del borde), y se exporta a QGIS. En líneas abiertas: se agrega a cada lado, por
   debajo; el centro conserva el color del trazo. Si la línea es segmentada,
   cada raya tiene su halo. Ancho, color y opacidad editables.
 - **Halo de texto externo**: un texto aparte por debajo con trazo grueso y el
@@ -176,6 +190,10 @@ falla y pliegue, discordancia ondulada y tramas de litología.
   referencia** del documento: lo que se ve a 1:25 000 es lo que se imprime.
 
 ## Capas
+
+Una capa con **candado** está congelada: sus objetos no se pueden seleccionar,
+mover, restilar, reordenar, agrupar, cortar, borrar ni clasificar por campo
+(ni siquiera con «Seleccionar todo»), y no se les puede mover a otra capa.
 
 Vectoriales, mapas base (OpenTopoMap, OSM, Esri satélite/topo/océano/relieve,
 Carto), relieve sombreado e imágenes. Cada una con visible, **bloqueo**,
@@ -296,6 +314,20 @@ Exportar → Vista previa, hasta 600 dpi; la resolución de la capa de relieve l
 pequeñas el relieve tiene menos detalle por naturaleza: el mismo número de
 píxeles cubre más terreno, y Terrarium parte de ~30 m en tierra.
 
+**Cuadros de texto del layout**: «T Cuadro de texto» en la barra de la vista
+previa, clic en la hoja y se escribe encima (doble clic para volver a editar;
+Ctrl+Enter termina). Se mueven y eliminan como los demás elementos y tienen
+todas las opciones de texto. «Añadir a una capa del mapa» los pasa a una capa
+vectorial desbloqueada en la coordenada del terreno que queda bajo ellos, con
+el tamaño que los deja iguales a esa escala (copia, o pasar quitándolo del
+layout).
+
+**Estilos de layout**: «Guardar como estilo…» guarda con nombre la página, la
+grilla, los elementos y su posición, el marco, el tamaño de símbolos y los
+cuadros de texto (no la escala, el centro ni el título, autor, fecha y notas);
+«Aplicar» lo pone en otro layout; se exportan e importan como
+`.gdlayout.json`. Se guardan en el navegador.
+
 **Tamaño de símbolos y textos** armonizado con la escala
 de la lámina (los tamaños del estilo están medidos a la escala de referencia
 del dibujo; en «Automático» se escalan por la raíz de la razón de escalas,
@@ -346,6 +378,11 @@ flechas de pliegue, con su halo y el lado izquierdo/derecho— incrustado en el
 propio QML (`base64:`), sin archivos aparte. Las tramas de litología salen
 como un `SVGFill` sobre el relleno de color, con su color, opacidad y tamaño
 (mm). Todo se puede seguir editando en QGIS.
+
+**Pegar un recorte (Ctrl+V)**: una captura de pantalla o una imagen copiada se
+pega como imagen: se ofrece georreferenciarla de inmediato con puntos de
+control, o colocarla en la vista como capa de imagen. Un SVG (Illustrator,
+Inkscape) se pega como dibujo.
 
 **Illustrator, ida y vuelta**:
 

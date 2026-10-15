@@ -156,12 +156,22 @@ export function addShapes(doc, layerId, shapes) {
   return updateLayer(doc, layerId, (l) => ({ ...l, items: [...l.items, ...shapes], fields: mergeFields(l.fields, shapes) }));
 }
 
-export function replaceShapes(doc, map) {
+/**
+ * ¿La forma está en una capa bloqueada? Una capa con candado no se modifica
+ * en nada —ni geometría, ni estilo, ni atributos, ni se borra—: todas las
+ * ediciones pasan por `replaceShapes`, que la salta.
+ */
+export function inLockedLayer(doc, id) {
+  return !!layerOfShape(doc, id)?.locked;
+}
+
+export function replaceShapes(doc, map, { includeLocked = false } = {}) {
   // map: Map(id -> nueva forma | null para borrar)
   return {
     ...doc,
     layers: doc.layers.map((l) => {
       if (l.kind !== 'vector' || !l.items.some((s) => map.has(s.id))) return l;
+      if (l.locked && !includeLocked) return l;
       const items = [];
       for (const s of l.items) {
         if (!map.has(s.id)) items.push(s);
