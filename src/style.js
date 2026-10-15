@@ -21,6 +21,10 @@
  * ancho completo y el borde solo añade a cada lado.
  */
 
+import { ornamentsSvg } from './ornaments.js';
+import { patternDef } from './patterns.js';
+import { flattenNodes } from './vector.js';
+
 export const DASHES = {
   solid: { label: 'Continua', pattern: null },
   dash: { label: 'Segmentada', pattern: [4, 2] },
@@ -29,6 +33,8 @@ export const DASHES = {
   dashdot: { label: 'Punto y raya', pattern: [5, 2, 0, 2], round: true },
   dashdotdot: { label: 'Raya y dos puntos', pattern: [5, 2, 0, 2, 0, 2], round: true },
   sparse: { label: 'Segmentada espaciada', pattern: [3, 4] },
+  inferred: { label: 'Inferida (geología)', pattern: [2.6, 1.7] },
+  covered: { label: 'Cubierta (geología)', pattern: [0.1, 1.9], round: true },
 };
 
 export const MARKERS = {
@@ -65,9 +71,24 @@ export function defaultStyle() {
     cap: 'round',
     join: 'round',
     align: 'outside', // outside | center | inside (formas cerradas)
-    casing: false,
+    casing: false, // halo de línea: se agrega a cada lado, el centro conserva el color
     casingColor: '#ffffff',
     casingWidth: 0.4, // mm, a cada lado
+    casingOpacity: 1,
+    wavy: false, // línea ondulada (discordancia)
+    waveAmp: 0.7, // mm
+    waveLen: 3.6, // mm por ciclo
+    ornament: 'none', // ver ornaments.js
+    ornamentSize: 1,
+    ornamentSpacing: 6.9, // mm
+    ornamentSide: 'left',
+    ornamentGap: 0.8, // mm (medias flechas)
+    ornamentColor: '',
+    ornamentHalo: true,
+    pattern: 'none', // trama de litología (patterns.js), encima del relleno
+    patternColor: '#1f2937',
+    patternSize: 5, // mm por mosaico
+    patternOpacity: 1,
     markerStart: 'none',
     markerEnd: 'none',
     markerSize: 1,
@@ -267,18 +288,82 @@ function strokeAttrs(s, wPx, extraDash = true) {
   )}" stroke-linejoin="${s.join || 'round'}"${dash ? ` stroke-dasharray="${dash}"` : ''}`;
 }
 
+
+/* ----------------------------------------------------- línea en pantalla / ondulada */
+
+/** Polilínea [[x,y]…] en coordenadas de salida, con las curvas aplanadas a `tol`. */
+export function screenLine(shape, P, tol = 0.3) {
+  const map = (n) => {
+    const q = P(n.x, n.y);
+    const hi = n.hIn ? P(n.hIn.x, n.hIn.y) : null;
+    const ho = n.hOut ? P(n.hOut.x, n.hOut.y) : null;
+    return { x: q[0], y: q[1], hIn: hi && { x: hi[0], y: hi[1] }, hOut: ho && { x: ho[0], y: ho[1] }, smooth: n.smooth };
+  };
+  return flattenNodes(shape.nodes.map(map), shape.closed, tol);
+}
+
+/**
+ * Línea ondulada (discordancia): la trayectoria desplazada perpendicularmente
+ * por una sinusoide de amplitud `amp` y longitud de onda `len`. Se muestrea a
+ * len/20 para que la curva salga suave sin necesitar Béziers. La fase arranca
+ * en cero en el primer vértice, así dos tramos digitalizados seguidos no
+ * quedan en contrafase al unirse en el vértice compartido.
+ */
+export function wavyPoints(pts, amp, len) {
+  if (pts.length < 2 || amp <= 0 || len <= 0) return pts;
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const total = cum[cum.length - 1];
+  if (total <= 0) return pts;
+  const step = len / 20;
+  const n = Math.max(2, Math.ceil(total / step));
+  const out = [];
+  let seg = 1;
+  for (let k = 0; k <= n; k++) {
+    const d = (k / n) * total;
+    while (seg < cum.length - 1 && cum[seg] < d) seg++;
+    const a = pts[seg - 1];
+    const b = pts[seg];
+    const L = Math.max(1e-9, cum[seg] - cum[seg - 1]);
+    const t = (d - cum[seg - 1]) / L;
+    const x = a[0] + t * (b[0] - a[0]);
+    const y = a[1] + t * (b[1] - a[1]);
+    // normal del tramo (a la izquierda del sentido de avance en pantalla)
+    const nx = (a[1] - b[1]) / L;
+    const ny = (b[0] - a[0]) / L;
+    const off = amp * Math.sin((2 * Math.PI * d) / len);
+    out.push([x + nx * off, y + ny * off]);
+  }
+  return out;
+}
+
+const ptsD = (pts) => `M${pts.map((p) => `${r2(p[0])} ${r2(p[1])}`).join('L')}`;
+
 export function pathToSvg(shape, ctx, extraAttrs = '') {
   const s = shape.style;
-  const d = shapeD(shape, ctx.P);
+  let d = shapeD(shape, ctx.P);
   if (!d) return '';
   const wPx = Math.max(0, (s.strokeWidth || 0) * ctx.mmToPx);
   const hasStroke = s.stroke && s.stroke !== 'none' && wPx > 0;
   const group = [];
   const opacity = s.opacity != null && s.opacity < 1 ? ` opacity="${s.opacity}"` : '';
   const blend = s.blend && s.blend !== 'normal' ? ` style="mix-blend-mode:${s.blend}"` : '';
+  const tol = ctx.flatTol ?? 0.3;
 
   if (shape.closed) {
     group.push(`<path d="${d}" ${fillPaint(shape, ctx)} fill-rule="evenodd" stroke="none"/>`);
+    // trama de litología: encima del color de la unidad, debajo del contorno
+    if (s.pattern && s.pattern !== 'none') {
+      const tile = Math.max(2, (s.patternSize || 5) * ctx.mmToPx);
+      const key = `pat|${s.pattern}|${s.patternColor}|${r2(tile)}|${s.patternOpacity ?? 1}`;
+      ctx.defSet = ctx.defSet || new Set();
+      const pid = `${ctx.uid}p${hashKey(key)}`;
+      if (!ctx.defSet.has(pid)) {
+        ctx.defSet.add(pid);
+        ctx.defs.push(patternDef(pid, s.pattern, s.patternColor || '#1f2937', r2(tile), s.patternOpacity ?? 1));
+      }
+      group.push(`<path d="${d}" fill="url(#${pid})" fill-rule="evenodd" stroke="none"/>`);
+    }
     if (hasStroke) {
       const align = s.align || 'outside';
       if (align === 'center') {
@@ -296,13 +381,22 @@ export function pathToSvg(shape, ctx, extraAttrs = '') {
     }
   } else {
     if (s.fill && s.fill !== 'none' && s.fillOpen) group.push(`<path d="${d}" ${fillPaint(shape, ctx)} stroke="none"/>`);
+    const base = s.ornament && s.ornament !== 'none' || s.wavy ? screenLine(shape, ctx.P, tol) : null;
+    // discordancia: la misma línea, ondulada; halo, trazo y puntas la siguen
+    if (s.wavy && base) d = ptsD(wavyPoints(base, (s.waveAmp ?? 0.7) * ctx.mmToPx, (s.waveLen ?? 3.6) * ctx.mmToPx));
+    // ornamentos (dientes, tics, flechas): el halo va POR DEBAJO de la traza
+    let orn = { halo: '', symbols: '' };
+    if (base && s.ornament && s.ornament !== 'none' && hasStroke && 9 * (25.4 / 96) * ctx.mmToPx * (s.ornamentSize || 1) >= 1.5) {
+      orn = ornamentsSvg(base, s, ctx.mmToPx, s.stroke);
+    }
+    group.push(orn.halo);
+    // halo de línea (casing): cubre a ambos lados y deja el centro con el color del trazo
     if (s.casing && hasStroke) {
       const cw = wPx + 2 * (s.casingWidth || 0) * ctx.mmToPx;
-      // El borde sigue los segmentos del núcleo para que cada raya tenga su
-      // propio contorno; con trazo continuo es un único borde.
       const dash = dashArray(s, wPx);
+      const co = (s.casingOpacity ?? 1) * (s.strokeOpacity ?? 1);
       group.push(
-        `<path d="${d}" fill="none" stroke="${esc(s.casingColor)}" stroke-opacity="${s.strokeOpacity ?? 1}" stroke-width="${r2(
+        `<path d="${d}" fill="none" stroke="${esc(s.casingColor)}" stroke-opacity="${co}" stroke-width="${r2(
           cw,
         )}" stroke-linecap="${capFor(s)}" stroke-linejoin="${s.join || 'round'}"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`,
       );
@@ -321,8 +415,19 @@ export function pathToSvg(shape, ctx, extraAttrs = '') {
       }
       group.push(`<path d="${d}" fill="none" ${strokeAttrs(s, wPx)}${markers}/>`);
     }
+    group.push(orn.symbols);
   }
   return `<g data-id="${shape.id}"${opacity}${blend}${extraAttrs}>${group.join('')}</g>`;
+}
+
+/** Hash corto y estable de un texto, para ids de definiciones compartidas. */
+export function hashKey(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
 }
 
 export function pointToSvg(shape, ctx, extraAttrs = '') {
@@ -350,14 +455,18 @@ export function textToSvg(shape, ctx, extraAttrs = '') {
   const tspans = lines
     .map((l, i) => `<tspan x="${r2(x)}" dy="${i === 0 ? 0 : r2(fs * 1.2)}">${esc(l) || ' '}</tspan>`)
     .join('');
-  const halo = shape.halo
-    ? ` stroke="${esc(shape.haloColor || '#fff')}" stroke-width="${r2(2 * (shape.haloWidth ?? 0.5) * ctx.mmToPx)}" stroke-linejoin="round" paint-order="stroke fill"`
-    : '';
   const rot = shape.rotation ? ` transform="rotate(${shape.rotation} ${r2(x)} ${r2(y)})"` : '';
   const opacity = s.opacity != null && s.opacity < 1 ? ` opacity="${s.opacity}"` : '';
-  return `<g data-id="${shape.id}"${opacity}${extraAttrs}><text x="${r2(x)}" y="${r2(y)}"${rot} font-family="${esc(
-    shape.fontFamily,
-  )}" font-size="${r2(fs)}" font-weight="${shape.fontWeight || 400}"${shape.italic ? ' font-style="italic"' : ''} text-anchor="${
-    shape.anchor || 'start'
-  }" ${fillPaint(shape, ctx)}${halo}>${tspans}</text></g>`;
+  const common = `x="${r2(x)}" y="${r2(y)}"${rot} font-family="${esc(shape.fontFamily)}" font-size="${r2(fs)}" font-weight="${shape.fontWeight || 400}"${
+    shape.italic ? ' font-style="italic"' : ''
+  } text-anchor="${shape.anchor || 'start'}"`;
+  // El halo es un texto APARTE por debajo, con el trazo del grosor del halo; el
+  // texto de relleno va encima y lo tapa por dentro. Así el halo solo se ve por
+  // fuera de las letras sin depender de `paint-order`, que el PDF no respeta.
+  const halo = shape.halo
+    ? `<text ${common} fill="${esc(shape.haloColor || '#fff')}" stroke="${esc(shape.haloColor || '#fff')}" stroke-width="${r2(
+        2 * (shape.haloWidth ?? 0.5) * ctx.mmToPx,
+      )}" stroke-linejoin="round" stroke-linecap="round"${shape.haloOpacity != null && shape.haloOpacity < 1 ? ` opacity="${shape.haloOpacity}"` : ''}>${tspans}</text>`
+    : '';
+  return `<g data-id="${shape.id}"${opacity}${extraAttrs}>${halo}<text ${common} ${fillPaint(shape, ctx)}>${tspans}</text></g>`;
 }

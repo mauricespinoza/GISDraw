@@ -214,11 +214,14 @@ export function renderLabels(layers, ctx) {
     // en pantalla, menos de 3 px no se lee; en el layout las unidades son mm
     if (fs < (ctx.minFont ?? 3)) continue;
     const haloW = cfg.halo ? 2 * cfg.haloWidth * ctx.mmToPx : 0;
-    const paint = `font-family="${esc(cfg.fontFamily)}" font-size="${r2(fs)}" font-weight="${cfg.fontWeight}"${
-      cfg.italic ? ' font-style="italic"' : ''
-    } fill="${esc(cfg.color)}"${
-      cfg.halo ? ` stroke="${esc(cfg.haloColor)}" stroke-width="${r2(haloW)}" stroke-linejoin="round" paint-order="stroke fill"` : ''
-    }`;
+    const fontAttrs = `font-family="${esc(cfg.fontFamily)}" font-size="${r2(fs)}" font-weight="${cfg.fontWeight}"${cfg.italic ? ' font-style="italic"' : ''}`;
+    const fillPaint = `${fontAttrs} fill="${esc(cfg.color)}"`;
+    // halo = texto aparte por debajo con trazo grueso; el de relleno lo tapa por
+    // dentro y el halo solo se ve por fuera (no depende de paint-order, que el PDF ignora)
+    const haloPaint = cfg.halo
+      ? `${fontAttrs} fill="${esc(cfg.haloColor)}" stroke="${esc(cfg.haloColor)}" stroke-width="${r2(haloW)}" stroke-linejoin="round" stroke-linecap="round"`
+      : null;
+    const T = (attrs, inner) => (haloPaint ? `<text ${attrs} ${haloPaint}>${inner}</text>` : '') + `<text ${attrs} ${fillPaint}>${inner}</text>`;
 
     // candidatos con prioridad: los elementos grandes primero
     const cands = [];
@@ -243,7 +246,7 @@ export function renderLabels(layers, ctx) {
         if (offscreen(box, ctx)) continue;
         if (cfg.avoidOverlap && occ.hits(box)) continue;
         occ.add(box);
-        out.push(bg(cfg, box) + `<text x="${r2(tx)}" y="${r2(ty)}" ${paint}>${esc(text)}</text>`);
+        out.push(bg(cfg, box) + T(`x="${r2(tx)}" y="${r2(ty)}"`, esc(text)));
         continue;
       }
 
@@ -259,7 +262,7 @@ export function renderLabels(layers, ctx) {
         if (offscreen(box, ctx)) continue;
         if (cfg.avoidOverlap && occ.hits(box)) continue;
         occ.add(box);
-        out.push(bg(cfg, box) + `<text x="${r2(pl.x)}" y="${r2(pl.y + fs * 0.35)}" text-anchor="middle" ${paint}>${esc(text)}</text>`);
+        out.push(bg(cfg, box) + T(`x="${r2(pl.x)}" y="${r2(pl.y + fs * 0.35)}" text-anchor="middle"`, esc(text)));
         continue;
       }
 
@@ -297,7 +300,7 @@ export function renderLabels(layers, ctx) {
         occ.add(box);
         if (cfg.placement === 'horizontal') {
           const mid = piece[Math.floor(piece.length / 2)];
-          out.push(`<text x="${r2(mid[0])}" y="${r2(mid[1] - cfg.offset * ctx.mmToPx)}" text-anchor="middle" ${paint}>${esc(text)}</text>`);
+          out.push(T(`x="${r2(mid[0])}" y="${r2(mid[1] - cfg.offset * ctx.mmToPx)}" text-anchor="middle"`, esc(text)));
           continue;
         }
         const pid = `${ctx.uid}lp${n++}`;
@@ -305,7 +308,7 @@ export function renderLabels(layers, ctx) {
         const dy = -(cfg.offset * ctx.mmToPx);
         defs.push(`<path id="${pid}" d="M${piece.map((p) => `${r2(p[0])} ${r2(p[1])}`).join('L')}"/>`);
         out.push(
-          `<text ${paint} dy="${r2(dy)}"><textPath href="#${pid}" startOffset="50%" text-anchor="middle">${esc(text)}</textPath></text>`,
+          T(`dy="${r2(dy)}"`, `<textPath href="#${pid}" startOffset="50%" text-anchor="middle">${esc(text)}</textPath>`),
         );
       }
     }

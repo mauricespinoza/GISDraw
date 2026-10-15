@@ -150,7 +150,7 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
   doc.layers.forEach((l, i) => {
     if (!l.visible) return;
     if (l.kind === 'vector') {
-      const ctx = { P, mmToPx: 1, ptToPx: 0.352778, viewW: g.W, viewH: g.H, defs, uid: `L${i}_` };
+      const ctx = { P, mmToPx: 1, ptToPx: 0.352778, viewW: g.W, viewH: g.H, defs, uid: `L${i}_`, flatTol: 0.05 };
       const op = l.opacity < 1 ? ` opacity="${l.opacity}"` : '';
       const bl = l.blend && l.blend !== 'normal' ? ` style="mix-blend-mode:${l.blend}"` : '';
       mapParts.push(`<g${op}${bl}>${l.items.map((s) => shapeToSvg(s, ctx)).join('')}</g>`);
@@ -468,7 +468,7 @@ export function legendEntries(vectors) {
 function legendSvg(doc, vectors, L, x, y, w, maxY, font) {
   const out = [`<text x="${r2(x)}" y="${r2(y + 4)}" font-family="${font}" font-size="3.6" font-weight="700">${esc(L.legendTitle || 'Leyenda')}</text>`];
   let yy = y + 9;
-  const ctx = { P: (a, b) => [a, b], mmToPx: 1, ptToPx: 0.352778, viewW: 1000, viewH: 1000, defs: [], uid: 'leg_' };
+  const ctx = { P: (a, b) => [a, b], mmToPx: 1, ptToPx: 0.352778, viewW: 1000, viewH: 1000, defs: [], uid: 'leg_', flatTol: 0.05 };
   for (const grp of legendEntries(vectors)) {
     if (yy > maxY) break;
     out.push(`<text x="${r2(x)}" y="${r2(yy)}" font-family="${font}" font-size="2.6" font-weight="700" fill="#374151">${esc(grp.layer)}</text>`);
@@ -482,7 +482,13 @@ function legendSvg(doc, vectors, L, x, y, w, maxY, font) {
       const sy = yy + 0.8;
       let sym;
       if (e.kind === 'polygon') sym = makePath([makeNode(sx, sy), makeNode(sx + 8, sy), makeNode(sx + 8, sy + 4.5), makeNode(sx, sy + 4.5)], { closed: true, style: e.style });
-      else if (e.kind === 'line') sym = makePath([makeNode(sx, sy + 3.5), makeNode(sx + 3, sy + 1.2), makeNode(sx + 5.5, sy + 3.2), makeNode(sx + 8, sy + 1)], { style: e.style });
+      else if (e.kind === 'line') {
+        // con ornamento u onda la muestra va RECTA y un poco más larga, para que se lea el símbolo
+        const plain = (!e.style.ornament || e.style.ornament === 'none') && !e.style.wavy;
+        sym = plain
+          ? makePath([makeNode(sx, sy + 3.5), makeNode(sx + 3, sy + 1.2), makeNode(sx + 5.5, sy + 3.2), makeNode(sx + 8, sy + 1)], { style: e.style })
+          : makePath([makeNode(sx, sy + 3.2), makeNode(sx + 9, sy + 3.2)], { style: e.style });
+      }
       else sym = makePoint(sx + 4, sy + 2.25, e.style);
       const svgSym = shapeToSvg(sym, { ...ctx, defs: ctx.defs, viewW: 2000, viewH: 2000 });
       out.push(svgSym);

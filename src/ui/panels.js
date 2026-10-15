@@ -9,6 +9,8 @@
 
 import { BLEND_MODES, defaultLabels, findLayer, makeRasterLayer, makeVectorLayer, addLayer, removeLayer, moveLayer, duplicateLayer, updateLayer, mapShapes } from '../doc.js';
 import { DASHES, MARKERS, POINT_SHAPES, defaultStyle } from '../style.js';
+import { ORNAMENTS, ORNAMENT_LIMITS, ornamentDefaults } from '../ornaments.js';
+import { PATTERNS, PATTERN_GROUPS, patternPreview } from '../patterns.js';
 import { BASEMAPS } from '../raster/basemap.js';
 import { DEM_SOURCES, OPENTOPO_TYPES } from '../raster/dem.js';
 import { PALETTES, defaultHillshadeSettings, paletteLUT } from '../raster/hillshade.js';
@@ -26,6 +28,20 @@ export const TABS = {
   georef: 'Georref.',
   layout: 'Layout',
 };
+
+/** Tipos de línea de FieldDraw: colores y grosores (mm de papel) de su simbología. */
+const LINE_PRESETS = [
+  { short: 'Contacto', label: 'Contacto', style: { stroke: '#000000', strokeWidth: 0.35 } },
+  { short: 'Inversa', label: 'Falla inversa / cabalgamiento', style: { stroke: '#0000ff', strokeWidth: 0.5, ...ornamentDefaults('thrust') } },
+  { short: 'Normal', label: 'Falla normal', style: { stroke: '#0000ff', strokeWidth: 0.45, ...ornamentDefaults('normal') } },
+  { short: 'Dextral', label: 'Falla dextral', style: { stroke: '#0000ff', strokeWidth: 0.45, ...ornamentDefaults('dextral') } },
+  { short: 'Sinestral', label: 'Falla sinestral', style: { stroke: '#0000ff', strokeWidth: 0.45, ...ornamentDefaults('sinistral') } },
+  { short: 'Falla ind.', label: 'Falla indiferenciada', style: { stroke: '#0000ff', strokeWidth: 0.4 } },
+  { short: 'Antiforme', label: 'Antiforme (traza axial)', style: { stroke: '#ff00ff', strokeWidth: 0.45, ...ornamentDefaults('antiform') } },
+  { short: 'Sinforme', label: 'Sinforme (traza axial)', style: { stroke: '#ff00ff', strokeWidth: 0.45, ...ornamentDefaults('synform') } },
+  { short: 'Dique', label: 'Dique', style: { stroke: '#ff0000', strokeWidth: 0.4 } },
+  { short: 'Discordancia', label: 'Discordancia (ondulada)', style: { stroke: '#000000', strokeWidth: 0.35, wavy: true, waveAmp: 0.7, waveLen: 3.6 } },
+];
 
 const FONTS = {
   'Helvetica, Arial, sans-serif': 'Helvetica / Arial',
@@ -314,13 +330,71 @@ export class Panels {
 
     const lineSec = sec(
       'Línea abierta',
-      row('Borde de línea', check('Activado', s.casing, fin('casing')), color(s.casingColor || '#ffffff', live('casingColor'), fin('casingColor'))),
-      row('Ancho borde', num(s.casingWidth, fin('casingWidth'), { step: 0.05, min: 0 })),
-      h('p', { class: 'hint' }, 'El borde de línea se agrega a cada lado del trazo, por debajo: el núcleo conserva su grosor completo.'),
+      row('Forma', select({ straight: 'Recta', wavy: 'Ondulada (discordancia)' }, s.wavy ? 'wavy' : 'straight', (v) => edit({ wavy: v === 'wavy' }))),
+      s.wavy ? row('Amplitud (mm)', num(s.waveAmp, fin('waveAmp'), { step: 0.1, min: 0.1 })) : null,
+      s.wavy ? row('Long. onda (mm)', num(s.waveLen, fin('waveLen'), { step: 0.2, min: 0.8 })) : null,
+      row('Halo de línea', check('Activado', s.casing, fin('casing')), color(s.casingColor || '#ffffff', live('casingColor'), fin('casingColor'))),
+      row('Ancho halo (mm)', num(s.casingWidth, fin('casingWidth'), { step: 0.05, min: 0 })),
+      row('Opacidad halo', ...slider({ min: 0, max: 100, value: Math.round((s.casingOpacity ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live('casingOpacity')(v / 100), onchange: (v) => fin('casingOpacity')(v / 100) })),
+      h('p', { class: 'hint' }, 'El halo se agrega a cada lado del trazo, por debajo: el centro conserva el color del trazo. Útil para que una línea se lea sobre una imagen oscura.'),
       row('Inicio', select(MARKERS, s.markerStart || 'none', fin('markerStart'))),
       row('Final', select(MARKERS, s.markerEnd || 'none', fin('markerEnd'))),
       row('Tamaño puntas', ...slider({ min: 40, max: 400, value: Math.round((s.markerSize || 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live('markerSize')(v / 100), onchange: (v) => fin('markerSize')(v / 100) })),
     );
+
+    const orn = s.ornament || 'none';
+    const lim = ORNAMENT_LIMITS;
+    const ornSec = sec(
+      'Ornamento de falla / pliegue',
+      row('Ornamento', select(Object.fromEntries(Object.entries(ORNAMENTS).map(([k, o]) => [k, o.label])), orn, (v) => edit(ornamentDefaults(v)))),
+      orn !== 'none' ? row('Tamaño', ...slider({ min: Math.round(lim.size.min * 100), max: Math.round(lim.size.max * 100), value: Math.round((s.ornamentSize || 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live('ornamentSize')(v / 100), onchange: (v) => fin('ornamentSize')(v / 100) })) : null,
+      orn !== 'none' ? row('Separación (mm)', num(s.ornamentSpacing, fin('ornamentSpacing'), { step: 0.5, min: lim.spacing.min, max: lim.spacing.max })) : null,
+      orn === 'dextral' || orn === 'sinistral' ? row('Dist. a la traza (mm)', num(s.ornamentGap, fin('ornamentGap'), { step: 0.1, min: lim.gap.min, max: lim.gap.max })) : null,
+      ORNAMENTS[orn]?.flippable
+        ? row('Lado', select({ left: 'Izquierda del sentido de digitalización', right: 'Derecha' }, s.ornamentSide || 'left', fin('ornamentSide')), btn('⇄', () => edit({ ornamentSide: (s.ornamentSide || 'left') === 'left' ? 'right' : 'left' }), 'sm'))
+        : null,
+      orn !== 'none' ? row('Color', check('Distinto al trazo', !!s.ornamentColor, (v) => edit({ ornamentColor: v ? s.stroke : '' })), s.ornamentColor ? color(s.ornamentColor, live('ornamentColor'), fin('ornamentColor')) : null) : null,
+      orn !== 'none' ? check('Halo blanco bajo el ornamento', s.ornamentHalo !== false, fin('ornamentHalo')) : null,
+      h('p', { class: 'hint' }, 'Dientes, tics y flechas como en FieldDraw. Los dientes y el tic van a la izquierda del sentido en que dibujaste la línea; «⇄» los pasa al otro lado sin redibujar.'),
+    );
+
+    const presetSec = sec(
+      'Tipos de línea geológicos',
+      row('Certeza', select({ solid: 'Observada (continua)', inferred: 'Inferida (segmentada)', covered: 'Cubierta (punteada)' }, this.certainty || 'solid', (v) => { this.certainty = v; edit({ dash: v }); })),
+      h(
+        'div',
+        { class: 'grid-btns' },
+        ...LINE_PRESETS.map((p) => h('button', { class: 'btn sm', title: p.label, onclick: () => edit({ ...defaultStyle(), ...ornamentDefaults('none'), fill: 'none', ...p.style, dash: this.certainty || 'solid' }) }, p.short)),
+      ),
+      h('p', { class: 'hint' }, 'Aplica el color, grosor y ornamento de cada tipo, con los mismos colores de FieldDraw.'),
+    );
+
+    // trama de litología: selector con miniaturas, agrupado
+    const patSec = sec('Trama de litología');
+    const pcol = s.patternColor || '#1f2937';
+    const bgc = s.fill && s.fill !== 'none' ? s.fill : '#ffffff';
+    patSec.append(
+      h('div', { class: 'pat-grid' }, h('button', { class: `pat none${(s.pattern || 'none') === 'none' ? ' on' : ''}`, title: 'Sin trama', onclick: () => edit({ pattern: 'none' }) }, '∅')),
+    );
+    for (const g of PATTERN_GROUPS) {
+      const items = Object.entries(PATTERNS).filter(([, p]) => p.group === g.id);
+      patSec.append(
+        h('h4', { class: 'pat-h' }, g.label),
+        h(
+          'div',
+          { class: 'pat-grid' },
+          ...items.map(([k, p]) => h('button', { class: `pat${s.pattern === k ? ' on' : ''}`, title: p.label, html: patternPreview(k, pcol, bgc, 44), onclick: () => edit({ pattern: k, patternColor: s.patternColor || '#1f2937' }) })),
+        ),
+      );
+    }
+    if (s.pattern && s.pattern !== 'none') {
+      patSec.append(
+        h('p', { class: 'hint' }, `Trama: ${PATTERNS[s.pattern]?.label || s.pattern}. El color de la unidad es el relleno; la trama va encima.`),
+        row('Color trama', color(pcol, live('patternColor'), fin('patternColor'))),
+        row('Tamaño (mm)', num(s.patternSize, fin('patternSize'), { step: 0.5, min: 1 }), ...slider({ min: 2, max: 20, step: 0.5, value: s.patternSize || 5, fmt: (v) => v, oninput: live('patternSize'), onchange: fin('patternSize') }).slice(0, 1)),
+        row('Opacidad trama', ...pct('patternOpacity')),
+      );
+    }
 
     const objSec = sec(
       'Objeto',
@@ -332,7 +406,7 @@ export class Panels {
 
     const out = [head];
     if (target?.type === 'text') out.push(this.textSection(target));
-    out.push(fillSec, strokeSec, lineSec, objSec);
+    out.push(presetSec, fillSec, patSec, strokeSec, lineSec, ornSec, objSec);
     if (shapes.length) {
       let length = 0;
       let area = 0;
@@ -370,7 +444,9 @@ export class Panels {
       row('Anclaje', select({ start: 'Izquierda', middle: 'Centro', end: 'Derecha' }, t.anchor, (v) => set({ anchor: v }))),
       row('Rotación', ...slider({ min: -180, max: 180, value: t.rotation || 0, fmt: (v) => `${v}°`, oninput: (v) => set({ rotation: v }, false), onchange: (v) => set({ rotation: v }) })),
       row('Halo', check('Activado', t.halo, (v) => set({ halo: v })), color(t.haloColor, (v) => set({ haloColor: v }, false), (v) => set({ haloColor: v }))),
-      row('Ancho halo', num(t.haloWidth, (v) => set({ haloWidth: v }), { step: 0.1, min: 0 })),
+      row('Ancho halo (mm)', num(t.haloWidth, (v) => set({ haloWidth: v }), { step: 0.1, min: 0 })),
+      row('Opacidad halo', ...slider({ min: 0, max: 100, value: Math.round((t.haloOpacity ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => set({ haloOpacity: v / 100 }, false), onchange: (v) => set({ haloOpacity: v / 100 }) })),
+      h('p', { class: 'hint' }, 'El halo del texto es externo: rodea las letras sin tapar su interior.'),
     );
   }
 

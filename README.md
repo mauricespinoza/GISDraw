@@ -10,6 +10,20 @@ Pensado para **tablet con Apple Pencil** y para **PC**. Nace del editor
 vectorial de GeoPhoto Studio (nodos Bézier, pluma, lápiz, formas, texto) y de
 las herramientas de trace, snapping y topología de FieldDraw.
 
+## Ver en el iPad
+
+1. En GitHub: **Settings → Pages → Build and deployment → Source: «Deploy from a
+   branch» → Branch: `main` / `(root)` → Save**.
+2. Espera 1–2 minutos: aparece la dirección `https://<usuario>.github.io/GISDraw/`.
+3. En el iPad abre esa dirección **en Safari** (con conexión, una vez) →
+   botón **Compartir → Añadir a pantalla de inicio**. Desde ahí abre como app y
+   queda guardada para usarla **sin señal**.
+
+Si el repositorio es privado, GitHub Pages exige un plan de pago; hazlo público
+o usa Netlify / Cloudflare Pages. Al publicar una versión nueva hay que subir
+`VERSION` en `sw.js`; en el iPad se actualiza al abrir la app con señal y
+cerrarla y abrirla de nuevo.
+
 ## Ejecutar
 
 ```bash
@@ -29,6 +43,7 @@ hace que los navegadores busquen los archivos nuevos.
 ```bash
 node test/core.test.mjs      # proyección, geometría, estilo, operaciones, etiquetas, relieve, trace
 node test/georef.test.mjs    # transformaciones, residuos y remuestreo
+node test/ornaments.test.mjs # ornamentos, onda, tramas, halos
 node test/sw.test.mjs        # todo módulo está en el precache offline
 ```
 
@@ -84,9 +99,30 @@ Mayús+G desagrupar, **7 máscara de recorte**, Alt+7 liberarla, ] adelante,
   lo que está fuera de la forma: engrosar el borde nunca tapa el relleno, ni
   siquiera si el relleno es transparente, y en los huecos crece hacia el hueco.
   También se puede alinear centrado o hacia adentro.
-- **Borde de línea** (casing) en líneas abiertas: se agrega a cada lado, por
-  debajo; el núcleo conserva su grosor completo. Si la línea es segmentada,
-  cada raya tiene su borde.
+- **Halo de línea** (casing) en líneas abiertas: se agrega a cada lado, por
+  debajo; el centro conserva el color del trazo. Si la línea es segmentada,
+  cada raya tiene su halo. Ancho, color y opacidad editables.
+- **Halo de texto externo**: un texto aparte por debajo con trazo grueso y el
+  texto de relleno encima, así el halo solo asoma por fuera de las letras y
+  nunca tapa el interior. Está hecho así (y no con `paint-order`) para que el
+  PDF lo reproduzca igual. Vale también para las etiquetas de capa.
+- **Línea ondulada (discordancia)**: forma «Ondulada» con amplitud y longitud
+  de onda en mm; el halo, el trazo y las puntas la siguen.
+- **Ornamentos de falla y pliegue**, con la geometría de FieldDraw: dientes
+  (falla inversa / cabalgamiento), tic con bolita (normal), pares de medias
+  flechas (dextral / sinestral) y flechas divergentes o convergentes
+  (antiforme / sinforme). Tamaño, separación, lado (izquierda o derecha del
+  sentido de digitalización, con botón «⇄»), distancia de las flechas a la
+  traza, color propio y halo blanco por debajo. Botones de **tipos de línea
+  geológicos** con los colores de FieldDraw y certeza (observada, inferida,
+  cubierta).
+- **Tramas de litología**: 35 rellenos clásicos —arenisca, conglomerado,
+  brecha, lutita, caliza, dolomía, yeso, sal, carbón, granito, granodiorita,
+  gabro, basalto, riolita, toba, gneis, esquisto, filita, cuarcita, mármol,
+  aluvial, depósito glacial y rayados generales— agrupados por tipo de roca,
+  con selector de miniaturas. El color de la unidad es el relleno y la trama va
+  encima, con color, tamaño (mm) y opacidad propios. Salen en el PDF y en la
+  leyenda.
 - **Puntas de flecha** de inicio y fin (flecha, abierta, aguda, círculo, cuadrado, barra) y su tamaño.
 - Opacidad y **modo de fusión** por objeto y por capa.
 - Grosores en **mm** y textos en **pt**, medidos en el papel a la **escala de
@@ -183,7 +219,7 @@ entiende `mix-blend-mode`).
 
 | | Importar | Exportar |
 |---|---|---|
-| GeoPackage | todas las tablas de features, cualquier sistema (EPSG o WKT), atributos, **estilo QGIS embebido** | una tabla por capa y tipo de geometría, EPSG:32719, atributos, **QML con la simbología del dibujo** |
+| GeoPackage | todas las tablas de features, cualquier sistema (EPSG o WKT), atributos, **estilo QGIS embebido** | una tabla por capa y tipo de geometría, EPSG:32719, atributos, **QML con la simbología del dibujo** y el estilo completo en `gd_style_json` |
 | QML / QLR (QGIS) | símbolo único, categorizado, graduado y por reglas; símbolos de varias capas (relleno + contorno, línea con borde, flechas, degradados, marcadores); etiquetado simple | dentro del GeoPackage |
 | GeoJSON | WGS84 o con `crs` | WGS84 (RFC 7946) o UTM 19S |
 | GeoTIFF | elevación (una banda) o imagen RGB(A), en su sistema | relieve calculado, imagen georreferenciada |
@@ -205,7 +241,9 @@ svg2pdf.
 |---|---|
 | `src/proj.js` | UTM ↔ geográficas (series de Krüger, < 1 mm), DMS |
 | `src/vector.js` | formas inmutables, nodos Bézier, aplanado, medición |
-| `src/style.js` | estilo → SVG: borde hacia afuera, borde de línea, segmentados, degradados, flechas |
+| `src/style.js` | estilo → SVG: borde hacia afuera, halos, segmentados, ondulado, degradados, flechas, tramas |
+| `src/ornaments.js` | ornamentos de falla y pliegue (geometría de FieldDraw) |
+| `src/patterns.js` | catálogo de tramas de litología |
 | `src/doc.js` | documento, capas, historial (deshacer por referencias) |
 | `src/editor.js` | herramientas, entrada lápiz/dedo/ratón, snapping, trace |
 | `src/snapping.js` | índice espacial y camino más corto (de FieldDraw) |
@@ -222,9 +260,11 @@ svg2pdf.
 
 - Edición topológica en vivo (mover un vértice compartido y que se muevan
   los dos polígonos); hoy se confirma después con «Confirmar topología».
-- Simbología QGIS más rica: rellenos de patrón reales (hoy se aproximan con un
-  color translúcido), marcadores SVG, ornamentos sobre líneas (dientes de
-  falla inversa, barbas).
+- Simbología QGIS más rica: los **ornamentos y las tramas no se traducen al
+  QML** (QGIS ve la línea y el color de relleno, no los dientes ni la trama);
+  GISDrawer sí los recupera al reimportar su propio GeoPackage, porque guarda
+  el estilo completo en la columna `gd_style_json`. Faltan también los
+  marcadores SVG de QGIS.
 - El contorno "hacia afuera" se exporta a QGIS como línea desplazada medio
   grosor; conviene comprobar el sentido del desplazamiento en QGIS con anillos
   de orientación mixta.
