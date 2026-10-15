@@ -8,7 +8,7 @@ import { History, addLayer, addShapes, findLayer, findTopShape, layerOfShape, ma
 import { View, paperUnits } from './view.js';
 import { Editor, TOOLS } from './editor.js';
 import { StageRenderer } from './render.js';
-import { RasterView, demFiles, imageFiles } from './raster/rasterView.js';
+import { RasterView, demFiles, imageFiles, imageRect } from './raster/rasterView.js';
 import { BASEMAPS } from './raster/basemap.js';
 import { Panels } from './ui/panels.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
@@ -71,6 +71,7 @@ class App {
     });
     this.raster.onNeedRedraw = () => this.renderer.request();
     this.raster.onStatus = (_, msg) => this.message(msg, msg ? 0 : 1);
+    this.raster.onStaleChange = () => this.updateRedraw();
     this.raster.onRendered = () => {
       if (this.panels.tab === 'relief') this.panels.render();
     };
@@ -121,6 +122,7 @@ class App {
     if (!meta.preview) this.editor.pruneSelection();
     this.editor.snapDirty = true;
     this.renderer.request();
+    this.updateRedraw();
     if (!meta.preview) {
       if (!this.layout.el.hidden) this.layout.schedule();
       this.panels.render();
@@ -146,8 +148,18 @@ class App {
     if (this.editor.hover?.wp) this.updateCoords(this.editor.hover.wp);
   }
 
+  /** Botón «Redraw»: visible si hay relieve; resaltado cuando la imagen en caché ya no cubre la vista. */
+  updateRedraw() {
+    const b = document.getElementById('btn-redraw');
+    if (!b) return;
+    const st = this.raster.hillshadeStale(this.history.doc.layers);
+    b.hidden = st === null;
+    b.classList.toggle('stale', st === true);
+  }
+
   onViewChange() {
     this.renderer.request();
+    this.updateRedraw();
     if (document.activeElement !== this.scaleInput) this.scaleInput.value = Math.round(this.view.scale).toLocaleString('es-CL');
     clearTimeout(this.viewSaveT);
     this.viewSaveT = setTimeout(() => writeJSON('gd.view', { cx: this.view.cx, cy: this.view.cy, mpp: this.view.mpp }), 400);
@@ -380,6 +392,10 @@ class App {
     $('btn-snap').onclick = () => this.saveSettings({ snap: !this.settings.snap });
     $('btn-trace').onclick = () => this.saveSettings({ trace: !this.settings.trace });
     $('btn-finger').onclick = () => this.saveSettings({ fingerDraws: !this.settings.fingerDraws });
+    $('btn-redraw').onclick = () => {
+      const n = this.raster.redrawHillshades(this.history.doc.layers);
+      if (n) this.message('Recalculando relieve para la vista actual…', 2500);
+    };
     $('btn-panel').onclick = () => this.togglePanel();
     $('btn-help').onclick = () => this.toggleHelp();
     if (window.innerWidth < 900) document.getElementById('app').classList.add('panel-hidden');
@@ -1088,7 +1104,7 @@ class App {
   }
 
   zoomToImage(layer) {
-    const img = imageFiles.get(layer.settings.fileId);
+    const img = imageRect(layer);
     if (img) this.view.fit({ x: img.x0, y: img.y0, w: img.x1 - img.x0, h: img.y1 - img.y0 });
   }
 

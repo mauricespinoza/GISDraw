@@ -15,6 +15,14 @@ import { toLonLat } from '../proj.js';
 
 export const demFiles = new Map(); // fileId -> grid (GeoTIFF/ASCII importados)
 export const imageFiles = new Map(); // fileId -> { bitmap, x0, y0, x1, y1 } (imagen alineada a UTM)
+/** Imagen de una capa con su posición efectiva: `settings.bounds` (movida/escalada en el layout) manda sobre la original. */
+export function imageRect(layer) {
+  const img = imageFiles.get(layer.settings.fileId);
+  if (!img) return null;
+  const b = layer.settings.bounds;
+  return b ? { ...img, x0: b[0], y0: b[1], x1: b[2], y1: b[3] } : img;
+}
+
 const otCache = new Map(); // clave de extensión -> grid de OpenTopography
 
 export class RasterView {
@@ -87,7 +95,7 @@ export class RasterView {
     const dpr = canvas.width / this.view.w;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const img = imageFiles.get(layer.settings.fileId);
+    const img = imageRect(layer);
     if (!img) return;
     const [ax, ay] = this.view.toScreen(img.x0, img.y1);
     const [bx, by] = this.view.toScreen(img.x1, img.y0);
@@ -100,7 +108,10 @@ export class RasterView {
   drawHillshade(st, layer, settled) {
     const v = this.view;
     const s = { ...defaultHillshadeSettings(), ...layer.settings };
-    const key = JSON.stringify([s, v.cx, v.cy, v.mpp, v.w, v.h]);
+    // El relieve se calcula una vez y se reutiliza: mover o hacer zoom solo
+    // desplaza/escala la imagen ya calculada. Se vuelve a calcular solo si
+    // cambian los ajustes de la capa o si el usuario pide «Redraw» (`force`).
+    const key = JSON.stringify(s);
     // vista provisional: escalar el último render
     if (st.rendered) {
       const r = st.rendered;
@@ -111,15 +122,16 @@ export class RasterView {
       st.canvas.style.width = `${r.w / r.res}px`;
       st.canvas.style.height = `${r.h / r.res}px`;
     }
-    if (key === st.key) return;
+    if (st.rendered && key === st.key && !st.force) return;
     clearTimeout(st.timer);
-    st.timer = setTimeout(() => this.computeHillshade(st, layer, s, key), settled ? 0 : 180);
+    st.timer = setTimeout(() => this.computeHillshade(st, layer, s, key), settled || st.force ? 0 : 180);
   }
 
   async computeHillshade(st, layer, s, key) {
     if (st.abort) st.abort.abort();
     const abort = new AbortController();
     st.abort = abort;
+    st.force = false;
     const v = this.view.snapshot();
     this.onStatus(layer.id, 'Calculando relieve…');
     try {
@@ -135,11 +147,49 @@ export class RasterView {
       this.drawHillshade(st, layer, false);
       this.onStatus(layer.id, '');
       this.onRendered?.(layer, st.rendered);
+      this.onStaleChange?.();
     } catch (err) {
       if (err.name === 'AbortError') return;
       this.onStatus(layer.id, `Relieve: ${err.message}`);
       st.key = key; // no reintentar en bucle
     }
+  }
+
+  /** Pide recalcular todos los relieves para la vista actual (botón «Redraw»). Devuelve cuántos. */
+  redrawHillshades(layers) {
+    let n = 0;
+    for (const l of layers) {
+      if (l.kind !== 'hillshade' || !l.visible) continue;
+      const st = this.state.get(l.id);
+      if (!st) continue;
+      st.force = true;
+      this.draw(l, { settled: true });
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * Estado del relieve en caché respecto de la vista: null = no hay relieves
+   * visibles; true = la imagen ya no cubre la vista o está a otra escala
+   * (conviene «Redraw»); false = al día.
+   */
+  hillshadeStale(layers) {
+    let any = false;
+    let stale = false;
+    const v = this.view;
+    for (const l of layers) {
+      if (l.kind !== 'hillshade' || !l.visible) continue;
+      any = true;
+      const r = this.state.get(l.id)?.rendered;
+      if (!r) continue;
+      const k = r.mpp / v.mpp;
+      const e = v.extent(0);
+      const cw = r.w / r.res; // tamaño de la imagen en celdas de vista
+      const covers = e.minX >= r.x0 - 1 && e.maxX <= r.x0 + cw * r.mpp + 1 && e.minY >= r.y0 - (r.h / r.res) * r.mpp - 1 && e.maxY <= r.y0 + 1;
+      if (k > 1.4 || k < 0.7 || !covers) stale = true;
+    }
+    return any ? stale : null;
   }
 
   /** Elevación bajo un punto UTM, si hay un relieve calculado. */

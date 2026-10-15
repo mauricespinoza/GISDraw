@@ -64,6 +64,8 @@ export function defaultLayout(doc, view) {
     legendTitle: 'Leyenda',
     texts: [], // cuadros de texto del layout: { id, x, y, text, fontSize (pt), align, boxWidth (mm), … }
     frame: null, // { x, y, w, h } del marco del mapa en mm; null = automático según la página
+    locks: {}, // elementos bloqueados (no se mueven ni escalan): { legend: true, … }
+    lockAll: false,
     scales: {}, // escala de cada elemento (alrededor de su esquina sup. izq.): { legend: { s, a: [x, y] }, … }
     offsets: {}, // desplazamiento en mm de cada elemento respecto de su lugar por defecto: { legend: [dx, dy], … }
     showTitle: true,
