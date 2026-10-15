@@ -1,7 +1,11 @@
 /**
  * Etiquetado de capas por atributos.
  *
- * Qué texto: un campo, o una plantilla con varios — "{codigo} ({edad} Ma)".
+ * Qué texto: un campo; varios campos unidos con un separador (los vacíos se
+ * omiten, así no quedan separadores sueltos); o una plantilla —
+ * "{codigo} ({edad:1} Ma)" — con decimales (`{campo:2}`), filtros
+ * (`{campo|upper}`: upper, lower, title) y alternativas si el campo está vacío
+ * (`{codigo||nombre}`).
  * Dónde:
  *  - puntos y textos: a la derecha y arriba del símbolo, a `offset` mm;
  *  - líneas: CURVADA a lo largo del trazo, centrada en el tramo más largo y
@@ -19,22 +23,73 @@
 
 import { esc } from './style.js';
 import { flattenShape, polylineLength } from './vector.js';
+import { fieldValue } from './symbology.js';
 
 /* --------------------------------------------------------- texto de la etiqueta */
 
+/** Separadores para unir varios campos: id → [etiqueta, función que une los valores]. */
+export const LABEL_SEPARATORS = {
+  space: ['Espacio', (v) => v.join(' ')],
+  dash: ['Guion ( – )', (v) => v.join(' – ')],
+  comma: ['Coma ( , )', (v) => v.join(', ')],
+  slash: ['Barra ( / )', (v) => v.join(' / ')],
+  pipe: ['Barra vertical ( | )', (v) => v.join(' | ')],
+  none: ['Sin separador', (v) => v.join('')],
+  paren: ['Paréntesis: a (b, c)', (v) => (v.length > 1 ? `${v[0]} (${v.slice(1).join(', ')})` : v.join(''))],
+};
+
+const FILTERS = {
+  upper: (s) => s.toUpperCase(),
+  lower: (s) => s.toLowerCase(),
+  title: (s) => s.toLowerCase().replace(/(^|[\s(/-])(\S)/g, (_, a, b) => a + b.toUpperCase()),
+  trim: (s) => s.trim(),
+};
+
+/** Valor de un campo como texto: los números sin ceros de sobra, con `dec` decimales si se piden. */
+function valueText(v, dec) {
+  if (v == null || v === '') return '';
+  if (dec != null && dec !== '' && Number.isFinite(Number(v))) return Number(v).toFixed(Number(dec));
+  if (typeof v === 'number') return String(+v.toPrecision(12));
+  return String(v);
+}
+
+/** Interior de `{…}`: alternativas `a||b`, cada una con `:decimales` y `|filtros`. */
+export function parsePlaceholder(inner) {
+  return String(inner)
+    .split('||')
+    .map((alt) => {
+      const [head, ...filters] = alt.split('|').map((x) => x.trim());
+      const m = /^(.*?)(?::(\d+))?$/.exec(head);
+      return { field: m[1].trim(), dec: m[2] ?? null, filters: filters.filter((f) => FILTERS[f]) };
+    });
+}
+
+export function evalTemplate(template, shape) {
+  return template.replace(/\{([^}]+)\}/g, (_, inner) => {
+    for (const a of parsePlaceholder(inner)) {
+      let t = valueText(fieldValue(shape, a.field), a.dec).trim();
+      if (!t) continue;
+      for (const f of a.filters) t = FILTERS[f](t);
+      return t;
+    }
+    return '';
+  });
+}
+
+/** ¿La configuración de etiquetas tiene de dónde sacar el texto? */
+export function hasLabelSource(cfg) {
+  return !!(cfg && ((cfg.template && cfg.template.trim()) || (cfg.fields && cfg.fields.length) || cfg.field));
+}
+
 export function labelText(shape, cfg) {
-  const attrs = shape.attrs || {};
   let t;
   if (cfg.template && cfg.template.trim()) {
-    t = cfg.template.replace(/\{([^}]+)\}/g, (_, k) => {
-      const key = k.trim();
-      if (key === '$nombre') return shape.name ?? '';
-      if (key === '$area_ha') return attrs.__area_ha ?? '';
-      const v = attrs[key];
-      return v == null ? '' : String(v);
-    });
+    t = evalTemplate(cfg.template, shape);
+  } else if (cfg.fields && cfg.fields.length) {
+    const vals = cfg.fields.map((f) => valueText(fieldValue(shape, f)).trim()).filter(Boolean);
+    t = (LABEL_SEPARATORS[cfg.sep] || LABEL_SEPARATORS.space)[1](vals);
   } else if (cfg.field) {
-    t = cfg.field === '$nombre' ? shape.name : attrs[cfg.field];
+    t = valueText(fieldValue(shape, cfg.field));
   }
   if (t == null) return '';
   t = String(t).trim();
@@ -208,7 +263,7 @@ export function renderLabels(layers, ctx) {
   for (let li = layers.length - 1; li >= 0; li--) {
     const layer = layers[li];
     const cfg = layer.labels;
-    if (!layer.visible || !cfg?.enabled || (!cfg.field && !cfg.template)) continue;
+    if (!layer.visible || !cfg?.enabled || !hasLabelSource(cfg)) continue;
     if (cfg.minScale && ctx.scale > cfg.minScale) continue;
     const fs = cfg.fontSize * ctx.ptToPx;
     // en pantalla, menos de 3 px no se lee; en el layout las unidades son mm

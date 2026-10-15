@@ -712,6 +712,30 @@ export function describeStyle(st, kind) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/**
+ * Renderizador de QGIS sobre un campo de atributos (Categorizado o Graduado),
+ * con un símbolo por clase. `spec`:
+ *   { mode: 'categorized'|'graduated', attr, numeric, classes: [{ key | lower+upper, label, style }],
+ *     other: { label, style } | null }
+ */
+export function fieldRendererXml(spec, kind) {
+  const attr = /^\w+$/.test(spec.attr) ? spec.attr : `&quot;${xmlEsc(spec.attr).replace(/&quot;/g, '')}&quot;`;
+  const all = [...spec.classes, ...(spec.other ? [spec.other] : [])];
+  const syms = all.map((c, i) => styleToSymbolXml(c.style, kind, String(i))).join('');
+  const source = `<source-symbol>${styleToSymbolXml(all[0].style, kind, '0')}</source-symbol>`;
+  if (spec.mode === 'graduated') {
+    const ranges = spec.classes
+      .map((c, i) => `<range render="true" symbol="${i}" lower="${c.lower}" upper="${c.upper}" label="${xmlEsc(c.label)}"/>`)
+      .join('');
+    return `<renderer-v2 type="graduatedSymbol" attr="${attr}" graduatedMethod="GraduatedColor" symbollevels="0" enableorderby="0" forceraster="0"><ranges>${ranges}</ranges><symbols>${syms}</symbols>${source}</renderer-v2>`;
+  }
+  const type = spec.numeric ? 'double' : 'string';
+  const cats = all
+    .map((c, i) => `<category render="true" symbol="${i}" value="${xmlEsc(c === spec.other ? '' : c.key)}" label="${xmlEsc(c.label)}" type="${c === spec.other ? 'string' : type}"/>`)
+    .join('');
+  return `<renderer-v2 type="categorizedSymbol" attr="${attr}" symbollevels="0" enableorderby="0" forceraster="0"><categories>${cats}</categories><symbols>${syms}</symbols>${source}</renderer-v2>`;
+}
+
 /** `<renderer-v2>` categorizado por `gd_style`: un símbolo por estilo del dibujo. */
 export function rendererXml(styles, kind, labels = []) {
   const cats = styles
@@ -721,20 +745,63 @@ export function rendererXml(styles, kind, labels = []) {
   return `<renderer-v2 type="categorizedSymbol" attr="gd_style" symbollevels="0" enableorderby="0" forceraster="0"><categories>${cats}</categories><symbols>${syms}</symbols></renderer-v2>`;
 }
 
+const SEP_QGIS = { space: ' ', dash: ' – ', comma: ', ', slash: ' / ', pipe: ' | ', none: '' };
+
+/** Referencia a un campo de GISDrawer en una expresión de QGIS. */
+function qgisField(f) {
+  if (f === '$nombre') return '"gd_name"';
+  if (f === '$tipo') return 'geometry_type($geometry)';
+  if (f === '$area_ha') return '($area / 10000)';
+  return `"${String(f).replace(/"/g, '')}"`;
+}
+
+/**
+ * Expresión de QGIS equivalente a la configuración de etiquetas de GISDrawer,
+ * o `{ field }` si basta un campo.
+ */
+export function labelExpression(cfg) {
+  const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
+  const text = (f) => `coalesce(to_string(${qgisField(f)}), '')`;
+  const wrap = (e) => (cfg.upper ? `upper(${e})` : e);
+  if (cfg.template && cfg.template.trim()) {
+    const parts = cfg.template
+      .split(/(\{[^}]+\})/)
+      .filter(Boolean)
+      .map((p) => {
+        const m = /^\{(.+)\}$/.exec(p);
+        if (!m) return q(p);
+        const alts = m[1].split('||').map((alt) => {
+          const [head, ...filters] = alt.split('|').map((x) => x.trim());
+          const mm = /^(.*?)(?::(\d+))?$/.exec(head);
+          let e = mm[2] != null ? `format_number(${qgisField(mm[1].trim())}, ${mm[2]})` : text(mm[1].trim());
+          for (const fl of filters) if (['upper', 'lower', 'title'].includes(fl)) e = `${fl}(${e})`;
+          return `nullif(${e}, '')`;
+        });
+        return alts.length > 1 ? `coalesce(${alts.join(', ')}, '')` : `coalesce(${alts[0]}, '')`;
+      });
+    return { expr: wrap(parts.join(' || ')) };
+  }
+  if (cfg.fields?.length) {
+    const sep = cfg.sep === 'paren' ? null : SEP_QGIS[cfg.sep] ?? ' ';
+    const list = `array_filter(array(${cfg.fields.map(text).join(', ')}), length(@element) > 0)`;
+    const e =
+      sep != null
+        ? `array_to_string(${list}, ${q(sep)})`
+        : `if(array_length(${list}) > 1, array_get(${list}, 0) || ' (' || array_to_string(array_slice(${list}, 1, -1), ', ') || ')', array_to_string(${list}, ''))`;
+    return { expr: wrap(e) };
+  }
+  if (cfg.field) return cfg.upper ? { expr: wrap(text(cfg.field)) } : { field: cfg.field === '$nombre' ? 'gd_name' : cfg.field };
+  return null;
+}
+
 /** `<labeling>` simple de QGIS para la configuración de etiquetas de una capa. */
 export function labelingXml(labelCfg, kind) {
-  if (!labelCfg?.enabled || !(labelCfg.field || labelCfg.template)) return '';
-  const field = labelCfg.template
-    ? labelCfg.template
-        .split(/(\{[^}]+\})/)
-        .filter(Boolean)
-        .map((p) => (/^\{.+\}$/.test(p) ? `"${p.slice(1, -1)}"` : `'${p.replace(/'/g, "''")}'`))
-        .join(' || ')
-    : labelCfg.field === '$nombre'
-      ? 'gd_name'
-      : labelCfg.field;
+  if (!labelCfg?.enabled) return '';
+  const le = labelExpression(labelCfg);
+  if (!le) return '';
+  const field = le.expr ?? le.field;
   return `<labeling type="simple"><settings calloutType="simple"><text-style fieldName="${xmlEsc(field)}" isExpression="${
-    labelCfg.template ? 1 : 0
+    le.expr ? 1 : 0
   }" fontFamily="${xmlEsc(String(labelCfg.fontFamily).split(',')[0].trim().replace(/'/g, ''))}" fontSize="${labelCfg.fontSize}" fontSizeUnit="Point" fontWeight="${
     labelCfg.fontWeight >= 700 ? 75 : 50
   }" fontItalic="${labelCfg.italic ? 1 : 0}" textColor="${rgba(labelCfg.color)}"><text-buffer bufferDraw="${labelCfg.halo ? 1 : 0}" bufferSize="${
@@ -748,11 +815,11 @@ export function labelingXml(labelCfg, kind) {
  * QML categorizado por el campo `gd_style`: cada estilo distinto del dibujo
  * es una categoría. Así QGIS abre el GeoPackage con el aspecto del dibujo.
  */
-export function buildCategorizedQML(styles, kind, labelCfg = null, labels = []) {
+export function buildCategorizedQML(styles, kind, labelCfg = null, labels = [], fieldSpec = null) {
   const labeling = labelingXml(labelCfg, kind);
   return `<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
 <qgis version="3.34.0" styleCategories="Symbology|Labeling" labelsEnabled="${labeling ? 1 : 0}">
-${rendererXml(styles, kind, labels)}
+${fieldSpec ? fieldRendererXml(fieldSpec, kind) : rendererXml(styles, kind, labels)}
 ${labeling}
 </qgis>`;
 }
@@ -769,6 +836,7 @@ const QGIS_GEOM = { point: ['Point', 'Point'], line: ['Line', 'LineString'], pol
  * pintado (de abajo hacia arriba, como `doc.layers`).
  */
 export function buildQLR(tables, { gpkgName, title = 'GISDrawer' } = {}) {
+  // `fieldSpec` (simbología por campo) manda sobre los estilos sueltos
   const ids = tables.map((t, i) => `${t.table}_${Date.now().toString(36)}${i}`);
   const src = (t) => `./${gpkgName}|layername=${t.table}`;
   // en QGIS el árbol va de arriba hacia abajo
@@ -790,7 +858,7 @@ export function buildQLR(tables, { gpkgName, title = 'GISDrawer' } = {}) {
       ${srs}
       <provider encoding="UTF-8">ogr</provider>
       <flags><Identifiable>1</Identifiable><Removable>1</Removable><Searchable>1</Searchable><Private>0</Private></flags>
-      ${rendererXml(t.styles, t.kind, t.labels)}
+      ${t.fieldSpec ? fieldRendererXml(t.fieldSpec, t.kind) : rendererXml(t.styles, t.kind, t.labels)}
       ${labeling}
       <blendMode>0</blendMode>
       <featureBlendMode>0</featureBlendMode>

@@ -1300,3 +1300,44 @@ body {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ------------------------------------------------ clases de simbología */
+
+.cls-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 38px;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.cls-row input[type='text'] {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 8px;
+  font: inherit;
+  background: #fff;
+}
+
+.cls-row input[type='color'] {
+  width: 44px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px;
+  background: #fff;
+}
+
+.cls-row .cnt {
+  text-align: right;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cls-row .lbl {
+  color: #475569;
+  font-size: 13px;
+}

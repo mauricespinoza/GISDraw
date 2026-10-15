@@ -35,7 +35,9 @@ export function defaultLabels() {
   return {
     enabled: false,
     field: '',
-    template: '', // si no está vacío manda sobre `field`: "{codigo} ({edad})"
+    fields: [], // varios campos unidos con `sep` (los vacíos se omiten); manda sobre `field`
+    sep: 'space',
+    template: '', // si no está vacío manda sobre todo lo anterior: "{codigo} ({edad:1} Ma)"
     fontFamily: 'Helvetica, Arial, sans-serif',
     fontSize: 8, // pt
     fontWeight: 400,
