@@ -58,6 +58,11 @@ export function defaultLayout(doc, view) {
     legend: true,
     legendWidth: 62,
     legendTitle: 'Leyenda',
+    frame: null, // { x, y, w, h } del marco del mapa en mm; null = automático según la página
+    offsets: {}, // desplazamiento en mm de cada elemento respecto de su lugar por defecto: { legend: [dx, dy], … }
+    showTitle: true,
+    showInfo: true,
+    previewDpi: 'auto', // 'auto' o dpi fijos de la vista previa
     symbolScale: 'auto', // auto | paper | map | custom
     symbolFactor: 1, // solo con 'custom'
     notes: '',
@@ -148,15 +153,43 @@ export function pageGeometry(L) {
   let [W, H] = PAGES[L.page] || PAGES.A4;
   if (L.orientation === 'landscape') [W, H] = [H, W];
   const m = L.margin;
-  const titleH = L.title ? 13 + (L.subtitle ? 5 : 0) : 0;
+  const titleH = L.title && L.showTitle !== false ? 13 + (L.subtitle ? 5 : 0) : 0;
   const side = L.legend ? L.legendWidth : 0;
   const pad = L.grid === 'none' ? 1 : L.grid === 'both' ? 9 : 7; // espacio para rótulos fuera del marco
   const zebra = L.zebra && L.grid !== 'none' ? 1.6 : 0;
-  const fx = m + pad + zebra;
-  const fy = m + titleH + pad + zebra;
-  const fw = W - 2 * m - side - 2 * (pad + zebra) - (side ? 4 : 0);
-  const fh = H - 2 * m - titleH - 2 * (pad + zebra);
-  return { W, H, fx, fy, fw, fh, side, titleH, pad, zebra };
+  let fx = m + pad + zebra;
+  let fy = m + titleH + pad + zebra;
+  let fw = W - 2 * m - side - 2 * (pad + zebra) - (side ? 4 : 0);
+  let fh = H - 2 * m - titleH - 2 * (pad + zebra);
+  // marco puesto a mano (arrastrando sus vértices): manda sobre el automático
+  const custom = !!(L.frame && L.frame.w > 0 && L.frame.h > 0);
+  if (custom) ({ x: fx, y: fy, w: fw, h: fh } = L.frame);
+  return { W, H, fx, fy, fw, fh, side, titleH, pad, zebra, custom };
+}
+
+/** Coordenada UTM bajo un punto de la página (mm). */
+export function pageToGround(L, g, px, py) {
+  const k = 1000 / L.scale;
+  return [L.center[0] + (px - (g.fx + g.fw / 2)) / k, L.center[1] - (py - (g.fy + g.fh / 2)) / k];
+}
+
+/** Escala «redonda» (1, 1,5, 2, 2,5, 3, 4, 5, 7,5 × 10ⁿ) igual o mayor que `raw`. */
+export function niceScale(raw) {
+  const e = 10 ** Math.floor(Math.log10(raw));
+  const f = raw / e;
+  const n = [1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10].find((x) => x >= f - 1e-9) || 10;
+  return Math.round(n * e);
+}
+
+/**
+ * Centro y escala para que la caja `bbox` (UTM) quepa en el marco, con un
+ * margen relativo. `round`: sube la escala a un valor redondo.
+ */
+export function fitFrame(L, g, bbox, { margin = 0.06, round = true } = {}) {
+  const w = Math.max(bbox.maxX - bbox.minX, 1);
+  const h = Math.max(bbox.maxY - bbox.minY, 1);
+  const raw = Math.max((w * 1000) / g.fw, (h * 1000) / g.fh) * (1 + 2 * margin);
+  return { center: [Math.round((bbox.minX + bbox.maxX) / 2), Math.round((bbox.minY + bbox.maxY) / 2)], scale: round ? niceScale(raw) : Math.ceil(raw) };
 }
 
 /** Extensión UTM del marco. */
@@ -186,6 +219,13 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
   const f = symbolFactor(doc.refScale, L);
   // Cada parte es una capa de la lámina (y una capa de Illustrator al exportar).
   const parts = [];
+  // el contenido del mapa va recortado al marco, con un grupo `lv` que la vista previa desplaza al mover el mapa
+  const mapContent = (inner) => `<g clip-path="url(#frame)"><g class="lv">${inner}</g></g>`;
+  const off = (name) => L.offsets?.[name] || [0, 0];
+  // un elemento del layout (movible y eliminable): lleva su desplazamiento propio
+  const element = (el, name, svg) =>
+    svg &&
+    parts.push({ name, el, svg: `<g class="eo" transform="translate(${r2(off(el)[0])} ${r2(off(el)[1])})">${svg}</g>` });
   const part = (name, svg, extra = {}) => svg && parts.push({ name, svg, ...extra });
   const frameRect = `<rect x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" fill="#ffffff"/>`;
   part('Fondo', `<rect width="${g.W}" height="${g.H}" fill="#fff"/>${frameRect}`, { locked: true });
@@ -196,18 +236,18 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
     if (!l.visible) return;
     if (l.kind === 'vector') {
       const ctx = { P, mmToPx: f, ptToPx: 0.352778 * f, viewW: g.W, viewH: g.H, defs, uid: `L${i}_`, flatTol: 0.05 };
-      part(l.name, `<g clip-path="url(#frame)">${l.items.map((sh) => shapeToSvg(sh, ctx)).join('')}</g>`, { opacity: l.opacity, blend: l.blend, locked: l.locked });
+      part(l.name, mapContent(l.items.map((sh) => shapeToSvg(sh, ctx)).join('')), { opacity: l.opacity, blend: l.blend, locked: l.locked, map: true });
       vectors.push(l);
     } else {
       const r = rasters.find((x) => x.index === i);
       if (r) {
-        part(r.name || l.name, `<image x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" preserveAspectRatio="none" href="${r.href}"/>`, { opacity: r.opacity ?? 1, blend: r.blend, locked: l.locked });
+        part(r.name || l.name, mapContent(`<image x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" preserveAspectRatio="none" href="${r.href}"/>`), { opacity: r.opacity ?? 1, blend: r.blend, locked: l.locked, map: true });
       }
     }
   });
   const lctx = { P, mmToPx: f, ptToPx: 0.352778 * f, viewW: g.W, viewH: g.H, mpp: 1 / k, scale: L.scale, defs: [], uid: 'lbl_', minFont: 0.8 };
   const labels = renderLabels(vectors, lctx);
-  if (labels) part('Etiquetas', `<g clip-path="url(#frame)">${labels}</g>`);
+  if (labels) part('Etiquetas', mapContent(labels), { map: true });
 
   // ---- grillas
   part('Grilla y coordenadas', gridSvg(L, g, ext, P, defs, font));
@@ -216,34 +256,33 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
   part('Marco', `<rect x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" fill="none" stroke="#000" stroke-width="0.35"/>`);
 
   // ---- título
-  if (L.title) {
-    part(
+  if (L.title && L.showTitle !== false) {
+    element(
+      'title',
       'Título',
       `<text x="${r2(L.margin)}" y="${r2(L.margin + 8)}" font-family="${font}" font-size="${r2(16 * 0.352778 * 1.6)}" font-weight="700">${esc(L.title)}</text>` +
         (L.subtitle ? `<text x="${r2(L.margin)}" y="${r2(L.margin + 13.5)}" font-family="${font}" font-size="3.6" fill="#374151">${esc(L.subtitle)}</text>` : ''),
     );
   }
 
-  // ---- columna lateral: leyenda, norte, escala, datos
+  // ---- leyenda, norte, escala y datos: columna lateral, o dentro del marco si no hay leyenda
   const sideX = g.W - L.margin - g.side;
   const centerRot = northRotation(L.center[0], L.center[1]);
+  const info = (x, y, w) => (L.showInfo !== false ? infoSvg(L, x, y, w, centerRot, attribution, font) : '');
   if (g.side) {
-    if (L.legend) part('Leyenda', legendSvg(doc, vectors, L, sideX, g.fy, g.side, g.fy + g.fh - 52, font, f).svg);
+    if (L.legend) element('legend', 'Leyenda', legendSvg(doc, vectors, L, sideX, g.fy, g.side, g.fy + g.fh - 52, font, f).svg);
     const blockY = g.fy + g.fh - 48;
-    if (L.north) part('Norte', northArrowSvg(sideX + 10, blockY + 12, centerRot, font));
-    if (L.scalebar) part('Escala', scaleBarSvg(L, sideX + 22, blockY + 6, g.side - 24, font));
-    part('Datos', infoSvg(L, sideX, blockY + 26, g.side, centerRot, attribution, font));
+    if (L.north) element('north', 'Norte', northArrowSvg(sideX + 10, blockY + 12, centerRot, font));
+    if (L.scalebar) element('scalebar', 'Escala', scaleBarSvg(L, sideX + 22, blockY + 6, g.side - 24, font));
+    element('info', 'Datos', info(sideX, blockY + 26, g.side));
   } else {
-    // sin columna: norte y escala dentro del marco, abajo
     const bx = g.fx + 4;
     const by = g.fy + g.fh - 22;
-    part(
-      'Norte y escala',
-      `<rect x="${r2(bx - 2)}" y="${r2(by - 2)}" width="${r2(Math.min(110, g.fw - 8))}" height="20" fill="#fff" fill-opacity="0.85" stroke="#000" stroke-width="0.2"/>` +
-        (L.north ? northArrowSvg(bx + 7, by + 8, centerRot, font, 0.8) : '') +
-        (L.scalebar ? scaleBarSvg(L, bx + 16, by + 3, Math.min(80, g.fw - 30), font) : ''),
-    );
-    part('Datos', `<text x="${r2(g.fx)}" y="${r2(g.H - L.margin + 4)}" font-family="${font}" font-size="2.2" fill="#374151">${esc(crsNote(centerRot))}${attribution ? ` · ${esc(attribution)}` : ''}</text>`);
+    const plate = (x, y, w, h) => `<rect x="${r2(x)}" y="${r2(y)}" width="${r2(w)}" height="${r2(h)}" fill="#fff" fill-opacity="0.85" stroke="#000" stroke-width="0.2"/>`;
+    if (L.north) element('north', 'Norte', plate(bx - 2, by - 2, 16, 20) + northArrowSvg(bx + 7, by + 8, centerRot, font, 0.8));
+    const sw = Math.min(80, g.fw - 30);
+    if (L.scalebar) element('scalebar', 'Escala', plate(bx + 14, by - 2, sw + 12, 20) + scaleBarSvg(L, bx + 20, by + 3, sw, font));
+    element('info', 'Datos', L.showInfo !== false ? `<text x="${r2(g.fx)}" y="${r2(g.H - L.margin + 4)}" font-family="${font}" font-size="2.2" fill="#374151">${esc(crsNote(centerRot))}${attribution ? ` · ${esc(attribution)}` : ''}</text>` : '');
   }
 
   // Un grupo de primer nivel por parte, con id y data-name como los escribe
@@ -251,7 +290,7 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
   const used = new Set(['frame']);
   for (const p of parts) p.id = xmlId(p.name, used);
   const group = (p) =>
-    `<g id="${p.id}" data-name="${esc(p.name)}"${p.opacity != null && p.opacity < 1 ? ` opacity="${p.opacity}"` : ''}${p.blend && p.blend !== 'normal' ? ` style="mix-blend-mode:${p.blend}"` : ''}>${p.svg}</g>`;
+    `<g id="${p.id}" data-name="${esc(p.name)}"${p.el ? ` data-el="${p.el}"` : ''}${p.opacity != null && p.opacity < 1 ? ` opacity="${p.opacity}"` : ''}${p.blend && p.blend !== 'normal' ? ` style="mix-blend-mode:${p.blend}"` : ''}>${p.svg}</g>`;
   return {
     svg: `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${g.W}mm" height="${g.H}mm" viewBox="0 0 ${g.W} ${g.H}"><defs>${defs.join('')}</defs>${parts.map(group).join('')}</svg>`,
     parts,

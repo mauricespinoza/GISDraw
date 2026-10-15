@@ -276,7 +276,27 @@ deja la imagen como capa; también se descarga como GeoTIFF.
 
 ## Layout de impresión
 
-Pestaña **Layout**: **tamaño de símbolos y textos** armonizado con la escala
+Pestaña **Layout**, interactiva: en la vista previa se **arrastra dentro del
+marco para mover el mapa**, la **rueda hace zoom** y los **ocho vértices del
+marco** cambian su tamaño (el mapa no se desplaza respecto de la hoja: el marco
+recorta o descubre más terreno). Título, leyenda, norte, escala y datos se
+**mueven arrastrándolos** (flechas: 0,5 mm; con Mayús, 5 mm) y se **eliminan**
+con Supr o con la ✕ roja de su selección (se reactivan en el panel). El botón
+**Encuadrar capas vectoriales** ajusta centro y escala (redondeada) para que
+quepa todo lo dibujado en capas vectoriales visibles —no rasters ni mapas en
+línea—. «Marco y elementos automáticos» devuelve todo a su lugar.
+
+**Resolución del relieve en la vista previa**: antes la vista previa se
+calculaba fija a 72 dpi —menos que los 96 de la pantalla de trabajo, y la
+página se amplía para llenar el área— y se forzaba la resolución de la capa a
+×1, de modo que el relieve se veía mucho más borroso que en la vista de capas.
+Ahora la vista previa sigue a la pantalla (los píxeles que ocupa la página por
+la densidad de píxeles del equipo, entre 96 y 250 dpi; también se fija a mano en
+Exportar → Vista previa) y respeta la resolución de la capa. A escalas
+pequeñas el relieve tiene menos detalle por naturaleza: el mismo número de
+píxeles cubre más terreno, y Terrarium parte de ~30 m en tierra.
+
+**Tamaño de símbolos y textos** armonizado con la escala
 de la lámina (los tamaños del estilo están medidos a la escala de referencia
 del dibujo; en «Automático» se escalan por la raíz de la razón de escalas,
 acotada a ×0,5–×2, para que pasar a otra escala no los cambie de golpe; hay
