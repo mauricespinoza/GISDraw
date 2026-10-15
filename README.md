@@ -59,7 +59,7 @@ node test/sw.test.mjs        # todo módulo está en el precache offline
 |---|---|---|
 | Dibujar / usar la herramienta | **Apple Pencil** | botón izquierdo |
 | Desplazar | un dedo | botón central, barra espaciadora + arrastre, trackpad con dos dedos |
-| Zoom | pellizco | **rueda del mouse**, pellizco del trackpad, Ctrl + / − |
+| Zoom | pellizco | **rueda del mouse** (con cualquier escalado de pantalla de Windows), pellizco del trackpad, Ctrl + / − |
 | Seleccionar sin cambiar de herramienta | toque corto con el dedo | — |
 | Terminar línea | doble toque con el lápiz, botón «Terminar» | Enter, doble clic, botón derecho |
 | Cerrar polígono | tocar el primer vértice, botón «Cerrar forma» | clic en el primer vértice |
@@ -250,7 +250,12 @@ deja la imagen como capa; también se descarga como GeoTIFF.
 
 ## Layout de impresión
 
-Pestaña **Layout**: página A4–A0, carta u oficio, horizontal o vertical,
+Pestaña **Layout**: **tamaño de símbolos y textos** armonizado con la escala
+de la lámina (los tamaños del estilo están medidos a la escala de referencia
+del dibujo; en «Automático» se escalan por la raíz de la razón de escalas,
+acotada a ×0,5–×2, para que pasar a otra escala no los cambie de golpe; hay
+también «fijo en papel», «como en pantalla» y factor manual, y un botón para
+adoptar la escala de la lámina como escala de referencia). Página A4–A0, carta u oficio, horizontal o vertical,
 márgenes; escala exacta y centro; **grilla UTM** (cruces, líneas o marcas) y/o
 **graticulado geográfico** en grados-minutos con **borde de cebra**; **norte
 verdadero** girado por la convergencia de meridianos del centro; **escala
@@ -269,6 +274,8 @@ entiende `mix-blend-mode`).
 | QML / QLR (QGIS) | símbolo único, categorizado, graduado y por reglas; símbolos de varias capas (relleno + contorno, línea con borde, flechas, degradados, marcadores); etiquetado simple | dentro del GeoPackage; **.qlr + GeoPackage** (Archivo → Exportar → Simbología QGIS); .qml de la capa activa |
 | GeoJSON | WGS84 o con `crs` | WGS84 (RFC 7946) o UTM 19S |
 | GeoTIFF | elevación (una banda) o imagen RGB(A), en su sistema | relieve calculado, imagen georreferenciada |
+| **SVG / Illustrator** | archivo .svg (una capa por capa de primer nivel) y **pegar con Ctrl+V** lo copiado en Illustrator | **lámina con un grupo por capa** (.svg) y **script de Illustrator (.jsx) que crea una capa real por capa**; copiar (Ctrl+C) deja SVG en puntos para pegar en Illustrator |
+| **FieldDraw** | proyecto `.fdproj.json`, paquete `.fdproj.zip` o GeoJSON exportado, con simbología y georreferencia | — |
 | ASCII grid | elevación | — |
 | Proyecto `.gisdrawer` | sí | sí (además se guarda solo en el navegador) |
 
@@ -280,6 +287,11 @@ orden del dibujo, en EPSG:32719, con su simbología categorizada por estilo
 o trama), sus etiquetas, y los textos del dibujo como etiquetas del campo
 `gd_text`.
 
+**Discordancia en el QML**: la línea ondulada sale como un `MarkerLine` que
+repite un ciclo de la onda (SVG incrustado, con su halo) cada longitud de
+onda, en la misma fase que la dibuja GISDrawer. Al leer un QML, GISDrawer
+reconoce sus propias ondas y ornamentos y los recupera como estilo editable.
+
 **Ornamentos y tramas en el QML**: los ornamentos de falla y pliegue salen
 como una capa de símbolo `MarkerLine` (se repite a lo largo de la traza, girado
 con ella y desde media separación, como en GISDrawer) con un `SvgMarker` que
@@ -288,6 +300,37 @@ flechas de pliegue, con su halo y el lado izquierdo/derecho— incrustado en el
 propio QML (`base64:`), sin archivos aparte. Las tramas de litología salen
 como un `SVGFill` sobre el relleno de color, con su color, opacidad y tamaño
 (mm). Todo se puede seguir editando en QGIS.
+
+**Illustrator, ida y vuelta**:
+
+- *Pegar en GISDrawer lo copiado en Illustrator*: en Illustrator,
+  Preferencias → Gestión del portapapeles → «Copiar como: código SVG».
+  Ctrl+V en GISDrawer lo convierte en dibujo editable con nodos Bézier,
+  rellenos y trazos (también por clases CSS), grosores, segmentados, extremos
+  y esquinas, opacidades, degradados, polígonos con huecos, grupos, máscaras
+  de recorte y textos (fuente, tamaño, negrita, cursiva, rotación, varias
+  líneas). Las medidas se conservan en el papel: 1 pt de Illustrator es 1 pt
+  a la escala de referencia, y el dibujo cae centrado en la vista.
+- *Copiar en GISDrawer y pegar en Illustrator*: Ctrl+C deja en el
+  portapapeles un SVG en puntos con la simbología ya dibujada (ornamentos,
+  tramas, halos, ondas). Si se vuelve a pegar en GISDrawer, vuelve exacto y
+  en su lugar georreferenciado (lleva las formas originales dentro).
+- *Exportar con capas*: Layout → «Illustrator con capas (.jsx)». En
+  Illustrator, Archivo → Scripts → Otro script… y elegir el archivo: crea un
+  documento del tamaño de la lámina con una capa de Illustrator por cada capa
+  del mapa (con su nombre, opacidad, modo de fusión y bloqueo) más
+  Etiquetas, Grilla y coordenadas, Marco, Título, Leyenda, Norte, Escala y
+  Datos. El SVG de la lámina también trae un grupo con `id` y `data-name`
+  por capa, como los escribe Illustrator.
+
+**FieldDraw**: Archivo → Importar → Proyecto FieldDraw. Crea las capas
+Unidades, Trazas, Medidas y Puntos de control, en UTM 19S, con los colores y
+grosores de FieldDraw (los que el usuario cambió en su módulo de simbología
+incluidos), la certeza como segmentado, el halo blanco, los ornamentos con su
+tamaño, separación y lado (el «flip» de cada falla), las unidades con su color
+y código (etiquetadas por código) y las medidas de rumbo y manteo con su
+símbolo orientado al norte verdadero. Todas las propiedades quedan como
+atributos.
 
 Sistemas reconocidos sin pedir nada: WGS84, UTM WGS84 (todas las zonas),
 PSAD56 / UTM 17–20S, SAD69 / UTM 18–25S, SIRGAS 2000 / UTM 17–25S, Web
@@ -324,11 +367,11 @@ svg2pdf.
 
 - Edición topológica en vivo (mover un vértice compartido y que se muevan
   los dos polígonos); hoy se confirma después con «Confirmar topología».
-- Simbología QGIS: la **línea ondulada** (discordancia) sigue sin traducirse
-  (QGIS ve una línea recta); GISDrawer recupera todo al reimportar su propio
-  GeoPackage, porque guarda el estilo completo en `gd_style_json`. No se ha
-  probado la simbología exportada en todas las versiones de QGIS: si algún
-  símbolo no aparece, avisar con la versión.
+- No se ha probado la simbología exportada en todas las versiones de QGIS ni
+  el script de Illustrator en todas las versiones de Illustrator: si algo no
+  aparece, avisar con la versión.
+- Pegar desde Illustrator necesita que Illustrator copie como código SVG (ver
+  abajo); los rellenos de motivo (pattern) de Illustrator llegan como gris.
 - El contorno "hacia afuera" se exporta a QGIS como línea desplazada medio
   grosor; conviene comprobar el sentido del desplazamiento en QGIS con anillos
   de orientación mixta.

@@ -434,22 +434,39 @@ export class Editor {
   onWheel(e) {
     e.preventDefault();
     const sp = this.screenPoint(e);
-    // Rueda del ratón = zoom (ajuste «Rueda: desplazar» la deja para mover el
-    // mapa, y entonces Ctrl/Alt hacen zoom). Un trackpad se reconoce porque
-    // entrega deltaX o valores fraccionarios: sus dos dedos siempre desplazan
-    // y su pellizco (Ctrl) hace zoom.
-    const now = performance.now();
-    if (e.deltaMode === 0 && !e.ctrlKey && (e.deltaX !== 0 || !Number.isInteger(e.deltaY))) this.lastTrackpad = now;
-    const trackpad = now - (this.lastTrackpad || -1e9) < 600;
-    const wheelZooms = this.settings.wheelMode !== 'pan';
-    const zoomy = e.ctrlKey || e.metaKey || e.altKey || (wheelZooms && !trackpad);
+    // Rueda del ratón = zoom (el ajuste «Rueda: desplazar» la deja para mover
+    // el mapa, y entonces Ctrl/Alt hacen zoom). El trackpad desplaza con dos
+    // dedos y hace zoom con el pellizco (llega con Ctrl).
+    const zoomy = e.ctrlKey || e.metaKey || e.altKey || (this.settings.wheelMode !== 'pan' && !this.isTrackpadWheel(e));
     if (zoomy) {
-      const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+      let dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+      // muesca de rueda: el mismo paso de zoom con cualquier escalado de pantalla
+      if (!e.ctrlKey && typeof e.wheelDeltaY === 'number' && e.wheelDeltaY && e.wheelDeltaY % 120 === 0) dy = -(e.wheelDeltaY / 120) * 100;
       const k = Math.exp(Math.max(-150, Math.min(150, dy)) * (e.ctrlKey ? 0.01 : 0.0022));
       this.view.zoomAt(k, sp[0], sp[1]);
     } else {
       this.view.panBy(-e.deltaX, -e.deltaY);
     }
+  }
+
+  /**
+   * ¿Esta rueda es un trackpad? La señal fiable es `wheelDeltaY` (Chrome,
+   * Edge, Safari): una muesca de rueda vale siempre un múltiplo de 120, sea
+   * cual sea el escalado de pantalla de Windows. `deltaY`, en cambio, se
+   * escala (con 150 % una muesca da 66,67 px, fraccionario): por eso antes la
+   * rueda se tomaba por trackpad y desplazaba en vez de hacer zoom. Firefox no
+   * tiene `wheelDeltaY` pero entrega la rueda en líneas (`deltaMode` 1).
+   */
+  isTrackpadWheel(e) {
+    const now = performance.now();
+    let pad;
+    if (e.deltaX !== 0 && Math.abs(e.deltaX) > Math.abs(e.deltaY) / 4) pad = true;
+    else if (e.deltaMode !== 0) pad = false;
+    else if (typeof e.wheelDeltaY === 'number' && e.wheelDeltaY !== 0) pad = e.wheelDeltaY % 120 !== 0;
+    else pad = !Number.isInteger(e.deltaY) && Math.abs(e.deltaY) < 10;
+    // un gesto de trackpad dura varios eventos: no alternar a mitad de camino
+    if (pad) this.lastTrackpad = now;
+    return pad || now - (this.lastTrackpad || -1e9) < 250;
   }
 
   /* ---------------------------------------------------------- herramientas */

@@ -22,6 +22,7 @@ import { esc, shapeToSvg } from '../style.js';
 import { renderLabels, labelText } from '../labels.js';
 import { lonLatBBox } from '../raster/dem.js';
 import { makeNode, makePath, makePoint, walkShapes } from '../vector.js';
+import { xmlId } from '../io/illustrator.js';
 
 export const PAGES = {
   A4: [210, 297],
@@ -56,6 +57,8 @@ export function defaultLayout(doc, view) {
     legend: true,
     legendWidth: 62,
     legendTitle: 'Leyenda',
+    symbolScale: 'auto', // auto | paper | map | custom
+    symbolFactor: 1, // solo con 'custom'
     notes: '',
     fontFamily: 'Helvetica, Arial, sans-serif',
     dpi: 200,
@@ -102,6 +105,42 @@ export function scaleBarSpec(scale, maxMm) {
 const r2 = (v) => Math.round(v * 100) / 100;
 const fmtThousands = (v) => Math.round(v).toLocaleString('es-CL').replace(/\./g, ' ');
 
+/* --------------------------------------------------- tamaño de los símbolos */
+
+export const SYMBOL_SCALES = {
+  auto: 'Automático (armonizado)',
+  map: 'Como en pantalla a esa escala',
+  paper: 'Fijo en papel (mm y pt del estilo)',
+  custom: 'Factor manual',
+};
+
+/**
+ * Factor que multiplica grosores, ornamentos, tramas y textos en la lámina.
+ *
+ * Los tamaños del estilo están en mm y pt de papel A LA ESCALA DE REFERENCIA
+ * del documento. Si la lámina va a otra escala hay dos extremos: dejarlos
+ * fijos en papel (`paper`: la geometría se achica o agranda y los símbolos
+ * no, lo que a una escala mucho menor amontona el dibujo) o escalarlos con el
+ * mapa (`map`: se ve igual que en pantalla a esa escala, pero a una escala
+ * mucho menor los textos se vuelven ilegibles). `auto` toma el punto medio
+ * geométrico —la raíz de la razón de escalas— y lo acota a ×0,5…×2: a 1:50 000
+ * un dibujo hecho a 1:25 000 sale con los símbolos al 71 % y no al 100 % ni
+ * al 50 %.
+ */
+export function symbolFactor(refScale, L) {
+  const ratio = refScale > 0 && L.scale > 0 ? refScale / L.scale : 1;
+  switch (L.symbolScale) {
+    case 'paper':
+      return 1;
+    case 'map':
+      return ratio;
+    case 'custom':
+      return L.symbolFactor > 0 ? L.symbolFactor : 1;
+    default:
+      return Math.min(2, Math.max(0.5, Math.sqrt(ratio)));
+  }
+}
+
 /* --------------------------------------------------------- geometría de página */
 
 export function pageGeometry(L) {
@@ -142,72 +181,83 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
   const P = (x, y) => [g.fx + (x - ext.minX) * k, g.fy + (ext.maxY - y) * k];
   const font = esc(L.fontFamily);
   const defs = [`<clipPath id="frame"><rect x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}"/></clipPath>`];
-  const body = [];
+
+  const f = symbolFactor(doc.refScale, L);
+  // Cada parte es una capa de la lámina (y una capa de Illustrator al exportar).
+  const parts = [];
+  const part = (name, svg, extra = {}) => svg && parts.push({ name, svg, ...extra });
+  const frameRect = `<rect x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" fill="#ffffff"/>`;
+  part('Fondo', `<rect width="${g.W}" height="${g.H}" fill="#fff"/>${frameRect}`, { locked: true });
 
   // ---- contenido del mapa, capa por capa
-  const mapParts = [];
   const vectors = [];
   doc.layers.forEach((l, i) => {
     if (!l.visible) return;
     if (l.kind === 'vector') {
-      const ctx = { P, mmToPx: 1, ptToPx: 0.352778, viewW: g.W, viewH: g.H, defs, uid: `L${i}_`, flatTol: 0.05 };
-      const op = l.opacity < 1 ? ` opacity="${l.opacity}"` : '';
-      const bl = l.blend && l.blend !== 'normal' ? ` style="mix-blend-mode:${l.blend}"` : '';
-      mapParts.push(`<g${op}${bl}>${l.items.map((s) => shapeToSvg(s, ctx)).join('')}</g>`);
+      const ctx = { P, mmToPx: f, ptToPx: 0.352778 * f, viewW: g.W, viewH: g.H, defs, uid: `L${i}_`, flatTol: 0.05 };
+      part(l.name, `<g clip-path="url(#frame)">${l.items.map((sh) => shapeToSvg(sh, ctx)).join('')}</g>`, { opacity: l.opacity, blend: l.blend, locked: l.locked });
       vectors.push(l);
     } else {
       const r = rasters.find((x) => x.index === i);
       if (r) {
-        const op = r.opacity != null && r.opacity < 1 ? ` opacity="${r.opacity}"` : '';
-        const bl = r.blend && r.blend !== 'normal' ? ` style="mix-blend-mode:${r.blend}"` : '';
-        mapParts.push(`<image x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" preserveAspectRatio="none" href="${r.href}"${op}${bl}/>`);
+        part(r.name || l.name, `<image x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" preserveAspectRatio="none" href="${r.href}"/>`, { opacity: r.opacity ?? 1, blend: r.blend, locked: l.locked });
       }
     }
   });
-  const lctx = { P, mmToPx: 1, ptToPx: 0.352778, viewW: g.W, viewH: g.H, mpp: 1 / k, scale: L.scale, defs: [], uid: 'lbl_', minFont: 0.8 };
+  const lctx = { P, mmToPx: f, ptToPx: 0.352778 * f, viewW: g.W, viewH: g.H, mpp: 1 / k, scale: L.scale, defs: [], uid: 'lbl_', minFont: 0.8 };
   const labels = renderLabels(vectors, lctx);
-  body.push(`<g clip-path="url(#frame)"><rect x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" fill="#ffffff"/>${mapParts.join('')}${labels}</g>`);
+  if (labels) part('Etiquetas', `<g clip-path="url(#frame)">${labels}</g>`);
 
   // ---- grillas
-  body.push(gridSvg(L, g, ext, P, defs, font));
+  part('Grilla y coordenadas', gridSvg(L, g, ext, P, defs, font));
 
   // ---- marco
-  body.push(`<rect x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" fill="none" stroke="#000" stroke-width="0.35"/>`);
+  part('Marco', `<rect x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" fill="none" stroke="#000" stroke-width="0.35"/>`);
 
   // ---- título
   if (L.title) {
-    body.push(`<text x="${r2(L.margin)}" y="${r2(L.margin + 8)}" font-family="${font}" font-size="${r2(16 * 0.352778 * 1.6)}" font-weight="700">${esc(L.title)}</text>`);
-    if (L.subtitle) body.push(`<text x="${r2(L.margin)}" y="${r2(L.margin + 13.5)}" font-family="${font}" font-size="3.6" fill="#374151">${esc(L.subtitle)}</text>`);
+    part(
+      'Título',
+      `<text x="${r2(L.margin)}" y="${r2(L.margin + 8)}" font-family="${font}" font-size="${r2(16 * 0.352778 * 1.6)}" font-weight="700">${esc(L.title)}</text>` +
+        (L.subtitle ? `<text x="${r2(L.margin)}" y="${r2(L.margin + 13.5)}" font-family="${font}" font-size="3.6" fill="#374151">${esc(L.subtitle)}</text>` : ''),
+    );
   }
 
   // ---- columna lateral: leyenda, norte, escala, datos
   const sideX = g.W - L.margin - g.side;
   const centerRot = northRotation(L.center[0], L.center[1]);
   if (g.side) {
-    let y = g.fy;
-    if (L.legend) {
-      const leg = legendSvg(doc, vectors, L, sideX, y, g.side, g.fy + g.fh - 52, font);
-      body.push(leg.svg);
-      y = leg.bottom;
-    }
+    if (L.legend) part('Leyenda', legendSvg(doc, vectors, L, sideX, g.fy, g.side, g.fy + g.fh - 52, font, f).svg);
     const blockY = g.fy + g.fh - 48;
-    if (L.north) body.push(northArrowSvg(sideX + 10, blockY + 12, centerRot, font));
-    if (L.scalebar) body.push(scaleBarSvg(L, sideX + 22, blockY + 6, g.side - 24, font));
-    body.push(infoSvg(L, sideX, blockY + 26, g.side, centerRot, attribution, font));
+    if (L.north) part('Norte', northArrowSvg(sideX + 10, blockY + 12, centerRot, font));
+    if (L.scalebar) part('Escala', scaleBarSvg(L, sideX + 22, blockY + 6, g.side - 24, font));
+    part('Datos', infoSvg(L, sideX, blockY + 26, g.side, centerRot, attribution, font));
   } else {
     // sin columna: norte y escala dentro del marco, abajo
     const bx = g.fx + 4;
     const by = g.fy + g.fh - 22;
-    body.push(`<rect x="${r2(bx - 2)}" y="${r2(by - 2)}" width="${r2(Math.min(110, g.fw - 8))}" height="20" fill="#fff" fill-opacity="0.85" stroke="#000" stroke-width="0.2"/>`);
-    if (L.north) body.push(northArrowSvg(bx + 7, by + 8, centerRot, font, 0.8));
-    if (L.scalebar) body.push(scaleBarSvg(L, bx + 16, by + 3, Math.min(80, g.fw - 30), font));
-    body.push(`<text x="${r2(g.fx)}" y="${r2(g.H - L.margin + 4)}" font-family="${font}" font-size="2.2" fill="#374151">${esc(crsNote(centerRot))}${attribution ? ` · ${esc(attribution)}` : ''}</text>`);
+    part(
+      'Norte y escala',
+      `<rect x="${r2(bx - 2)}" y="${r2(by - 2)}" width="${r2(Math.min(110, g.fw - 8))}" height="20" fill="#fff" fill-opacity="0.85" stroke="#000" stroke-width="0.2"/>` +
+        (L.north ? northArrowSvg(bx + 7, by + 8, centerRot, font, 0.8) : '') +
+        (L.scalebar ? scaleBarSvg(L, bx + 16, by + 3, Math.min(80, g.fw - 30), font) : ''),
+    );
+    part('Datos', `<text x="${r2(g.fx)}" y="${r2(g.H - L.margin + 4)}" font-family="${font}" font-size="2.2" fill="#374151">${esc(crsNote(centerRot))}${attribution ? ` · ${esc(attribution)}` : ''}</text>`);
   }
 
+  // Un grupo de primer nivel por parte, con id y data-name como los escribe
+  // Illustrator: así el SVG se abre con la estructura de capas reconocible.
+  const used = new Set(['frame']);
+  for (const p of parts) p.id = xmlId(p.name, used);
+  const group = (p) =>
+    `<g id="${p.id}" data-name="${esc(p.name)}"${p.opacity != null && p.opacity < 1 ? ` opacity="${p.opacity}"` : ''}${p.blend && p.blend !== 'normal' ? ` style="mix-blend-mode:${p.blend}"` : ''}>${p.svg}</g>`;
   return {
-    svg: `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${g.W}mm" height="${g.H}mm" viewBox="0 0 ${g.W} ${g.H}"><defs>${defs.join('')}</defs><rect width="${g.W}" height="${g.H}" fill="#fff"/>${body.join('')}</svg>`,
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${g.W}mm" height="${g.H}mm" viewBox="0 0 ${g.W} ${g.H}"><defs>${defs.join('')}</defs>${parts.map(group).join('')}</svg>`,
+    parts,
+    defs: defs.join(''),
     geometry: g,
     extent: ext,
+    symbolFactor: f,
   };
 }
 
@@ -465,10 +515,11 @@ export function legendEntries(vectors) {
   return groups;
 }
 
-function legendSvg(doc, vectors, L, x, y, w, maxY, font) {
+function legendSvg(doc, vectors, L, x, y, w, maxY, font, f = 1) {
   const out = [`<text x="${r2(x)}" y="${r2(y + 4)}" font-family="${font}" font-size="3.6" font-weight="700">${esc(L.legendTitle || 'Leyenda')}</text>`];
   let yy = y + 9;
-  const ctx = { P: (a, b) => [a, b], mmToPx: 1, ptToPx: 0.352778, viewW: 1000, viewH: 1000, defs: [], uid: 'leg_', flatTol: 0.05 };
+  // las muestras llevan el mismo factor que el mapa, para que se lean igual
+  const ctx = { P: (a, b) => [a, b], mmToPx: f, ptToPx: 0.352778 * f, viewW: 1000, viewH: 1000, defs: [], uid: 'leg_', flatTol: 0.05 };
   for (const grp of legendEntries(vectors)) {
     if (yy > maxY) break;
     out.push(`<text x="${r2(x)}" y="${r2(yy)}" font-family="${font}" font-size="2.6" font-weight="700" fill="#374151">${esc(grp.layer)}</text>`);

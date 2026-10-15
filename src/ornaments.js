@@ -242,7 +242,8 @@ export function ornamentSymbolSvg(st) {
   const inner = flip < 0 ? `<g transform="scale(1,-1)">${halo}${body}</g>` : halo + body;
   const w = r2(2 * S);
   return {
-    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${w}" viewBox="${-S} ${-S} ${w} ${w}">${inner}</svg>`,
+    // los data-gd-* permiten que GISDrawer reconozca el ornamento al leer un QML
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${w}" viewBox="${-S} ${-S} ${w} ${w}" data-gd="orn" data-gd-type="${st.ornament}" data-gd-side="${flip < 0 ? 'right' : 'left'}" data-gd-size="${size}" data-gd-spacing="${st.ornamentSpacing ?? def.spacing}" data-gd-gap="${st.ornamentGap ?? def.gap ?? 0.8}" data-gd-halo="${st.ornamentHalo === false ? 0 : 1}" data-gd-color="${st.ornamentColor || ''}">${inner}</svg>`,
     sizeMm: r2(w * U * size),
     spacingMm: st.ornamentSpacing ?? def.spacing,
   };
