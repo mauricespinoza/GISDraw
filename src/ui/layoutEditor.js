@@ -10,7 +10,9 @@
  * "multiplicar" sale igual en pantalla, en SVG y en PDF.
  */
 
-import { composeLayout, defaultLayout, frameExtent, pageGeometry, PAGES, SYMBOL_SCALES, symbolFactor } from '../layout/compose.js';
+import { composeLayout, defaultLayout, fitFrame, frameExtent, pageGeometry, pageToGround, PAGES, SYMBOL_SCALES, symbolFactor } from '../layout/compose.js';
+import { allTopShapes } from '../doc.js';
+import { shapeBBox, unionBBox } from '../vector.js';
 import { computeHillshadeImage, imageFiles } from '../raster/rasterView.js';
 import { drawBasemap, BASEMAPS } from '../raster/basemap.js';
 import { lonLatBBox } from '../raster/dem.js';
@@ -23,12 +25,345 @@ export class LayoutEditor {
   constructor(app) {
     this.app = app;
     this.el = h('div', { id: 'layout-preview' });
-    this.stage = h('div', { class: 'lp-page' });
-    this.el.append(this.stage);
+    this.content = h('div', { class: 'lp-content' });
+    this.overlay = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    this.overlay.setAttribute('class', 'lp-overlay');
+    this.stage = h('div', { class: 'lp-page' }, this.content, this.overlay);
+    this.bar = h(
+      'div',
+      { class: 'lp-bar' },
+      btn('⛶ Encuadrar capas vectoriales', () => this.fitVectors(), 'primary sm'),
+      btn('＋', () => this.zoomBy(1.25), 'sm'),
+      btn('－', () => this.zoomBy(0.8), 'sm'),
+      btn('▭ Marco automático', () => this.resetFrame(), 'sm'),
+      h('span', { class: 'lp-hint' }, 'Arrastra dentro del marco = mover el mapa · rueda = zoom · vértices del marco = tamaño · arrastra un elemento para moverlo · Supr lo elimina'),
+    );
+    this.el.append(this.stage, this.bar);
     document.getElementById('viewport').append(this.el);
     this.el.hidden = true;
     this.rasterCache = new Map(); // clave -> href
     this.pending = 0;
+    this.sel = null; // 'frame' | 'title' | 'legend' | 'north' | 'scalebar' | 'info' | null
+    this.geom = null;
+    this.live = { s: 1, tx: 0, ty: 0 }; // transformación en vivo del contenido del mapa (mm de página)
+    this.gesture = null;
+    this.bind();
+  }
+
+  /* --------------------------------------------------------- interacción */
+
+  bind() {
+    const st = this.stage;
+    st.addEventListener('pointerdown', (e) => this.onDown(e));
+    st.addEventListener('pointermove', (e) => this.onMove(e));
+    st.addEventListener('pointerup', (e) => this.onUp(e));
+    st.addEventListener('pointercancel', (e) => this.onUp(e, true));
+    st.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
+    st.addEventListener('contextmenu', (e) => e.preventDefault());
+    // en captura: con el layout abierto, Supr / flechas no deben tocar el dibujo de atrás
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        if (this.el.hidden) return;
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+        const mod = e.ctrlKey || e.metaKey;
+        if (mod) return;
+        const stop = () => {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        };
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          stop();
+          if (this.sel && this.sel !== 'frame') this.deleteElement(this.sel);
+        } else if (e.key === 'Escape') {
+          stop();
+          this.select(null);
+        } else if (e.key.startsWith('Arrow')) {
+          stop();
+          const k = e.shiftKey ? 5 : 0.5;
+          const dx = e.key === 'ArrowLeft' ? -k : e.key === 'ArrowRight' ? k : 0;
+          const dy = e.key === 'ArrowUp' ? -k : e.key === 'ArrowDown' ? k : 0;
+          if (this.sel && this.sel !== 'frame') this.nudgeElement(this.sel, dx, dy);
+          else this.panByMm(-dx, -dy);
+        }
+      },
+      true,
+    );
+  }
+
+  /** Punto del puntero en mm de página. */
+  mm(e) {
+    const r = this.stage.getBoundingClientRect();
+    return [((e.clientX - r.left) * this.geom.W) / r.width, ((e.clientY - r.top) * this.geom.H) / r.height];
+  }
+
+  /** mm de página por píxel de pantalla. */
+  mmPerPx() {
+    return this.geom ? this.geom.W / this.stage.getBoundingClientRect().width : 1;
+  }
+
+  inFrame(p) {
+    const g = this.geom;
+    return p[0] >= g.fx && p[0] <= g.fx + g.fw && p[1] >= g.fy && p[1] <= g.fy + g.fh;
+  }
+
+  select(sel) {
+    this.sel = sel;
+    this.drawOverlay();
+  }
+
+  elementGroup(name) {
+    return this.content.querySelector(`[data-el="${name}"]`);
+  }
+
+  onDown(e) {
+    if (!this.geom || (e.pointerType === 'mouse' && e.button > 1)) return;
+    const p = this.mm(e);
+    const handle = e.target.closest?.('[data-h]')?.dataset.h;
+    try {
+      this.stage.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* puntero sintético */
+    }
+    clearTimeout(this.liveT);
+    if (handle === 'del') {
+      this.deleteElement(this.sel);
+      return;
+    }
+    if (handle) {
+      this.gesture = { mode: 'resize', handle, f0: this.frameRect(), start: p };
+      return;
+    }
+    const el = e.target.closest?.('[data-el]');
+    if (el && e.pointerType !== 'touch-pan') {
+      const name = el.dataset.el;
+      this.select(name);
+      this.gesture = { mode: 'move', el: name, start: p, base: [...(this.L.offsets?.[name] || [0, 0])] };
+      return;
+    }
+    if (this.inFrame(p)) {
+      this.select('frame');
+      this.gesture = { mode: 'pan', start: p, t0: { ...this.live } };
+      return;
+    }
+    this.select(null);
+    this.gesture = null;
+  }
+
+  onMove(e) {
+    const gs = this.gesture;
+    if (!gs) return;
+    const p = this.mm(e);
+    const dx = p[0] - gs.start[0];
+    const dy = p[1] - gs.start[1];
+    if (gs.mode === 'move') {
+      const g = this.elementGroup(gs.el)?.querySelector(':scope > .eo');
+      if (g) g.setAttribute('transform', `translate(${gs.base[0] + dx} ${gs.base[1] + dy})`);
+      gs.delta = [dx, dy];
+      this.drawOverlay();
+    } else if (gs.mode === 'pan') {
+      this.live = { s: gs.t0.s, tx: gs.t0.tx + dx, ty: gs.t0.ty + dy };
+      this.applyLive();
+    } else if (gs.mode === 'resize') {
+      gs.rect = this.resized(gs.f0, gs.handle, p);
+      this.drawOverlay(gs.rect);
+    }
+  }
+
+  onUp(e, cancelled = false) {
+    const gs = this.gesture;
+    this.gesture = null;
+    if (!gs || cancelled) {
+      if (gs) this.schedule(0);
+      return;
+    }
+    if (gs.mode === 'move' && gs.delta) {
+      const o = { ...(this.L.offsets || {}), [gs.el]: [+(gs.base[0] + gs.delta[0]).toFixed(2), +(gs.base[1] + gs.delta[1]).toFixed(2)] };
+      this.set({ offsets: o });
+    } else if (gs.mode === 'pan') {
+      this.commitLive();
+    } else if (gs.mode === 'resize' && gs.rect) {
+      this.commitFrame(gs.rect);
+    }
+  }
+
+  onWheel(e) {
+    if (!this.geom) return;
+    const p = this.mm(e);
+    if (!this.inFrame(p)) return;
+    e.preventDefault();
+    let dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+    if (typeof e.wheelDeltaY === 'number' && e.wheelDeltaY && e.wheelDeltaY % 120 === 0) dy = -(e.wheelDeltaY / 120) * 100;
+    const k = Math.exp(-Math.max(-150, Math.min(150, dy)) * 0.0022);
+    this.zoomLive(k, p);
+    clearTimeout(this.liveT);
+    this.liveT = setTimeout(() => this.commitLive(), 350);
+  }
+
+  /** Acumula un zoom de factor `k` alrededor de `c` (mm de página) en la transformación en vivo. */
+  zoomLive(k, c) {
+    const { s, tx, ty } = this.live;
+    const ns = Math.max(0.02, Math.min(50, s * k));
+    const kk = ns / s;
+    this.live = { s: ns, tx: c[0] + kk * (tx - c[0]), ty: c[1] + kk * (ty - c[1]) };
+    this.applyLive();
+  }
+
+  zoomBy(k) {
+    if (!this.geom) return;
+    const g = this.geom;
+    this.zoomLive(k, [g.fx + g.fw / 2, g.fy + g.fh / 2]);
+    clearTimeout(this.liveT);
+    this.liveT = setTimeout(() => this.commitLive(), 250);
+  }
+
+  panByMm(dx, dy) {
+    this.live = { ...this.live, tx: this.live.tx + dx, ty: this.live.ty + dy };
+    this.applyLive();
+    clearTimeout(this.liveT);
+    this.liveT = setTimeout(() => this.commitLive(), 350);
+  }
+
+  /** Mueve y escala al instante el contenido del mapa (mientras se recalcula lo pesado). */
+  applyLive() {
+    const { s, tx, ty } = this.live;
+    const t = s === 1 && !tx && !ty ? '' : `matrix(${s} 0 0 ${s} ${tx} ${ty})`;
+    for (const n of this.content.querySelectorAll('.lv')) {
+      if (t) n.setAttribute('transform', t);
+      else n.removeAttribute('transform');
+    }
+  }
+
+  /** Convierte la transformación en vivo en nuevo centro y escala del mapa. */
+  commitLive() {
+    const { s, tx, ty } = this.live;
+    if (!this.geom || (s === 1 && !tx && !ty)) return;
+    const L = this.L;
+    const g = this.geom;
+    const F = [g.fx + g.fw / 2, g.fy + g.fh / 2];
+    // el punto de página q que la transformación lleva al centro del marco
+    const q = [(F[0] - tx) / s, (F[1] - ty) / s];
+    const c = pageToGround(L, g, q[0], q[1]);
+    this.set({ center: [Math.round(c[0]), Math.round(c[1])], scale: Math.max(100, Math.round(L.scale / s)) });
+  }
+
+  frameRect() {
+    const g = this.geom;
+    return { x: g.fx, y: g.fy, w: g.fw, h: g.fh };
+  }
+
+  resized(f0, h, p) {
+    const g = this.geom;
+    const min = 30;
+    const lim = 2;
+    const px = Math.max(lim, Math.min(g.W - lim, p[0]));
+    const py = Math.max(lim, Math.min(g.H - lim, p[1]));
+    let { x, y, w, h: hh } = { ...f0, h: f0.h };
+    const r = x + w;
+    const b = y + hh;
+    if (h.includes('w')) {
+      x = Math.min(px, r - min);
+      w = r - x;
+    }
+    if (h.includes('e')) w = Math.max(min, px - x);
+    if (h.includes('n')) {
+      y = Math.min(py, b - min);
+      hh = b - y;
+    }
+    if (h.includes('s')) hh = Math.max(min, py - y);
+    return { x: +x.toFixed(1), y: +y.toFixed(1), w: +w.toFixed(1), h: +hh.toFixed(1) };
+  }
+
+  /**
+   * Cambia el marco: el contenido del mapa NO se mueve respecto de la página
+   * (el marco recorta o descubre más mapa), así que el centro se recalcula.
+   */
+  commitFrame(rect) {
+    const L = this.L;
+    const g = this.geom;
+    const c = pageToGround(L, g, rect.x + rect.w / 2, rect.y + rect.h / 2);
+    this.set({ frame: rect, center: [Math.round(c[0]), Math.round(c[1])] });
+  }
+
+  resetFrame() {
+    const L = this.L;
+    if (!L.frame && !Object.keys(L.offsets || {}).length) return this.app.message('El marco y los elementos ya están en su lugar automático');
+    const g = pageGeometry({ ...L, frame: null });
+    const cur = pageGeometry(L);
+    const c = pageToGround(L, cur, g.fx + g.fw / 2, g.fy + g.fh / 2);
+    this.set({ frame: null, offsets: {}, center: [Math.round(c[0]), Math.round(c[1])] });
+  }
+
+  deleteElement(name) {
+    const patch = { title: { showTitle: false }, legend: { legend: false }, north: { north: false }, scalebar: { scalebar: false }, info: { showInfo: false } }[name];
+    if (!patch) return;
+    this.sel = null;
+    this.set(patch);
+    this.app.message('Elemento eliminado del layout (se puede volver a activar en el panel · Ctrl+Z)', 4000);
+  }
+
+  nudgeElement(name, dx, dy) {
+    const cur = this.L.offsets?.[name] || [0, 0];
+    this.set({ offsets: { ...(this.L.offsets || {}), [name]: [+(cur[0] + dx).toFixed(2), +(cur[1] + dy).toFixed(2)] } });
+  }
+
+  /** Encuadra todo lo vectorial visible (sin rasters ni servicios en línea) en el marco. */
+  fitVectors() {
+    const doc = this.app.history.doc;
+    const L = this.L;
+    const est = { mmToM: doc.refScale / 1000, ptToM: (doc.refScale / 1000) * 0.352778, mpp: L.scale / 3779.5 };
+    const shapes = allTopShapes(doc).map((x) => x.shape);
+    const box = unionBBox(shapes.map((s) => shapeBBox(s, est)));
+    if (!box) return this.app.message('No hay objetos en las capas vectoriales visibles');
+    const g = pageGeometry(L);
+    const fit = fitFrame(L, g, { minX: box.x, maxX: box.x + box.w, minY: box.y, maxY: box.y + box.h }, { round: L.fitRound !== false });
+    this.live = { s: 1, tx: 0, ty: 0 };
+    this.set(fit);
+    this.app.message(`Encuadre a 1:${fit.scale.toLocaleString('es-CL')} con ${shapes.length} objeto(s) vectoriales`, 3500);
+  }
+
+  /** Selección y vértices del marco, dibujados sobre la página (en mm). */
+  drawOverlay(frameDrag = null) {
+    const g = this.geom;
+    const ov = this.overlay;
+    ov.replaceChildren();
+    if (!g) return;
+    ov.setAttribute('viewBox', `0 0 ${g.W} ${g.H}`);
+    const u = this.mmPerPx();
+    const NS = 'http://www.w3.org/2000/svg';
+    const add = (tag, attrs) => {
+      const n = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+      ov.append(n);
+      return n;
+    };
+    if (this.sel === 'frame' || frameDrag) {
+      const r = frameDrag || this.frameRect();
+      add('rect', { x: r.x, y: r.y, width: r.w, height: r.h, fill: frameDrag ? 'rgba(14,165,233,.08)' : 'none', stroke: '#0ea5e9', 'stroke-width': 1.4 * u, 'stroke-dasharray': `${4 * u} ${3 * u}` });
+      const hs = 9 * u;
+      const cx = r.x + r.w / 2;
+      const cy = r.y + r.h / 2;
+      const pts = { nw: [r.x, r.y], n: [cx, r.y], ne: [r.x + r.w, r.y], e: [r.x + r.w, cy], se: [r.x + r.w, r.y + r.h], s: [cx, r.y + r.h], sw: [r.x, r.y + r.h], w: [r.x, cy] };
+      for (const [k, [x, y]] of Object.entries(pts)) {
+        const n = add('rect', { x: x - hs / 2, y: y - hs / 2, width: hs, height: hs, fill: '#fff', stroke: '#0ea5e9', 'stroke-width': 1.5 * u, 'data-h': k, class: 'lp-handle' });
+        n.style.cursor = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize' }[k];
+      }
+    } else if (this.sel) {
+      const gEl = this.elementGroup(this.sel);
+      if (!gEl) return;
+      let b;
+      try {
+        b = gEl.getBBox();
+      } catch {
+        return;
+      }
+      const pad = 1.2;
+      add('rect', { x: b.x - pad, y: b.y - pad, width: b.width + 2 * pad, height: b.height + 2 * pad, fill: 'none', stroke: '#0ea5e9', 'stroke-width': 1.4 * u, 'stroke-dasharray': `${4 * u} ${3 * u}` });
+      const r = 7 * u;
+      add('circle', { cx: b.x + b.width + pad, cy: b.y - pad, r, fill: '#ef4444', stroke: '#fff', 'stroke-width': 1.2 * u, 'data-h': 'del', class: 'lp-handle' }).style.cursor = 'pointer';
+      add('path', { d: `M${b.x + b.width + pad - r * 0.45} ${b.y - pad - r * 0.45}l${r * 0.9} ${r * 0.9}m0 ${-r * 0.9}l${-r * 0.9} ${r * 0.9}`, stroke: '#fff', 'stroke-width': 1.6 * u, 'stroke-linecap': 'round', 'pointer-events': 'none' });
+    }
   }
 
   get L() {
@@ -127,14 +462,18 @@ export class LayoutEditor {
       return canvas;
     }
     if (l.kind === 'hillshade') {
-      const s = { ...l.settings, resolution: 1 };
-      const r = await computeHillshadeImage(v.snapshot(), s, this.app.settings, signal, () => null, { pad: 2 });
+      // la resolución de la capa (×0,25…×2) se respeta, pero nunca por debajo de 1 píxel de
+      // DEM por píxel de salida: a la lámina no se le aplica el ahorro de la vista de trabajo
+      const s = { ...l.settings, resolution: Math.max(1, l.settings.resolution || 1) };
+      const PAD = 2;
+      const r = await computeHillshadeImage(v.snapshot(), s, this.app.settings, signal, () => null, { pad: PAD });
       if (!r) return null;
       const full = document.createElement('canvas');
       full.width = r.w;
       full.height = r.h;
       full.getContext('2d').putImageData(new ImageData(r.rgba, r.w, r.h), 0, 0);
-      ctx.drawImage(full, 2, 2, v.w, v.h, 0, 0, v.w, v.h); // quitar el margen de Horn
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(full, PAD, PAD, r.w - 2 * PAD, r.h - 2 * PAD, 0, 0, v.w, v.h); // quita el margen de Horn
       return canvas;
     }
     return null;
@@ -162,16 +501,37 @@ export class LayoutEditor {
     const abort = new AbortController();
     this.abort = abort;
     this.app.message('Componiendo lámina…', 0);
-    const { svg, geometry } = await this.build(72, abort.signal);
-    if (abort.signal.aborted) return;
     // encajar la página en el área visible
+    const L = this.L;
+    const g0 = pageGeometry(L);
     const vw = this.el.clientWidth - 40;
-    const vh = this.el.clientHeight - 40;
-    const k = Math.min(vw / geometry.W, vh / geometry.H);
+    const vh = this.el.clientHeight - 40 - this.bar.offsetHeight;
+    const k = Math.min(vw / g0.W, vh / g0.H);
+    const { svg, geometry } = await this.build(this.previewDpi(L, k), abort.signal);
+    if (abort.signal.aborted) return;
+    // un gesto en curso (mover el mapa con el ratón) manda: se recalcula al soltar
+    if (this.gesture) return this.schedule(300);
     this.stage.style.width = `${geometry.W * k}px`;
     this.stage.style.height = `${geometry.H * k}px`;
-    this.stage.innerHTML = svg.replace(/width="[\d.]+mm" height="[\d.]+mm"/, 'width="100%" height="100%"');
+    this.geom = geometry;
+    this.live = { s: 1, tx: 0, ty: 0 };
+    this.content.innerHTML = svg.replace(/width="[\d.]+mm" height="[\d.]+mm"/, 'width="100%" height="100%"');
+    if (this.sel && this.sel !== 'frame' && !this.elementGroup(this.sel)) this.sel = null;
+    this.drawOverlay();
     this.app.message('');
+  }
+
+  /**
+   * Resolución de la vista previa. Antes era fija en 72 dpi —menos que los 96
+   * de la pantalla de trabajo, y la página se agranda para llenar el área— y
+   * por eso el relieve se veía mucho más borroso que en la vista de capas.
+   * Ahora sigue a la pantalla: los píxeles que ocupa la página (× la densidad
+   * de píxeles del equipo), entre 96 y 250 dpi.
+   */
+  previewDpi(L, pxPerMm) {
+    if (L.previewDpi && L.previewDpi !== 'auto') return Number(L.previewDpi);
+    const auto = Math.round(pxPerMm * 25.4 * (window.devicePixelRatio || 1));
+    return Math.max(96, Math.min(250, auto));
   }
 
   /* --------------------------------------------------------------- export */
@@ -274,6 +634,15 @@ export class LayoutEditor {
           btn('Centrar en la vista', () => this.set({ center: [Math.round(v.cx), Math.round(v.cy)] })),
           btn('Escala de la vista', () => this.set({ scale: Math.round(v.scale / 500) * 500 || 500 })),
         ),
+        btn('⛶ Encuadrar capas vectoriales', () => this.fitVectors(), 'primary'),
+        check('Redondear la escala al encuadrar', L.fitRound !== false, (x) => this.set({ fitRound: x })),
+        h('p', { class: 'hint' }, 'Encuadra solo lo dibujado en capas vectoriales visibles (no los rasters ni los mapas en línea). En la vista previa: arrastrar dentro del marco mueve el mapa, la rueda hace zoom y los vértices del marco cambian su tamaño (el mapa no se desplaza respecto de la hoja).'),
+        h(
+          'div',
+          { class: 'grid-btns two' },
+          btn('Marco y elementos automáticos', () => this.resetFrame()),
+          btn(`Marco: ${L.frame ? `${L.frame.w.toFixed(0)}×${L.frame.h.toFixed(0)} mm` : 'automático'}`, () => this.select('frame')),
+        ),
       ),
       this.symbolSection(L),
       sec(
@@ -294,6 +663,8 @@ export class LayoutEditor {
         row('Autor', text(L.author, set('author'))),
         row('Fecha', text(L.date, set('date'))),
         row('Notas', text(L.notes, set('notes'))),
+        check('Título', L.showTitle !== false, set('showTitle')),
+        check('Datos (autor, fecha, sistema, notas, fuentes)', L.showInfo !== false, set('showInfo')),
         check('Norte (verdadero, con convergencia)', L.north, set('north')),
         check('Escala gráfica y numérica', L.scalebar, set('scalebar')),
         check('Leyenda (columna lateral)', L.legend, set('legend')),
@@ -304,6 +675,7 @@ export class LayoutEditor {
       sec(
         'Exportar',
         row('Resolución', select({ 150: '150 dpi', 200: '200 dpi', 300: '300 dpi', 400: '400 dpi' }, L.dpi, (x) => this.set({ dpi: Number(x) }))),
+        row('Vista previa', select({ auto: 'Automática (sigue a la pantalla)', 96: 'Rápida (96 dpi)', 150: 'Nítida (150 dpi)', 250: 'Alta (250 dpi)' }, String(L.previewDpi || 'auto'), (x) => this.set({ previewDpi: x === 'auto' ? 'auto' : Number(x) }))),
         h(
           'div',
           { class: 'grid-btns' },

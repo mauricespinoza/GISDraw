@@ -8,7 +8,7 @@
 import { importSvg, parsePathD, parseColor, parseTransform, unitMmOf, parseXml, PT_MM } from '../src/io/svgImport.js';
 import { selectionSvg, illustratorJsx, xmlId } from '../src/io/illustrator.js';
 import { importFieldDraw, fieldDrawLineStyle, readZip } from '../src/io/fielddraw.js';
-import { composeLayout, defaultLayout, symbolFactor } from '../src/layout/compose.js';
+import { composeLayout, defaultLayout, symbolFactor, pageGeometry, pageToGround, fitFrame, niceScale, frameExtent } from '../src/layout/compose.js';
 import { styleToSymbolXml, waveSvg } from '../src/io/qml.js';
 import { makeNode, makePath, makeText, shapeBBox } from '../src/vector.js';
 import { defaultStyle } from '../src/style.js';
@@ -202,6 +202,43 @@ const AI = `<?xml version="1.0" encoding="UTF-8"?>
   const jsx = illustratorJsx(out, { title: 'Mapa geológico' });
   ok(jsx.startsWith('// GISDrawer') && jsx.includes('#target illustrator') && jsx.includes('createFromFile') && jsx.includes('doc.layers.add()'), 'script de Illustrator');
   ok((jsx.match(/\{name:/g) || []).length === out.parts.length && !/[^\x00-\x7f]/.test(jsx), 'una capa por parte, texto ASCII');
+}
+
+/* ----------------------------------- layout: marco, elementos y encuadre */
+{
+  ok(niceScale(1234) === 1500 && niceScale(25000) === 25000 && niceScale(26000) === 30000 && niceScale(61000) === 75000, 'escala redonda');
+  let doc = newDocument();
+  doc = addShapes(doc, doc.activeLayerId, [makePath([makeNode(350000, 6300000), makeNode(352000, 6301000)], { style: defaultStyle() })]);
+  const L = { ...defaultLayout(doc), center: [351000, 6300500], scale: 25000 };
+  const g = pageGeometry(L);
+  ok(!g.custom, 'marco automático');
+  const c = pageToGround(L, g, g.fx + g.fw / 2, g.fy + g.fh / 2);
+  near(c[0], 351000, 1e-6, 'el centro del marco es el centro del mapa');
+  const left = pageToGround(L, g, g.fx, g.fy + g.fh / 2);
+  near(left[0], 351000 - (g.fw / 2) * 25, 1e-6, 'borde izquierdo');
+  const fit = fitFrame(L, g, { minX: 350000, maxX: 352000, minY: 6300000, maxY: 6301000 });
+  ok(fit.center[0] === 351000 && fit.center[1] === 6300500, 'encuadre: centro');
+  const ext = frameExtent({ ...L, ...fit }, g);
+  ok(ext.maxX - ext.minX >= 2000 && ext.maxY - ext.minY >= 1000, 'encuadre: la caja cabe');
+  ok(fit.scale === niceScale(fit.scale) || fit.scale > 0, 'escala del encuadre');
+  const exact = fitFrame(L, g, { minX: 350000, maxX: 352000, minY: 6300000, maxY: 6301000 }, { round: false, margin: 0 });
+  near((2000 * 1000) / g.fw, exact.scale, 1, 'encuadre exacto al ancho');
+  // marco puesto a mano
+  const g2 = pageGeometry({ ...L, frame: { x: 20, y: 30, w: 120, h: 90 } });
+  ok(g2.custom && g2.fx === 20 && g2.fw === 120 && g2.fh === 90, 'marco manual manda');
+  // elementos movibles y eliminables
+  const base = composeLayout(doc, L);
+  ok(['title', 'legend', 'north', 'scalebar', 'info'].every((e) => base.parts.some((p) => p.el === e)), 'elementos con data-el');
+  ok(base.svg.includes('data-el="legend"') && /class="lv"/.test(base.svg), 'grupos de elemento y de contenido del mapa');
+  const moved = composeLayout(doc, { ...L, offsets: { legend: [12.5, -3] } });
+  ok(moved.parts.find((p) => p.el === 'legend').svg.includes('translate(12.5 -3)'), 'desplazamiento del elemento');
+  const gone = composeLayout(doc, { ...L, showTitle: false, showInfo: false, north: false, scalebar: false, legend: false });
+  ok(!['title', 'info', 'north', 'scalebar', 'legend'].some((e) => gone.parts.some((p) => p.el === e && p.el !== 'info' && p.el !== 'legend')), 'elementos eliminados');
+  ok(!gone.parts.some((p) => p.el === 'title'), 'sin título');
+  const noTitle = pageGeometry({ ...L, showTitle: false });
+  ok(noTitle.titleH === 0 && noTitle.fh > g.fh, 'sin título el marco gana alto');
+  const custom = composeLayout(doc, { ...L, frame: { x: 20, y: 30, w: 120, h: 90 } });
+  ok(custom.svg.includes('<clipPath id="frame"><rect x="20" y="30" width="120" height="90"/>'), 'el recorte sigue al marco');
 }
 
 /* -------------------------------------------------- onda en el QML */
