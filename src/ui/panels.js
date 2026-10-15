@@ -744,7 +744,7 @@ export class Panels {
         row('Contraste', ...sl('contrast', -0.8, 0.8, 0.01, (v) => `${Math.round(v * 100)}`)),
         row('Gamma', ...sl('gamma', 0.3, 3, 0.05, (v) => v.toFixed(2))),
         row('Saturación', ...sl('saturation', 0, 2, 0.05, (v) => `${Math.round(v * 100)}%`)),
-        row('Resolución', ...sl('resolution', 0.25, 2, 0.25, (v) => `×${v}`)),
+        row('Resolución', ...sl('resolution', 0.25, 4, 0.25, (v) => `×${v}`)),
         h('div', { class: 'grid-btns two' }, btn('Restablecer', () => set({ ...defaultHillshadeSettings(), source: s.source, demtype: s.demtype, fileId: s.fileId, fileName: s.fileName })), btn('Exportar GeoTIFF', () => app.exportHillshade(layer.id))),
         h('p', { class: 'hint' }, 'La capa entera también tiene opacidad y modo de fusión (pestaña Capas). En "Multiplicar" oscurece lo que está debajo sin cambiar sus colores.'),
       ),

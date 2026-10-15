@@ -291,8 +291,8 @@ calculaba fija a 72 dpi —menos que los 96 de la pantalla de trabajo, y la
 página se amplía para llenar el área— y se forzaba la resolución de la capa a
 ×1, de modo que el relieve se veía mucho más borroso que en la vista de capas.
 Ahora la vista previa sigue a la pantalla (los píxeles que ocupa la página por
-la densidad de píxeles del equipo, entre 96 y 250 dpi; también se fija a mano en
-Exportar → Vista previa) y respeta la resolución de la capa. A escalas
+la densidad de píxeles del equipo, entre 96 y 400 dpi; también se fija a mano en
+Exportar → Vista previa, hasta 600 dpi; la resolución de la capa de relieve llega a ×4 y la exportación a 800 dpi, con imágenes de hasta 9 000 px por lado) y respeta la resolución de la capa. A escalas
 pequeñas el relieve tiene menos detalle por naturaleza: el mismo número de
 píxeles cubre más terreno, y Terrarium parte de ~30 m en tierra.
 

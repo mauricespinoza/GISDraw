@@ -172,7 +172,9 @@ export class RasterView {
  */
 export async function computeHillshadeImage(v, settings, appSettings, signal, onStatus = () => {}, { pad = 2 } = {}) {
   const s = { ...defaultHillshadeSettings(), ...settings };
-  const res = Math.max(0.25, Math.min(2, s.resolution || 1));
+  let res = Math.max(0.25, Math.min(4, s.resolution || 1));
+  // tope de memoria (elevación + sombreado + RGBA): ~64 millones de celdas
+  while (v.w * v.h * res * res > 64e6 && res > 0.25) res /= 1.1;
   const cell = v.mpp / res;
   const w = Math.round(v.w * res) + 2 * pad;
   const h = Math.round(v.h * res) + 2 * pad;
