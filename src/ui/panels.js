@@ -23,6 +23,8 @@ export const TABS = {
   relief: 'Relieve',
   arrange: 'Organizar',
   attrs: 'Atributos',
+  georef: 'Georref.',
+  layout: 'Layout',
 };
 
 const FONTS = {
@@ -63,6 +65,7 @@ export class Panels {
     }
     this.renderTabs();
     this.render();
+    this.onShow?.(tab);
   }
 
   render() {
@@ -74,6 +77,8 @@ export class Panels {
       relief: () => this.reliefPanel(),
       arrange: () => this.arrangePanel(),
       attrs: () => this.attrsPanel(),
+      georef: () => (this.app.georef ? this.app.georef.panel() : this.georefIntro()),
+      layout: () => this.app.layoutPanel(),
     }[this.tab];
     this.body.replaceChildren(...[].concat(fn()));
     this.body.scrollTop = scroll;
@@ -81,6 +86,14 @@ export class Panels {
 
   get doc() {
     return this.app.history.doc;
+  }
+
+  georefIntro() {
+    return sec(
+      'Georreferenciación',
+      h('p', { class: 'hint' }, 'Carga un mapa escaneado, una foto o una figura (JPG, PNG o TIFF) y ubícala con puntos de control: un toque en la imagen y otro en el mapa. Transformaciones Helmert, afín, polinomial y thin-plate spline, con residuos por punto.'),
+      btn('Abrir imagen para georreferenciar…', () => this.app.startGeoref(), 'primary'),
+    );
   }
 
   /* ================================================================ CAPAS */

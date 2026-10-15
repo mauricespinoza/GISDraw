@@ -381,6 +381,8 @@ export class Editor {
 
   toolDown(e, sp) {
     const wp = this.view.toWorld(...sp);
+    // un modo externo (georreferenciación) puede quedarse con el toque
+    if (this.intercept && this.intercept(e, sp, wp)) return;
     const shift = e.shiftKey;
     switch (this.tool) {
       case 'select':

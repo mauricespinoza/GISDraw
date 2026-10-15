@@ -121,61 +121,17 @@ export class RasterView {
     const abort = new AbortController();
     st.abort = abort;
     const v = this.view.snapshot();
-    const res = Math.max(0.25, Math.min(2, s.resolution || 1));
-    const cell = v.mpp / res;
-    const pad = 2;
-    const w = Math.round(v.w * res) + 2 * pad;
-    const h = Math.round(v.h * res) + 2 * pad;
-    const x0 = v.cx - (v.w / 2) * v.mpp - pad * cell;
-    const y0 = v.cy + (v.h / 2) * v.mpp + pad * cell;
-    const ext = { minX: x0, maxX: x0 + w * cell, minY: y0 - h * cell, maxY: y0 };
-    const bbox = lonLatBBox(ext);
     this.onStatus(layer.id, 'Calculando relieve…');
     try {
-      let sample;
-      if (s.source === 'file') {
-        const grid = demFiles.get(s.fileId);
-        if (!grid) throw new Error('Importa un GeoTIFF o ASCII grid de elevación para esta capa');
-        sample = gridSampler(grid);
-      } else if (s.source === 'opentopo') {
-        const gk = `${s.demtype}|${bbox.west.toFixed(3)}|${bbox.south.toFixed(3)}|${bbox.east.toFixed(3)}|${bbox.north.toFixed(3)}`;
-        let grid = otCache.get(gk);
-        if (!grid) {
-          // se pide algo más grande que la vista para no volver a pedir en cada paneo
-          const mx = (bbox.east - bbox.west) * 0.5;
-          const my = (bbox.north - bbox.south) * 0.5;
-          const big = { west: bbox.west - mx, east: bbox.east + mx, south: bbox.south - my, north: bbox.north + my };
-          // ¿alguna descarga anterior ya cubre esta vista?
-          for (const g of otCache.values()) {
-            if (g.demtype === s.demtype && g.bbox.west <= bbox.west && g.bbox.east >= bbox.east && g.bbox.south <= bbox.south && g.bbox.north >= bbox.north) grid = g;
-          }
-          if (!grid) {
-            this.onStatus(layer.id, `Descargando ${s.demtype} de OpenTopography…`);
-            grid = await fetchOpenTopography(big, s.demtype, this.getSettings().opentopoKey, abort.signal);
-            grid.bbox = big;
-            grid.demtype = s.demtype;
-            otCache.set(gk, grid);
-          }
-        }
-        sample = gridSampler(grid);
-      } else {
-        const [, midLat] = toLonLat(v.cx, v.cy);
-        const z = zoomForMpp(cell, midLat);
-        sample = await terrariumSampler(bbox, z, abort.signal);
-      }
-      if (abort.signal.aborted) return;
-      const elev = sampleGrid(sample, x0, y0, cell, w, h);
-      const shade = s.shadeStrength > 0 ? hillshade(elev, w, h, cell, s) : null;
-      const range = s.rangeMode === 'manual' ? { min: s.min, max: s.max } : elevationRange(elev);
-      const rgba = compose(elev, shade, w, h, s, range);
-      if (abort.signal.aborted) return;
+      const r = await computeHillshadeImage(v, s, this.getSettings(), abort.signal, (m) => this.onStatus(layer.id, m));
+      if (!r || abort.signal.aborted) return;
       const canvas = st.canvas;
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext('2d').putImageData(new ImageData(rgba, w, h), 0, 0);
-      st.rendered = { x0, y0, mpp: v.mpp, w, h, res, range, elev, cell };
+      canvas.width = r.w;
+      canvas.height = r.h;
+      canvas.getContext('2d').putImageData(new ImageData(r.rgba, r.w, r.h), 0, 0);
+      st.rendered = { x0: r.x0, y0: r.y0, mpp: v.mpp, w: r.w, h: r.h, res: r.res, range: r.range, elev: r.elev, cell: r.cell };
       st.key = key;
-      this.lastRange = range;
+      this.lastRange = r.range;
       this.drawHillshade(st, layer, false);
       this.onStatus(layer.id, '');
       this.onRendered?.(layer, st.rendered);
@@ -206,4 +162,55 @@ export class RasterView {
     const st = this.state.get(layerId);
     return st ? { canvas: st.canvas, rendered: st.rendered } : null;
   }
+}
+
+/**
+ * Relieve para una vista cualquiera (la pantalla o el marco de un layout a
+ * resolución de impresión). `v`: {cx, cy, mpp, w, h}.
+ * Devuelve { rgba, w, h, x0, y0, cell, res, range, elev } (con 2 celdas de
+ * margen para que Horn tenga vecinos en el borde).
+ */
+export async function computeHillshadeImage(v, settings, appSettings, signal, onStatus = () => {}, { pad = 2 } = {}) {
+  const s = { ...defaultHillshadeSettings(), ...settings };
+  const res = Math.max(0.25, Math.min(2, s.resolution || 1));
+  const cell = v.mpp / res;
+  const w = Math.round(v.w * res) + 2 * pad;
+  const h = Math.round(v.h * res) + 2 * pad;
+  const x0 = v.cx - (v.w / 2) * v.mpp - pad * cell;
+  const y0 = v.cy + (v.h / 2) * v.mpp + pad * cell;
+  const ext = { minX: x0, maxX: x0 + w * cell, minY: y0 - h * cell, maxY: y0 };
+  const bbox = lonLatBBox(ext);
+  let sample;
+  if (s.source === 'file') {
+    const grid = demFiles.get(s.fileId);
+    if (!grid) throw new Error('Importa un GeoTIFF o ASCII grid de elevación para esta capa');
+    sample = gridSampler(grid);
+  } else if (s.source === 'opentopo') {
+    let grid = null;
+    for (const g of otCache.values()) {
+      if (g.demtype === s.demtype && g.bbox.west <= bbox.west && g.bbox.east >= bbox.east && g.bbox.south <= bbox.south && g.bbox.north >= bbox.north) grid = g;
+    }
+    if (!grid) {
+      // se pide algo más grande que la vista para no volver a pedir en cada paneo
+      const mx = (bbox.east - bbox.west) * 0.5;
+      const my = (bbox.north - bbox.south) * 0.5;
+      const big = { west: bbox.west - mx, east: bbox.east + mx, south: bbox.south - my, north: bbox.north + my };
+      onStatus(`Descargando ${s.demtype} de OpenTopography…`);
+      grid = await fetchOpenTopography(big, s.demtype, appSettings.opentopoKey, signal);
+      grid.bbox = big;
+      grid.demtype = s.demtype;
+      otCache.set(JSON.stringify(big) + s.demtype, grid);
+    }
+    sample = gridSampler(grid);
+  } else {
+    const [, midLat] = toLonLat(v.cx, v.cy);
+    const z = zoomForMpp(cell, midLat);
+    sample = await terrariumSampler(bbox, z, signal);
+  }
+  if (signal?.aborted) return null;
+  const elev = sampleGrid(sample, x0, y0, cell, w, h);
+  const shade = s.shadeStrength > 0 ? hillshade(elev, w, h, cell, s) : null;
+  const range = s.rangeMode === 'manual' ? { min: s.min, max: s.max } : elevationRange(elev);
+  const rgba = compose(elev, shade, w, h, s, range);
+  return { rgba, w, h, x0, y0, cell, res, range, elev };
 }

@@ -10,6 +10,7 @@ import { StageRenderer } from './render.js';
 import { RasterView, demFiles, imageFiles } from './raster/rasterView.js';
 import { BASEMAPS } from './raster/basemap.js';
 import { Panels } from './ui/panels.js';
+import { LayoutEditor } from './ui/layoutEditor.js';
 import { ICONS } from './ui/icons.js';
 import { h } from './ui/dom.js';
 import { defaultStyle } from './style.js';
@@ -65,7 +66,9 @@ class App {
     this.raster.onRendered = () => {
       if (this.panels.tab === 'relief') this.panels.render();
     };
+    this.layout = new LayoutEditor(this);
     this.panels = new Panels(this);
+    this.panels.onShow = (tab) => (tab === 'layout' ? this.layout.show() : this.layout.hide());
     this.clipboard = [];
 
     this.history.onChange((doc, meta) => this.onDocChange(doc, meta));
@@ -101,6 +104,7 @@ class App {
     this.editor.snapDirty = true;
     this.renderer.request();
     if (!meta.preview) {
+      if (!this.layout.el.hidden) this.layout.schedule();
       this.panels.render();
       this.updateUndo();
       this.updateAttribution();
@@ -165,6 +169,7 @@ class App {
     this.view.emit();
     this.editor.setTool('select');
     this.panels.render();
+    this.panels.onShow?.(this.panels.tab);
   }
 
   async reloadFile(fileId) {
@@ -274,6 +279,7 @@ class App {
       item('GeoJSON…', () => this.importGeoJSON()),
       item('GeoTIFF / ASCII grid de elevación…', () => this.importDemForLayer(null)),
       item('GeoTIFF imagen (orto, mapa escaneado)…', () => this.importImage()),
+      item('Georreferenciar imagen (JPG/PNG/TIFF)…', () => this.startGeoref()),
       item('Estilo QGIS (.qml / .qlr) a la capa activa…', () => this.applyQmlToLayer(this.history.doc.activeLayerId)),
       h('div', { class: 'mh' }, 'Exportar'),
       item('GeoPackage (todas las capas, con estilo QGIS)', () => this.exportGpkg()),
@@ -283,6 +289,7 @@ class App {
       item('SVG de la vista (vectorial)', () => this.exportView('svg')),
       h('div', { class: 'mh' }, 'Vista'),
       item('Ir a coordenadas…', () => this.gotoCoords()),
+      item('Layout de impresión (PDF / SVG / PNG)…', () => this.showPanel('layout')),
       item('Zoom a todo el dibujo', () => this.zoomToShapes(allTopShapes(this.history.doc).map((x) => x.shape))),
     ];
   }
@@ -535,6 +542,15 @@ class App {
       if (this.view.mpp > 20) this.view.mpp = 10;
       this.view.emit();
     });
+  }
+
+  async startGeoref() {
+    const { startGeoref } = await import('./ui/georefSession.js');
+    return startGeoref(this);
+  }
+
+  layoutPanel() {
+    return this.layout.panel();
   }
 
   /* --------------------------------------------------------- archivos */

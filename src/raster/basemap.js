@@ -93,6 +93,7 @@ const tileLat = (y, z) => {
 /**
  * Pinta el mapa base en `ctx` (canvas del tamaño de la vista, ya escalado por
  * devicePixelRatio). `requestRedraw` se llama cuando llega una tesela.
+ * Devuelve cuántas teselas siguen en camino (para el layout, que espera).
  */
 export function drawBasemap(ctx, view, sourceId, lonLatBox, requestRedraw) {
   const src = BASEMAPS[sourceId] || BASEMAPS.opentopomap;
@@ -105,7 +106,8 @@ export function drawBasemap(ctx, view, sourceId, lonLatBox, requestRedraw) {
   const x1 = Math.floor(lonToTileX(lonLatBox.east, z));
   const y0 = Math.max(0, Math.floor(latToTileY(lonLatBox.north, z)));
   const y1 = Math.min(n - 1, Math.floor(latToTileY(lonLatBox.south, z)));
-  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 400) return;
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 400) return 0;
+  let pending = 0;
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -119,7 +121,10 @@ export function drawBasemap(ctx, view, sourceId, lonLatBox, requestRedraw) {
     for (let tx = x0; tx <= x1; tx++) {
       const wx = ((tx % n) + n) % n;
       const e = getTile(tileUrl(src, z, wx, ty), requestRedraw);
-      if (!e.ok) continue;
+      if (!e.ok) {
+        if (!e.failed) pending++;
+        continue;
+      }
       const p0 = S(tileLon(tx, z), tileLat(ty, z));
       const p1 = S(tileLon(tx + 1, z), tileLat(ty, z));
       const p2 = S(tileLon(tx, z), tileLat(ty + 1, z));
@@ -133,4 +138,5 @@ export function drawBasemap(ctx, view, sourceId, lonLatBox, requestRedraw) {
     }
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  return pending;
 }

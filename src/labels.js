@@ -211,7 +211,8 @@ export function renderLabels(layers, ctx) {
     if (!layer.visible || !cfg?.enabled || (!cfg.field && !cfg.template)) continue;
     if (cfg.minScale && ctx.scale > cfg.minScale) continue;
     const fs = cfg.fontSize * ctx.ptToPx;
-    if (fs < 3) continue;
+    // en pantalla, menos de 3 px no se lee; en el layout las unidades son mm
+    if (fs < (ctx.minFont ?? 3)) continue;
     const haloW = cfg.halo ? 2 * cfg.haloWidth * ctx.mmToPx : 0;
     const paint = `font-family="${esc(cfg.fontFamily)}" font-size="${r2(fs)}" font-weight="${cfg.fontWeight}"${
       cfg.italic ? ' font-style="italic"' : ''
