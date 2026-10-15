@@ -21,6 +21,7 @@ import { LABEL_SEPARATORS, labelText } from '../labels.js';
 import { RAMPS, applyRenderer, buildRenderer, clearRenderer, countClasses, defaultRendererOptions, fieldChoices, rampCss } from '../symbology.js';
 import { h, sec, row, select, slider, num, text, color, check, btn } from './dom.js';
 import { TAB_ICONS } from './icons.js';
+import { alignOf, layoutText, measureText } from '../textLayout.js';
 
 export const TABS = {
   layers: 'Capas',
@@ -280,7 +281,10 @@ export class Panels {
     const pct = (k) =>
       slider({ min: 0, max: 100, value: Math.round((s[k] ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live(k)(v / 100), onchange: (v) => fin(k)(v / 100) });
 
-    const head = this.styleHead(shapes);
+    const lockedLayer = findLayer(this.doc, this.doc.activeLayerId);
+    const head = lockedLayer?.locked && !shapes.length
+      ? h('p', { class: 'hint target' }, `La capa activa «${lockedLayer.name}» está bloqueada: sus objetos no se pueden seleccionar ni editar (desbloquéala con el candado en Capas). Lo de aquí vale para lo próximo que dibujes en otra capa.`)
+      : this.styleHead(shapes);
     const quick = (k) =>
       h(
         'div',
@@ -349,15 +353,15 @@ export class Panels {
       row('Extremos', select({ round: 'Redondos', butt: 'Planos', square: 'Cuadrados' }, s.cap || 'round', fin('cap'))),
       row('Esquinas', select({ round: 'Redondas', miter: 'En punta', bevel: 'Biseladas' }, s.join || 'round', fin('join'))),
       row('Alinear borde', select({ outside: 'Hacia afuera (no tapa el relleno)', center: 'Centrado', inside: 'Hacia adentro' }, s.align || 'outside', fin('align'))),
+      row('Halo', check('Activado', s.casing, fin('casing')), color(s.casingColor || '#ffffff', live('casingColor'), fin('casingColor'))),
+      s.casing ? row('Ancho halo (mm)', num(s.casingWidth, fin('casingWidth'), { step: 0.05, min: 0 })) : null,
+      s.casing ? row('Opacidad halo', ...slider({ min: 0, max: 100, value: Math.round((s.casingOpacity ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live('casingOpacity')(v / 100), onchange: (v) => fin('casingOpacity')(v / 100) })) : null,
+      h('p', { class: 'hint' }, 'El halo del trazo (en líneas y en el borde de polígonos) se agrega a cada lado, por debajo: el centro conserva el color del trazo. Útil para que se lea sobre una imagen oscura.'),
       h('p', { class: 'hint' }, 'El borde de polígonos crece solo hacia afuera: aumentar el grosor nunca resta superficie visible al relleno.'),
     );
 
     const lineSec = sec(
       'Línea abierta',
-      row('Halo de línea', check('Activado', s.casing, fin('casing')), color(s.casingColor || '#ffffff', live('casingColor'), fin('casingColor'))),
-      row('Ancho halo (mm)', num(s.casingWidth, fin('casingWidth'), { step: 0.05, min: 0 })),
-      row('Opacidad halo', ...slider({ min: 0, max: 100, value: Math.round((s.casingOpacity ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live('casingOpacity')(v / 100), onchange: (v) => fin('casingOpacity')(v / 100) })),
-      h('p', { class: 'hint' }, 'El halo se agrega a cada lado del trazo, por debajo: el centro conserva el color del trazo. Útil para que una línea se lea sobre una imagen oscura.'),
       row('Inicio', select(MARKERS, s.markerStart || 'none', fin('markerStart'))),
       row('Final', select(MARKERS, s.markerEnd || 'none', fin('markerEnd'))),
       row('Tamaño puntas', ...slider({ min: 40, max: 400, value: Math.round((s.markerSize || 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live('markerSize')(v / 100), onchange: (v) => fin('markerSize')(v / 100) })),
@@ -483,21 +487,63 @@ export class Panels {
       if (final) app.history.commit(next);
       else app.history.preview(next);
     };
+    // desplazar el ancla `dmm` mm de papel a lo largo del renglón (mundo: y crece al norte)
+    const k = this.doc.refScale / 1000;
+    const a = ((t.rotation || 0) * Math.PI) / 180;
+    const moveLocal = (dmm) => ({ x: t.x + dmm * k * Math.cos(a), y: t.y - dmm * k * Math.sin(a) });
+    return sec('Texto', ...this.textControls(t, set, { moveLocal }));
+  }
+
+  /**
+   * Controles de un texto, comunes al texto del mapa y a los cuadros de texto
+   * del layout: fuente, tamaño, alineación (izquierda, centro, derecha,
+   * justificado), interlineado, espaciado de letras y de palabras, ancho del
+   * cuadro, rotación y halo. `set(patch, final)` escribe el cambio.
+   * `color` (opcional) = [valor, función] para el color de la letra.
+   */
+  textControls(t, set, { color: colorCtl = null, moveLocal = null } = {}) {
     const ta = h('textarea', {}, t.text);
-    ta.addEventListener('change', () => set({ text: ta.value }));
-    return sec(
-      'Texto',
+    ta.addEventListener('change', () => set({ text: ta.value, name: ta.value.split('\n')[0].slice(0, 40) }));
+    const align = alignOf(t);
+    const alignBtn = (id, label, tip) =>
+      h('button', { class: `btn sm${align === id ? ' on' : ''}`, title: tip, type: 'button', onclick: () => this.setAlign(t, id, set, moveLocal) }, label);
+    const sl = (key, min, max, step, def, fmt) =>
+      slider({ min, max, step, value: t[key] ?? def, fmt, oninput: (v) => set({ [key]: v }, false), onchange: (v) => set({ [key]: v }) });
+    return [
       row('Texto', ta),
       row('Fuente', select({ ...FONTS, ...(FONTS[t.fontFamily] ? {} : { [t.fontFamily]: t.fontFamily }) }, t.fontFamily, (v) => set({ fontFamily: v }))),
       row('Tamaño (pt)', num(t.fontSize, (v) => set({ fontSize: v }), { step: 0.5, min: 1 })),
+      h('p', { class: 'hint' }, 'También se cambia estirando la esquina de la caja de selección; el borde izquierdo o derecho cambia el ancho del cuadro.'),
       row('Estilo', check('Negrita', t.fontWeight >= 600, (v) => set({ fontWeight: v ? 700 : 400 })), check('Cursiva', t.italic, (v) => set({ italic: v }))),
-      row('Anclaje', select({ start: 'Izquierda', middle: 'Centro', end: 'Derecha' }, t.anchor, (v) => set({ anchor: v }))),
+      colorCtl ? row('Color', color(colorCtl[0], (v) => colorCtl[1](v, false), (v) => colorCtl[1](v, true))) : null,
+      row(
+        'Alinear',
+        h('div', { class: 'grid-btns four', style: { flex: 1 } }, alignBtn('left', '⬅', 'Izquierda'), alignBtn('center', '↔', 'Centro'), alignBtn('right', '➡', 'Derecha'), alignBtn('justify', '☰', 'Justificado (en cuadro de texto)')),
+      ),
+      row('Ancho cuadro (mm)', num(t.boxWidth || '', (v) => set({ boxWidth: v > 0 ? v : null }), { step: 1, min: 0 }), btn('Auto', () => set({ boxWidth: null }), 'sm')),
+      row('Interlineado', ...sl('lineHeight', 0.6, 3, 0.05, 1.2, (v) => `×${(+v).toFixed(2)}`)),
+      row('Espac. letras', ...sl('letterSpacing', -100, 800, 10, 0, (v) => `${v}`)),
+      row('Espac. palabras', ...sl('wordSpacing', -300, 1500, 10, 0, (v) => `${v}`)),
+      h('p', { class: 'hint' }, 'Espaciados en milésimas de em (como el «tracking» de Illustrator). Varios espacios seguidos se respetan.'),
       row('Rotación', ...slider({ min: -180, max: 180, value: t.rotation || 0, fmt: (v) => `${v}°`, oninput: (v) => set({ rotation: v }, false), onchange: (v) => set({ rotation: v }) })),
       row('Halo', check('Activado', t.halo, (v) => set({ halo: v })), color(t.haloColor, (v) => set({ haloColor: v }, false), (v) => set({ haloColor: v }))),
       row('Ancho halo (mm)', num(t.haloWidth, (v) => set({ haloWidth: v }), { step: 0.1, min: 0 })),
       row('Opacidad halo', ...slider({ min: 0, max: 100, value: Math.round((t.haloOpacity ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => set({ haloOpacity: v / 100 }, false), onchange: (v) => set({ haloOpacity: v / 100 }) })),
       h('p', { class: 'hint' }, 'El halo del texto es externo: rodea las letras sin tapar su interior.'),
-    );
+    ];
+  }
+
+  /** Alineación de un texto; justificar necesita un cuadro de texto, así que si no lo hay se crea uno del ancho actual. */
+  setAlign(t, id, set, moveLocal = null) {
+    const patch = { align: id, anchor: id === 'center' ? 'middle' : id === 'right' ? 'end' : 'start' };
+    if (id === 'justify' && !(t.boxWidth > 0)) {
+      const PT_MM = 72 / 25.4;
+      const m = layoutText(t, t.fontSize, PT_MM, (s, size) => measureText(s, size, t.fontFamily, t.fontWeight || 400, !!t.italic));
+      patch.boxWidth = Math.max(20, +(m.width / PT_MM).toFixed(1));
+      // el cuadro parte del borde izquierdo del texto actual (si estaba centrado o a la derecha, el ancla se corre)
+      if (moveLocal && m.x0) Object.assign(patch, moveLocal(m.x0 / PT_MM));
+    }
+    set(patch);
   }
 
   /** Objeto de muestra para la vista previa de etiquetas: el seleccionado de la capa o el primero con texto. */
@@ -526,6 +572,7 @@ export class Panels {
     const fields = fieldChoices(layer);
     const refresh = () => this.render();
     const run = () => {
+      if (layer.locked) return app.message(`La capa «${layer.name}» está bloqueada: no se puede cambiar su estilo`);
       try {
         const rr = buildRenderer(layer.items, o);
         app.history.commit(applyRenderer(this.doc, layer.id, rr));

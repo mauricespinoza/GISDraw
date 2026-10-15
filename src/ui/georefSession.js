@@ -328,11 +328,12 @@ function h_(tag, cls) {
 }
 
 /** Abre una imagen sin georreferencia y empieza la sesión. */
-export async function startGeoref(app) {
-  const [f] = await pickFiles('image/*,.tif,.tiff');
+export async function startGeoref(app, file = null) {
+  const f = file || (await pickFiles('image/*,.tif,.tiff'))[0];
   if (!f) return;
+  const fname = f.name || 'recorte.png';
   let bitmap;
-  if (/\.tiff?$/i.test(f.name)) {
+  if (/\.tiff?$/i.test(fname)) {
     const { loadGeoTIFF } = await import('../io/loader.js');
     const GeoTIFF = await loadGeoTIFF();
     const tiff = await GeoTIFF.fromArrayBuffer(await f.arrayBuffer());
@@ -362,7 +363,7 @@ export async function startGeoref(app) {
   const data = g.getImageData(0, 0, w, hh);
   const bmp = scale < 1 ? await createImageBitmap(c) : bitmap;
   if (app.georef) app.georef.close();
-  app.georef = new GeorefSession(app, { name: f.name, bitmap: bmp, data, w, h: hh });
+  app.georef = new GeorefSession(app, { name: fname, bitmap: bmp, data, w, h: hh });
   app.showPanel('georef');
   app.message('Toca «+ Añadir punto», luego un rasgo en la imagen y después el mismo rasgo en el mapa', 6000);
 }

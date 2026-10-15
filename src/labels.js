@@ -24,6 +24,7 @@
 import { esc } from './style.js';
 import { flattenShape, polylineLength } from './vector.js';
 import { fieldValue } from './symbology.js';
+import { measureText } from './textLayout.js';
 
 /* --------------------------------------------------------- texto de la etiqueta */
 
@@ -195,18 +196,7 @@ class Occupancy {
 
 /* ---------------------------------------------------------- medida de texto */
 
-let measureCtx = null;
-export function measureText(text, fontPx, family, weight = 400, italic = false) {
-  try {
-    if (!measureCtx && typeof OffscreenCanvas !== 'undefined') measureCtx = new OffscreenCanvas(1, 1).getContext('2d');
-    if (!measureCtx && typeof document !== 'undefined') measureCtx = document.createElement('canvas').getContext('2d');
-  } catch {
-    measureCtx = null;
-  }
-  if (!measureCtx) return text.length * fontPx * 0.56;
-  measureCtx.font = `${italic ? 'italic ' : ''}${weight} ${fontPx}px ${family}`;
-  return measureCtx.measureText(text).width;
-}
+export { measureText };
 
 /* ------------------------------------------------------------- render */
 

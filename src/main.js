@@ -720,6 +720,12 @@ class App {
       e.preventDefault();
       const dt = e.clipboardData;
       const text = dt?.getData('image/svg+xml') || dt?.getData('text/plain') || dt?.getData('text/html') || '';
+      // un recorte de pantalla o una imagen copiada llega como archivo de imagen
+      const img = [...(dt?.files || []), ...[...(dt?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile())].find((f) => f && /^image\//.test(f.type) && f.type !== 'image/svg+xml');
+      if (img && !/<svg[\s>]/i.test(text)) {
+        this.pasteImage(img).catch((err) => this.message(`Pegar imagen: ${err.message}`, 6000));
+        return;
+      }
       const inPlace = !!this.pasteInPlaceNext;
       this.pasteInPlaceNext = false;
       this.pasteText(text, inPlace).catch((err) => this.message(`Pegar: ${err.message}`, 6000));
@@ -824,6 +830,35 @@ class App {
     const svg = this.copy(opts);
     this.editor.deleteSelection();
     return svg;
+  }
+
+  /**
+   * Pega un recorte (captura de pantalla o imagen copiada). Una imagen sin
+   * georreferencia casi siempre es un mapa o una figura que hay que ubicar:
+   * se ofrece georreferenciarla; si no, queda como capa de imagen en la vista
+   * (y se puede georreferenciar después desde Archivo).
+   */
+  async pasteImage(file) {
+    const n = this.history.doc.layers.filter((l) => l.kind === 'image').length + 1;
+    const name = `Recorte ${n}`;
+    const ok = confirm(`Se pegó una imagen (${file.type.replace('image/', '').toUpperCase()}).\n\nAceptar = georreferenciarla con puntos de control.\nCancelar = colocarla en la vista como capa de imagen «${name}».`);
+    if (ok) return this.startGeoref(file);
+    const bitmap = await createImageBitmap(file);
+    const v = this.view;
+    const wM = Math.min(v.w * 0.6, (v.h * 0.6 * bitmap.width) / bitmap.height) * v.mpp;
+    const hM = (wM * bitmap.height) / bitmap.width;
+    const bounds = [v.cx - wM / 2, v.cy - hM / 2, v.cx + wM / 2, v.cy + hM / 2];
+    const fileId = newId('F');
+    const rec = { kind: 'image', name, format: 'bitmap', mime: file.type, buffer: await file.arrayBuffer(), bounds };
+    imageFiles.set(fileId, { bitmap, x0: bounds[0], y0: bounds[1], x1: bounds[2], y1: bounds[3] });
+    await saveFile(fileId, rec);
+    const l = makeRasterLayer('image', name, { fileId });
+    const doc = this.history.doc;
+    const layers = doc.layers.slice();
+    const fv = layers.findIndex((x) => x.kind === 'vector');
+    layers.splice(fv < 0 ? layers.length : fv, 0, l);
+    this.history.commit({ ...doc, layers });
+    this.message(`Imagen pegada como capa «${name}». Para ubicarla con precisión: Archivo → Georreferenciar imagen.`, 7000);
   }
 
   /** Pegar desde un botón o Ctrl+F/B: el portapapeles del sistema si se puede leer, si no el interno. */
@@ -984,6 +1019,8 @@ class App {
       fontFamily: shape.fontFamily,
       fontWeight: shape.fontWeight || 400,
       fontStyle: shape.italic ? 'italic' : 'normal',
+      textAlign: shape.align === 'justify' ? 'justify' : shape.align || (shape.anchor === 'middle' ? 'center' : shape.anchor === 'end' ? 'right' : 'left'),
+      lineHeight: String(shape.lineHeight || 1.2),
       color: shape.style?.fill && shape.style.fill !== 'none' ? shape.style.fill : '#111827',
       left: `${Math.max(4, Math.min(x - 8, this.view.w - 220))}px`,
       top: `${Math.max(4, y - fpx * 1.35)}px`,
@@ -1084,9 +1121,9 @@ class App {
     });
   }
 
-  async startGeoref() {
+  async startGeoref(file = null) {
     const { startGeoref } = await import('./ui/georefSession.js');
-    return startGeoref(this);
+    return startGeoref(this, file);
   }
 
   layoutPanel() {
@@ -1198,6 +1235,7 @@ class App {
   async applyQmlToLayer(layerId) {
     const layer = findLayer(this.history.doc, layerId);
     if (!layer || layer.kind !== 'vector') return this.message('Elige una capa vectorial');
+    if (layer.locked) return this.message(`La capa «${layer.name}» está bloqueada: no se puede cambiar su estilo`);
     const [f] = await pickFiles('.qml,.qlr,.xml');
     if (!f) return;
     const parsed = parseQML(await f.text(), { refScale: this.history.doc.refScale, layerName: layer.name });
@@ -1222,6 +1260,12 @@ class App {
   }
 
   async buildImage(rec) {
+    // imagen pegada (PNG/JPG) con sus límites en UTM
+    if (rec.format === 'bitmap') {
+      const bitmap = await createImageBitmap(new Blob([rec.buffer], { type: rec.mime || 'image/png' }));
+      const [x0, y0, x1, y1] = rec.bounds;
+      return { bitmap, x0, y0, x1, y1 };
+    }
     const { readGeoTIFF, geotiffToUtmImage } = await import('./io/geotiff.js');
     const info = await readGeoTIFF(rec.buffer, { epsgOverride: rec.epsg || null });
     return geotiffToUtmImage(info);

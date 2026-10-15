@@ -11,6 +11,7 @@ import { allTopShapes } from './doc.js';
 import { nearestOnPolyline, pointInRing } from './geom.js';
 import { flattenShape, shapeBBox } from './vector.js';
 import { measureText } from './labels.js';
+import { layoutText } from './textLayout.js';
 
 const flatCache = new WeakMap(); // shape -> {tol, rings}
 
@@ -34,12 +35,13 @@ export function shapeDistance(shape, sp, view, units) {
     case 'text': {
       const [x, y] = P(shape.x, shape.y);
       const fs = shape.fontSize * units.ptToPx;
-      const lines = String(shape.text || '').split('\n');
-      const w = Math.max(...lines.map((l) => measureText(l, fs, shape.fontFamily, shape.fontWeight)));
-      const h = lines.length * fs * 1.2;
-      const x0 = shape.anchor === 'middle' ? x - w / 2 : shape.anchor === 'end' ? x - w : x;
-      const dx = Math.max(x0 - sp[0], 0, sp[0] - (x0 + w));
-      const dy = Math.max(y - fs - sp[1], 0, sp[1] - (y - fs + h));
+      const m = layoutText(shape, fs, units.mmToPx, (t, size) => measureText(t, size, shape.fontFamily, shape.fontWeight || 400, !!shape.italic));
+      // el puntero, al sistema local del texto (sin girar): la caja sigue la orientación del texto
+      const a = ((shape.rotation || 0) * Math.PI) / 180;
+      const lx = (sp[0] - x) * Math.cos(a) + (sp[1] - y) * Math.sin(a);
+      const ly = -(sp[0] - x) * Math.sin(a) + (sp[1] - y) * Math.cos(a);
+      const dx = Math.max(m.x0 - lx, 0, lx - (m.x0 + m.width));
+      const dy = Math.max(m.top - ly, 0, ly - (m.top + m.height));
       return Math.hypot(dx, dy);
     }
     case 'group': {

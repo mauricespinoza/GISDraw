@@ -18,7 +18,7 @@
  */
 
 import { fromLonLat, toLonLat, formatDMSShort } from '../proj.js';
-import { esc, shapeToSvg } from '../style.js';
+import { defaultStyle, esc, shapeToSvg, textToSvg } from '../style.js';
 import { renderLabels, labelText, hasLabelSource } from '../labels.js';
 import { classIndex, rendererLabel } from '../symbology.js';
 import { lonLatBBox } from '../raster/dem.js';
@@ -58,6 +58,7 @@ export function defaultLayout(doc, view) {
     legend: true,
     legendWidth: 62,
     legendTitle: 'Leyenda',
+    texts: [], // cuadros de texto del layout: { id, x, y, text, fontSize (pt), align, boxWidth (mm), … }
     frame: null, // { x, y, w, h } del marco del mapa en mm; null = automático según la página
     offsets: {}, // desplazamiento en mm de cada elemento respecto de su lugar por defecto: { legend: [dx, dy], … }
     showTitle: true,
@@ -145,6 +146,37 @@ export function symbolFactor(refScale, L) {
     default:
       return Math.min(2, Math.max(0.5, Math.sqrt(ratio)));
   }
+}
+
+/**
+ * Un cuadro de texto del layout como forma de texto en milímetros de PÁGINA
+ * (x, y = ancla; tamaño en pt reales de papel, sin el factor de símbolos).
+ */
+export function layoutTextShape(t) {
+  return {
+    id: t.id,
+    type: 'text',
+    x: t.x,
+    y: t.y,
+    text: t.text ?? '',
+    fontSize: t.fontSize || 10,
+    fontFamily: t.fontFamily || 'Helvetica, Arial, sans-serif',
+    fontWeight: t.fontWeight || 400,
+    italic: !!t.italic,
+    anchor: t.anchor || 'start',
+    align: t.align,
+    boxWidth: t.boxWidth,
+    lineHeight: t.lineHeight,
+    letterSpacing: t.letterSpacing,
+    wordSpacing: t.wordSpacing,
+    rotation: t.rotation || 0,
+    halo: !!t.halo,
+    haloColor: t.haloColor || '#ffffff',
+    haloWidth: t.haloWidth ?? 0.5,
+    haloOpacity: t.haloOpacity,
+    style: { ...defaultStyle(), fill: t.color || '#111827', fillOpacity: 1, fillType: 'solid', stroke: 'none', opacity: 1 },
+    visible: true,
+  };
 }
 
 /* --------------------------------------------------------- geometría de página */
@@ -283,6 +315,12 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
     const sw = Math.min(80, g.fw - 30);
     if (L.scalebar) element('scalebar', 'Escala', plate(bx + 14, by - 2, sw + 12, 20) + scaleBarSvg(L, bx + 20, by + 3, sw, font));
     element('info', 'Datos', L.showInfo !== false ? `<text x="${r2(g.fx)}" y="${r2(g.H - L.margin + 4)}" font-family="${font}" font-size="2.2" fill="#374151">${esc(crsNote(centerRot))}${attribution ? ` · ${esc(attribution)}` : ''}</text>` : '');
+  }
+
+  // ---- cuadros de texto del layout
+  const tctx = { P: (x, y) => [x, y], mmToPx: 1, ptToPx: 0.352778, viewW: g.W, viewH: g.H, defs, uid: 'lt_', flatTol: 0.05 };
+  for (const t of L.texts || []) {
+    element(`text:${t.id}`, `Texto: ${String(t.text || '').split('\n')[0].slice(0, 28) || '(vacío)'}`, textToSvg(layoutTextShape(t), { ...tctx, uid: `lt${t.id}_` }));
   }
 
   // Un grupo de primer nivel por parte, con id y data-name como los escribe

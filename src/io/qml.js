@@ -692,6 +692,15 @@ export function styleToSymbolXml(st, kind, name) {
     // completamente afuera (o adentro), igual que en GISDrawer.
     const off = st.align === 'outside' ? st.strokeWidth / 2 : st.align === 'inside' ? -st.strokeWidth / 2 : 0;
     outline = lineLayer(st, { width: st.strokeWidth, color: st.stroke, opacity: st.strokeOpacity, offset: off, dash: st.dash });
+    // halo del trazo: una banda del color del halo por fuera (o a cada lado si el borde es centrado), por debajo
+    if (st.casing && st.casingWidth > 0) {
+      const cw = st.casingWidth;
+      const cas =
+        st.align === 'center'
+          ? lineLayer(st, { width: st.strokeWidth + 2 * cw, color: st.casingColor, opacity: (st.casingOpacity ?? 1) * (st.strokeOpacity ?? 1), dash: st.dash })
+          : lineLayer(st, { width: cw, color: st.casingColor, opacity: (st.casingOpacity ?? 1) * (st.strokeOpacity ?? 1), offset: (st.align === 'inside' ? -1 : 1) * (st.strokeWidth + cw / 2), dash: st.dash });
+      outline = cas + outline;
+    }
   }
   return `<symbol type="fill" name="${name}" alpha="${st.opacity ?? 1}" clip_to_extent="1" force_rhr="1">${fillLayer}${pattern}${outline}</symbol>`;
 }
