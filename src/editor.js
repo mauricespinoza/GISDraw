@@ -21,10 +21,9 @@
 import { addShapes, allTopShapes, findTopShape, inLockedLayer, layerOfShape, mapShapes, removeShapes, replaceShapes } from './doc.js';
 import { splitPath } from './ops.js';
 import { layoutText, textCorners } from './textLayout.js';
-import { measureText } from './labels.js';
 import { pickShape, shapesInBox, shapesInLasso, shapeDistance, flatRings } from './hit.js';
 import { SnapIndex, buildGraph, tracePath } from './snapping.js';
-import { nodesD, shapeD, esc } from './style.js';
+import { nodesD, shapeD, esc, textMeasurer } from './style.js';
 import { paperUnits } from './view.js';
 import {
   makeEllipsePath,
@@ -759,7 +758,7 @@ export class Editor {
     const u = this.units();
     const [ax, ay] = this.view.toScreen(shape.x, shape.y);
     const fs = shape.fontSize * u.ptToPx;
-    const m = layoutText(shape, fs, u.mmToPx, (t, size) => measureText(t, size, shape.fontFamily, shape.fontWeight || 400, !!shape.italic));
+    const m = layoutText(shape, fs, u.mmToPx, textMeasurer(shape));
     const { corners, center, rot } = textCorners(m, ax, ay, shape.rotation || 0);
     const [nw, ne, se, sw] = corners;
     const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];

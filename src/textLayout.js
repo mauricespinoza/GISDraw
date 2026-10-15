@@ -23,7 +23,9 @@
  * las unidades de salida por mm de papel, y `measure(texto, fs)` mide un renglón.
  */
 
-export const NBSP = ' ';
+import { hasRuns, styleArray } from './richText.js';
+
+export const NBSP = '\u00A0';
 
 /** Espacios que no se colapsan: las tandas de 2 o más y los de los extremos. */
 export function hardSpaces(s) {
@@ -43,75 +45,140 @@ export function anchorOf(shape) {
 
 /**
  * @returns {{
- *   lines: {t: string, w: number, words?: {t: string, x: number}[]}[],
+ *   lines: {t: string, w: number, pieces: {t: string, st: object}[], ms: number, adv: number,
+ *           words?: {t: string, x: number, pieces: object[]}[], last?: boolean}[],
  *   boxed: boolean, boxW: number, width: number, height: number,
  *   x0: number, top: number, lh: number, track: number, align: string
  * }} medidas en las unidades de salida; `x0` y `top` son el borde izquierdo y
  *   superior del cuadro RESPECTO DEL ANCLA (x, y de la forma), sin rotar.
+ *   Cada renglón se reparte en `pieces`: trozos de un mismo formato (`st` es el
+ *   tramo de `runs` o `{}`); `ms` es el mayor `scale` del renglón y `adv` lo
+ *   que baja su línea base respecto de la del renglón anterior.
+ *
+ * `measure(texto, tamaño, st)` mide un trozo; `st` puede traer `bold` / `italic`.
  */
 export function layoutText(shape, fs, mmUnit, measure) {
   const align = alignOf(shape);
   const boxW = shape.boxWidth > 0 ? shape.boxWidth * mmUnit : 0;
   const boxed = boxW > 0;
-  const lh = (shape.lineHeight > 0 ? shape.lineHeight : 1.2) * fs;
+  const lhMul = shape.lineHeight > 0 ? shape.lineHeight : 1.2;
+  const lh = lhMul * fs;
   const track = ((shape.letterSpacing || 0) / 1000) * fs;
   const wordGap = ((shape.wordSpacing || 0) / 1000) * fs;
-  const meas = (s) => {
-    if (!s) return 0;
-    const spaces = (s.match(/ /g) || []).length;
-    return measure(hardSpaces(s), fs) + track * s.length + wordGap * spaces;
+  const text = String(shape.text ?? '');
+  const styles = hasRuns(shape) ? styleArray(shape.runs, text.length) : null;
+  const NONE = {};
+  const st = (i) => (styles ? styles[i] || NONE : NONE);
+
+  /** Trozos de formato uniforme de text[a, a+len). */
+  const piecesOf = (a, len) => {
+    const out = [];
+    for (let k = 0; k < len; k++) {
+      const cur = st(a + k);
+      const last = out[out.length - 1];
+      if (last && last.st === cur) last.t += text[a + k];
+      else out.push({ t: text[a + k], st: cur });
+    }
+    return out;
   };
+  const measPiece = (pc) => {
+    if (!pc.t) return 0;
+    const sc = pc.st.scale || 1;
+    const spaces = (pc.t.match(/ /g) || []).length;
+    return measure(hardSpaces(pc.t), fs * sc, pc.st) + track * sc * pc.t.length + wordGap * sc * spaces;
+  };
+  const measPieces = (pcs) => pcs.reduce((w, pc) => w + measPiece(pc), 0);
+  const maxScale = (pcs) => pcs.reduce((m, pc) => Math.max(m, pc.st.scale || 1), 0) || 1;
+  const joinPieces = (...lists) => {
+    const out = [];
+    for (const pc of lists.flat()) {
+      const last = out[out.length - 1];
+      if (last && last.st === pc.st) last.t += pc.t;
+      else out.push({ t: pc.t, st: pc.st });
+    }
+    return out;
+  };
+  const mkLine = (pcs, last) => ({ t: pcs.map((p) => p.t).join(''), w: measPieces(pcs), pieces: pcs, ms: maxScale(pcs), last });
 
   const lines = [];
-  for (const para of String(shape.text ?? '').split('\n')) {
+  let base = 0;
+  for (const para of text.split('\n')) {
     if (!boxed) {
-      lines.push({ t: para, w: meas(para) });
-      continue;
-    }
-    // ajuste de línea: se corta en los espacios, y una palabra más larga que el cuadro queda entera
-    const tokens = para.split(/( +)/);
-    let line = '';
-    let pending = '';
-    for (const tok of tokens) {
-      if (!tok) continue;
-      if (/^ +$/.test(tok)) {
-        pending = tok;
-        continue;
+      lines.push(mkLine(piecesOf(base, para.length), true));
+    } else {
+      // ajuste de línea: se corta en los espacios, y una palabra más larga que el cuadro queda entera
+      const tokens = [];
+      const re = / +|[^ ]+/g;
+      let m;
+      while ((m = re.exec(para))) tokens.push({ a: base + m.index, len: m[0].length, space: m[0][0] === ' ' });
+      let line = [];
+      let lineW = 0;
+      let pending = null;
+      for (const tok of tokens) {
+        const pcs = piecesOf(tok.a, tok.len);
+        if (tok.space) {
+          pending = pcs;
+          continue;
+        }
+        const withSp = line.length && pending ? joinPieces(line, pending, pcs) : joinPieces(line, pcs);
+        const w = measPieces(withSp);
+        if (line.length && w > boxW) {
+          lines.push(mkLine(line, false));
+          line = pcs;
+          lineW = measPieces(pcs);
+        } else {
+          line = withSp;
+          lineW = w;
+        }
+        pending = null;
       }
-      const cand = line ? line + pending + tok : pending + tok;
-      if (line && meas(cand) > boxW) {
-        lines.push({ t: line, w: meas(line) });
-        line = tok;
-      } else line = cand;
-      pending = '';
+      void lineW;
+      lines.push(mkLine(pending ? joinPieces(line, pending) : line, true));
     }
-    lines.push({ t: line + pending, w: meas(line + pending) });
-    // el último renglón de un párrafo no se justifica
-    lines[lines.length - 1].last = true;
+    base += para.length + 1;
   }
-  if (!boxed) for (const l of lines) l.last = true;
 
   if (boxed && align === 'justify') {
     for (const l of lines) {
       if (l.last) continue;
-      const words = l.t.split(/ +/).filter(Boolean);
+      // palabras con sus trozos (los espacios entre ellas se reparten)
+      const words = [];
+      let a = 0;
+      for (const mm of l.t.matchAll(/[^ ]+/g)) {
+        // posición de la palabra dentro del renglón → trozos
+        const pcs = [];
+        let pos = 0;
+        for (const pc of l.pieces) {
+          const lo = Math.max(mm.index, pos);
+          const hi = Math.min(mm.index + mm[0].length, pos + pc.t.length);
+          if (hi > lo) pcs.push({ t: pc.t.slice(lo - pos, hi - pos), st: pc.st });
+          pos += pc.t.length;
+        }
+        words.push({ t: mm[0], pieces: pcs, w: measPieces(pcs) });
+        a++;
+      }
+      void a;
       if (words.length < 2) continue;
-      const ws = words.map((w) => meas(w));
-      const gap = Math.max(0, (boxW - ws.reduce((a, b) => a + b, 0)) / (words.length - 1));
+      const gap = Math.max(0, (boxW - words.reduce((sum, w) => sum + w.w, 0)) / (words.length - 1));
       let x = 0;
-      l.words = words.map((t, i) => {
-        const o = { t, x };
-        x += ws[i] + gap;
+      l.words = words.map((w) => {
+        const o = { t: w.t, x, pieces: w.pieces };
+        x += w.w + gap;
         return o;
       });
       l.w = boxW;
     }
   }
 
+  // la línea base de cada renglón baja según su mayor tamaño
+  lines.forEach((l, i) => {
+    l.adv = i === 0 ? 0 : lh * l.ms;
+  });
   const width = boxed ? boxW : Math.max(0, ...lines.map((l) => l.w));
-  const height = fs * 0.95 + (lines.length - 1) * lh + fs * 0.25;
+  const ascent = fs * 0.95 * lines[0].ms;
+  const height = ascent + lines.reduce((sum, l) => sum + l.adv, 0) + fs * 0.25 * lines[lines.length - 1].ms;
   const x0 = boxed ? 0 : align === 'center' ? -width / 2 : align === 'right' ? -width : 0;
-  return { lines, boxed, boxW, width, height, x0, top: -fs * 0.95, lh, track, wordGap, align };
+  return { lines, boxed, boxW, width, height, x0, top: -ascent, lh, track, wordGap, align };
 }
 
 /**

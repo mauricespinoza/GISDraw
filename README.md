@@ -50,6 +50,7 @@ en las herramientas del navegador → Aplicación → Service Workers →
 node test/core.test.mjs      # proyección, geometría, estilo, operaciones, etiquetas, relieve, trace
 node test/georef.test.mjs    # transformaciones, residuos y remuestreo
 node test/ornaments.test.mjs # ornamentos, onda, tramas, halos
+node test/richtext.test.mjs # texto con formato por tramos (color/tamaño/negrita/cursiva)
 node test/sw.test.mjs        # todo módulo está en el precache offline
 ```
 
@@ -459,3 +460,7 @@ svg2pdf.
   grosor; conviene comprobar el sentido del desplazamiento en QGIS con anillos
   de orientación mixta.
 - Declinación magnética en el layout (requiere el modelo WMM).
+
+## Texto con formato por tramos
+
+Al editar un texto (doble clic en el mapa o en un cuadro del layout) aparece una barra: selecciona parte de las letras y cambia su **color**, **tamaño (pt)**, **negrita** o **cursiva** sin afectar el resto (`Aa` quita el formato). Sin selección afecta a todo el texto. El formato se guarda en `shape.runs` (`{s,e,color,scale,bold,italic}`), sale como `<tspan>` en SVG/Illustrator y se conserva al pasar un texto del layout a una capa.

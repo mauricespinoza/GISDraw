@@ -8,8 +8,9 @@
  * historial y se confirma al soltar, así un ajuste completo es UN deshacer.
  */
 
+import { adjustRuns } from '../richText.js';
 import { BLEND_MODES, defaultLabels, findLayer, makeRasterLayer, makeVectorLayer, addLayer, removeLayer, moveLayer, duplicateLayer, updateLayer, mapShapes } from '../doc.js';
-import { DASHES, MARKERS, POINT_SHAPES, defaultStyle } from '../style.js';
+import { DASHES, MARKERS, POINT_SHAPES, defaultStyle, textMeasurer } from '../style.js';
 import { ORNAMENTS, ORNAMENT_LIMITS, ornamentDefaults } from '../ornaments.js';
 import { PATTERNS, PATTERN_GROUPS, patternPreview } from '../patterns.js';
 import { BASEMAPS } from '../raster/basemap.js';
@@ -21,7 +22,7 @@ import { LABEL_SEPARATORS, labelText } from '../labels.js';
 import { RAMPS, applyRenderer, buildRenderer, clearRenderer, countClasses, defaultRendererOptions, fieldChoices, rampCss } from '../symbology.js';
 import { h, sec, row, select, slider, num, text, color, check, btn } from './dom.js';
 import { TAB_ICONS } from './icons.js';
-import { alignOf, layoutText, measureText } from '../textLayout.js';
+import { alignOf, layoutText } from '../textLayout.js';
 
 export const TABS = {
   layers: 'Capas',
@@ -503,7 +504,10 @@ export class Panels {
    */
   textControls(t, set, { color: colorCtl = null, moveLocal = null } = {}) {
     const ta = h('textarea', {}, t.text);
-    ta.addEventListener('change', () => set({ text: ta.value, name: ta.value.split('\n')[0].slice(0, 40) }));
+    ta.addEventListener('change', () => {
+      const runs = adjustRuns(t.text || '', ta.value, t.runs);
+      set({ text: ta.value, runs: runs.length ? runs : undefined, name: ta.value.split('\n')[0].slice(0, 40) });
+    });
     const align = alignOf(t);
     const alignBtn = (id, label, tip) =>
       h('button', { class: `btn sm${align === id ? ' on' : ''}`, title: tip, type: 'button', onclick: () => this.setAlign(t, id, set, moveLocal) }, label);
@@ -538,7 +542,7 @@ export class Panels {
     const patch = { align: id, anchor: id === 'center' ? 'middle' : id === 'right' ? 'end' : 'start' };
     if (id === 'justify' && !(t.boxWidth > 0)) {
       const PT_MM = 72 / 25.4;
-      const m = layoutText(t, t.fontSize, PT_MM, (s, size) => measureText(s, size, t.fontFamily, t.fontWeight || 400, !!t.italic));
+      const m = layoutText(t, t.fontSize, PT_MM, textMeasurer(t));
       patch.boxWidth = Math.max(20, +(m.width / PT_MM).toFixed(1));
       // el cuadro parte del borde izquierdo del texto actual (si estaba centrado o a la derecha, el ancla se corre)
       if (moveLocal && m.x0) Object.assign(patch, moveLocal(m.x0 / PT_MM));
