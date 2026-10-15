@@ -18,6 +18,7 @@
  *    mismo menú contextual que el botón derecho.
  */
 
+import { imageRect } from './raster/rasterView.js';
 import { addShapes, allTopShapes, findTopShape, inLockedLayer, layerOfShape, mapShapes, removeShapes, replaceShapes } from './doc.js';
 import { splitPath } from './ops.js';
 import { layoutText, textCorners } from './textLayout.js';
@@ -91,6 +92,7 @@ export class Editor {
     this.onEditText = onEditText || (() => {});
     this.tool = 'select';
     this.selection = new Set();
+    this.imageSel = null; // id de la capa de imagen seleccionada (mover/escalar), solo si su capa está desbloqueada
     this.draft = null; // { nodes, snaps, closedTool }
     this.preview = null;
     this.hover = null; // {sp, wp, snap, tracePreview}
@@ -139,6 +141,7 @@ export class Editor {
       this.onMessage(`La capa «${name}» está bloqueada: sus objetos no se pueden seleccionar ni editar`);
     }
     this.selection = new Set(free);
+    this.imageSel = null;
     this.activeNode = null;
     this.changed();
   }
@@ -566,6 +569,22 @@ export class Editor {
         this.history.preview(replaceShapes(d.base, map));
         return;
       }
+      case 'imove': {
+        if (Math.hypot(sp[0] - d.sp0[0], sp[1] - d.sp0[1]) > 3) d.moved = true;
+        if (!d.moved) return;
+        const dx = wp[0] - d.start[0];
+        const dy = wp[1] - d.start[1];
+        const [x0, y0, x1, y1] = d.b0;
+        this.history.preview(this.withBounds(d.base, d.id, [x0 + dx, y0 + dy, x1 + dx, y1 + dy]));
+        return;
+      }
+      case 'iscale': {
+        // escalar la imagen con su esquina superior izquierda fija
+        const [x0, y0, x1, y1] = d.b0;
+        const k = Math.max(0.02, Math.min(100, Math.max((wp[0] - x0) / (x1 - x0), (y1 - wp[1]) / (y1 - y0))));
+        this.history.preview(this.withBounds(d.base, d.id, [x0, y1 - (y1 - y0) * k, x0 + (x1 - x0) * k, y1]));
+        return;
+      }
       case 'tscale': {
         // estirar un texto = cambiar su tamaño de letra, con la esquina (o borde) opuesta fija
         const { frame: f, handle } = d;
@@ -688,6 +707,16 @@ export class Editor {
         this.history.end();
         this.snapDirty = true;
         return;
+      case 'imove':
+        if (!d.moved) {
+          this.history.anchor = null;
+          return;
+        }
+        this.history.end();
+        return;
+      case 'iscale':
+        this.history.end();
+        return;
       case 'scale':
       case 'tscale':
       case 'twidth':
@@ -788,8 +817,47 @@ export class Editor {
     return null;
   }
 
+  /** Rectángulo de pantalla de la imagen seleccionada: [x0, y0, x1, y1], o null. */
+  imageScreenRect() {
+    const l = this.imageSel && this.doc.layers.find((x) => x.id === this.imageSel && x.kind === 'image');
+    const img = l && imageRect(l);
+    if (!img) return null;
+    const [x0, y0] = this.view.toScreen(img.x0, img.y1);
+    const [x1, y1] = this.view.toScreen(img.x1, img.y0);
+    return [x0, y0, x1, y1];
+  }
+
+  /** Capa de imagen visible y DESBLOQUEADA bajo un punto del mundo (la de más arriba). */
+  pickImage(wp) {
+    for (let i = this.doc.layers.length - 1; i >= 0; i--) {
+      const l = this.doc.layers[i];
+      if (l.kind !== 'image' || !l.visible || l.locked) continue;
+      const img = imageRect(l);
+      if (img && wp[0] >= img.x0 && wp[0] <= img.x1 && wp[1] >= img.y0 && wp[1] <= img.y1) return l;
+    }
+    return null;
+  }
+
+  imageBounds(layer) {
+    const img = imageRect(layer);
+    return [img.x0, img.y0, img.x1, img.y1];
+  }
+
+  withBounds(doc, id, b) {
+    return { ...doc, layers: doc.layers.map((l) => (l.id === id ? { ...l, settings: { ...l.settings, bounds: b } } : l)) };
+  }
+
   selectDown(e, sp, wp, shift) {
     const add = shift || this.addMode;
+    if (this.imageSel && !this.selection.size) {
+      const r = this.imageScreenRect();
+      if (r && Math.hypot(sp[0] - r[2], sp[1] - r[3]) < 12) {
+        const l = this.doc.layers.find((x) => x.id === this.imageSel);
+        this.history.begin();
+        this.drag = { mode: 'iscale', id: l.id, b0: this.imageBounds(l), base: this.doc };
+        return;
+      }
+    }
     const handle = this.selection.size ? this.handleAt(sp) : null;
     if (handle?.startsWith('T')) {
       const text = this.singleText();
@@ -836,6 +904,16 @@ export class Editor {
       }
       return;
     }
+    const img = this.pickImage(wp);
+    if (img) {
+      if (!add) this.setSelection([]);
+      this.imageSel = img.id;
+      this.history.begin();
+      this.drag = { mode: 'imove', id: img.id, start: wp, sp0: sp, b0: this.imageBounds(img), base: this.doc, moved: false };
+      this.changed();
+      return;
+    }
+    this.imageSel = null;
     this.drag = { mode: 'marquee', start: wp };
   }
 
@@ -1416,6 +1494,13 @@ export class Editor {
       const cx = (x0 + x1) / 2;
       out.push(`<line x1="${r2(cx)}" y1="${r2(y0)}" x2="${r2(cx)}" y2="${r2(y0 - 26)}" stroke="#0ea5e9"/>`);
       out.push(`<circle cx="${r2(cx)}" cy="${r2(y0 - 26)}" r="6" fill="#fff" stroke="#0ea5e9" stroke-width="1.5"/>`);
+    }
+
+    // imagen raster seleccionada (capa desbloqueada): caja y asa de escala
+    const ir = this.tool === 'select' ? this.imageScreenRect() : null;
+    if (ir) {
+      out.push(`<rect x="${r2(ir[0])}" y="${r2(ir[1])}" width="${r2(ir[2] - ir[0])}" height="${r2(ir[3] - ir[1])}" fill="rgba(14,165,233,.05)" stroke="#0ea5e9" stroke-dasharray="4 3"/>`);
+      out.push(`<rect class="h" x="${r2(ir[2] - 5)}" y="${r2(ir[3] - 5)}" width="10" height="10" fill="#fff" stroke="#0ea5e9" stroke-width="1.5"/>`);
     }
 
     // nodos

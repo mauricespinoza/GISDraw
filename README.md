@@ -321,6 +321,8 @@ píxeles cubre más terreno, y Terrarium parte de ~30 m en tierra.
 
 **Bloquear elementos del layout**: cada elemento seleccionado tiene un candado en su esquina superior izquierda; bloqueado no se mueve, escala ni borra, y arrastrar sobre él dentro del marco mueve el mapa. «Bloquear posición y tamaño de todos los elementos» (panel Layout) lo aplica a todos.
 
+**Imágenes en la vista normal**: con la herramienta Seleccionar, una capa de imagen raster **desbloqueada** (candado en la pestaña Capas; las capas raster nuevas vienen bloqueadas) se selecciona con un clic sobre ella, se arrastra para moverla y el cuadrito de su esquina inferior derecha la reescala (esquina superior izquierda fija). Es la misma posición que se usa en el layout y se deshace con Ctrl+Z. Una imagen que cubre toda la pantalla estorba al rectángulo de selección: vuelve a bloquearla cuando termines de ubicarla.
+
 **Imágenes pegadas en el layout**: un clic sobre una imagen (capa de imagen que no cubra todo el marco) la selecciona; se arrastra para moverla y el cuadrito de su esquina inferior derecha la reescala. La posición se guarda en la capa (se deshace con Ctrl+Z).
 
 **Escalas**: la escala gráfica (barra) y la numérica («Escala 1:25.000») son dos elementos independientes; cada uno puede llevar un fondo sólido del color que elijas (panel Layout → Elementos).
