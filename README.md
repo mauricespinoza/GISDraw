@@ -315,7 +315,9 @@ Exportar → Vista previa, hasta 600 dpi; la resolución de la capa de relieve l
 pequeñas el relieve tiene menos detalle por naturaleza: el mismo número de
 píxeles cubre más terreno, y Terrarium parte de ~30 m en tierra.
 
-**Escalar elementos del layout**: al seleccionar un elemento (título, leyenda, norte, escala, datos o cuadro de texto) aparece un cuadrito en su esquina inferior derecha; arrástralo para agrandarlo o achicarlo de forma proporcional (la esquina superior izquierda queda fija). Vale también para el PDF/SVG exportado.
+**Mover y escalar en el layout**: en la vista de layout, un clic sobre un objeto vectorial del mapa (Mayús suma más) lo selecciona; arrástralo para moverlo, o arrastra el cuadrito de su esquina inferior derecha para escalarlo (proporcional, con la esquina superior izquierda fija). Las flechas lo desplazan y Supr lo elimina. Esto modifica la geometría real del dibujo (se puede deshacer con Ctrl+Z). Los elementos propios de la lámina (título, leyenda, norte, escalas, datos, cuadros de texto) también se mueven y se escalan con su cuadrito.
+
+**Escalas**: la escala gráfica (barra) y la numérica («Escala 1:25.000») son dos elementos independientes; cada uno puede llevar un fondo sólido del color que elijas (panel Layout → Elementos).
 
 **Varios objetos a la vez**: con varios objetos seleccionados, trazo, grosor, relleno, opacidad, halo y demás del panel Estilo se aplican a todos; si hay textos, aparece además una sección con fuente, tamaño, negrita/cursiva y halo de texto para todos.
 

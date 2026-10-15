@@ -12,7 +12,7 @@ const KEY = 'gd.layoutStyles';
 export const STYLE_KEYS = [
   'page', 'orientation', 'margin',
   'grid', 'gridInterval', 'geoInterval', 'gridStyle', 'gridColor', 'gridLabelSize', 'zebra',
-  'north', 'scalebar', 'legend', 'legendWidth', 'legendTitle', 'showTitle', 'showInfo',
+  'north', 'scalebar', 'scalenum', 'scalebarBg', 'scalenumBg', 'scaleBgColor', 'legend', 'legendWidth', 'legendTitle', 'showTitle', 'showInfo',
   'symbolScale', 'symbolFactor', 'fontFamily', 'dpi', 'previewDpi',
   'frame', 'offsets', 'texts', 'fitRound',
 ];
