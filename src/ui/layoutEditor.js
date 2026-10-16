@@ -26,6 +26,23 @@ import { h, sec, row, select, num, text, check, btn, color } from './dom.js';
 import { download } from '../io/store.js';
 import { loadScript } from '../io/loader.js';
 
+/** Codifica un canvas a data URL sin bloquear: toBlob (PNG, o JPEG si es opaco) y lectura asíncrona. */
+function encodeCanvas(canvas, opaque) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return reject(new Error('No se pudo codificar la imagen del mapa'));
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = () => reject(fr.error);
+        fr.readAsDataURL(blob);
+      },
+      opaque ? 'image/jpeg' : 'image/png',
+      0.95,
+    );
+  });
+}
+
 /** Lado máximo (px) de las imágenes raster de la lámina. */
 const MAX_RASTER_PX = 9000;
 
@@ -328,7 +345,7 @@ export class LayoutEditor {
         const off = this.L.offsets?.[this.sel] || [0, 0];
         const A = [off[0] + a[0], off[1] + a[1]]; // ancla en la página
         const B = this.elementGroup(this.sel).getBBox();
-        this.gesture = { mode: 'scale', el: this.sel, a, off, s0, A, w0: Math.max(1e-3, B.x + B.width - A[0]), h0: Math.max(1e-3, B.y + B.height - A[1]) };
+        this.gesture = { mode: 'scale', start: [0, 0], el: this.sel, a, off, s0, A, w0: Math.max(1e-3, B.x + B.width - A[0]), h0: Math.max(1e-3, B.y + B.height - A[1]) };
         return;
       }
     }
@@ -551,8 +568,12 @@ export class LayoutEditor {
       const L = this.L;
       const o = { ...(L.offsets || {}) };
       delete o[name];
+      const sc = { ...(L.scales || {}) };
+      delete sc[name];
+      const lk = { ...(L.locks || {}) };
+      delete lk[name];
       this.sel = null;
-      this.set({ texts: (L.texts || []).filter((t) => t.id !== id), offsets: o });
+      this.set({ texts: (L.texts || []).filter((t) => t.id !== id), offsets: o, scales: sc, locks: lk });
       this.app.message('Cuadro de texto eliminado (Ctrl+Z lo recupera)', 3000);
       this.app.panels?.render();
       return;
@@ -686,11 +707,18 @@ export class LayoutEditor {
     this.t = setTimeout(() => this.preview().catch((e) => this.app.message(`Layout: ${e.message}`, 6000)), ms);
   }
 
-  /** Imágenes raster para el marco, agrupando rasters consecutivas. */
+  /**
+   * Imágenes raster para el marco, agrupando rasters consecutivas.
+   * El resultado se guarda en caché (clave: marco, resolución y capas raster):
+   * mover un elemento o exportar de nuevo no recalcula relieve ni teselas.
+   */
   async rasters(L, dpi, { signal } = {}) {
     const doc = this.app.history.doc;
     const g = pageGeometry(L);
     const ext = frameExtent(L, g);
+    const key = JSON.stringify([dpi, ext, doc.layers.filter((l) => l.kind !== 'vector').map((l) => [l.id, l.kind, l.visible, l.opacity, l.blend, l.settings])]);
+    const hit = this.rasterCache.get(key);
+    if (hit) return hit;
     // hasta 9 000 px por lado (A0 a 200 dpi, A3 a 600 dpi)
     const wpx = Math.max(50, Math.min(MAX_RASTER_PX, Math.round((g.fw / 25.4) * dpi)));
     const hpx = Math.max(50, Math.min(MAX_RASTER_PX, Math.round((g.fh / 25.4) * dpi)));
@@ -699,12 +727,14 @@ export class LayoutEditor {
     v.cy = (ext.minY + ext.maxY) / 2;
     v.mpp = (ext.maxX - ext.minX) / wpx;
     const out = [];
+    const encoding = []; // la codificación (PNG/JPEG) corre en paralelo y sin bloquear la interfaz
     let group = null;
     const flush = () => {
-      if (group) {
-        out.push({ index: group.index, href: group.canvas.toDataURL('image/png'), opacity: 1, name: group.names.reverse().join(' + ') });
-        group = null;
-      }
+      if (!group) return;
+      const item = { index: group.index, href: '', opacity: 1, name: group.names.reverse().join(' + ') };
+      out.push(item);
+      encoding.push(encodeCanvas(group.canvas, group.opaque).then((href) => (item.href = href)));
+      group = null;
     };
     for (let i = 0; i < doc.layers.length; i++) {
       const l = doc.layers[i];
@@ -719,8 +749,10 @@ export class LayoutEditor {
         const canvas = document.createElement('canvas');
         canvas.width = wpx;
         canvas.height = hpx;
-        group = { index: i, canvas, ctx: canvas.getContext('2d'), names: [] };
+        group = { index: i, canvas, ctx: canvas.getContext('2d'), names: [], opaque: true };
       }
+      // solo un grupo de mapas base sin transparencia ni fusión se puede guardar como JPEG (mucho más rápido y liviano)
+      if (l.kind !== 'basemap' || l.opacity < 1 || (l.blend && l.blend !== 'normal')) group.opaque = false;
       group.names.push(l.name);
       group.ctx.globalAlpha = l.opacity;
       group.ctx.globalCompositeOperation = l.blend && l.blend !== 'normal' ? l.blend : 'source-over';
@@ -729,6 +761,11 @@ export class LayoutEditor {
       group.ctx.globalCompositeOperation = 'source-over';
     }
     flush();
+    await Promise.all(encoding);
+    if (!signal?.aborted) {
+      this.rasterCache.set(key, out);
+      while (this.rasterCache.size > 3) this.rasterCache.delete(this.rasterCache.keys().next().value);
+    }
     return out;
   }
 
