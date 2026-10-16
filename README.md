@@ -321,6 +321,8 @@ píxeles cubre más terreno, y Terrarium parte de ~30 m en tierra.
 
 **Bloquear elementos del layout**: cada elemento seleccionado tiene un candado en su esquina superior izquierda; bloqueado no se mueve, escala ni borra, y arrastrar sobre él dentro del marco mueve el mapa. «Bloquear posición y tamaño de todos los elementos» (panel Layout) lo aplica a todos.
 
+**Exportación más rápida**: las imágenes raster de la lámina (relieve, mapa base, imágenes) se guardan en caché por marco y resolución, así que mover elementos o exportar otra vez a SVG/PDF/PNG no recalcula nada; se codifican en paralelo y sin bloquear la interfaz, y un mapa base sin transparencia se guarda como JPEG (mucho más liviano y rápido que PNG).
+
 **Imágenes en la vista normal**: con la herramienta Seleccionar, una capa de imagen raster **desbloqueada** (candado en la pestaña Capas; las capas raster nuevas vienen bloqueadas) se selecciona con un clic sobre ella, se arrastra para moverla y el cuadrito de su esquina inferior derecha la reescala (esquina superior izquierda fija). Es la misma posición que se usa en el layout y se deshace con Ctrl+Z. Una imagen que cubre toda la pantalla estorba al rectángulo de selección: vuelve a bloquearla cuando termines de ubicarla.
 
 **Imágenes pegadas en el layout**: un clic sobre una imagen (capa de imagen que no cubra todo el marco) la selecciona; se arrastra para moverla y el cuadrito de su esquina inferior derecha la reescala. La posición se guarda en la capa (se deshace con Ctrl+Z).
