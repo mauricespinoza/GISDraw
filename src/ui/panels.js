@@ -23,6 +23,7 @@ import { RAMPS, applyRenderer, buildRenderer, clearRenderer, countClasses, defau
 import { h, sec, row, select, slider, num, text, color, check, btn } from './dom.js';
 import { TAB_ICONS } from './icons.js';
 import { alignOf, layoutText } from '../textLayout.js';
+import { GIS_TABS, isGisLayer } from '../mode.js';
 
 export const TABS = {
   layers: 'Capas',
@@ -76,6 +77,7 @@ export class Panels {
   constructor(app) {
     this.app = app;
     this.tab = localStorage.getItem('gd.tab') || 'layers';
+    if (app.mode !== 'gis' && GIS_TABS.includes(this.tab)) this.tab = 'layers';
     this.tabsEl = document.getElementById('tabs');
     this.body = document.getElementById('panel-body');
     this.expanded = new Set();
@@ -84,7 +86,7 @@ export class Panels {
 
   renderTabs() {
     this.tabsEl.replaceChildren(
-      ...Object.entries(TABS).map(([k, label]) =>
+      ...Object.entries(TABS).filter(([k]) => this.app.mode === 'gis' || !GIS_TABS.includes(k)).map(([k, label]) =>
         h('button', { class: k === this.tab ? 'on' : '', onclick: () => this.show(k), 'aria-label': label }, h('span', { class: 'tab-ico', html: TAB_ICONS[k] || '' }), h('span', {}, label)),
       ),
     );
@@ -104,6 +106,7 @@ export class Panels {
 
   render() {
     const scroll = this.body.scrollTop;
+    if (this.app.mode !== 'gis' && GIS_TABS.includes(this.tab)) this.tab = 'layers';
     const fn = {
       layers: () => this.layersPanel(),
       style: () => this.stylePanel(),
@@ -138,7 +141,7 @@ export class Panels {
     const doc = this.doc;
     const list = h('div', {});
     // de arriba hacia abajo, como en cualquier programa de dibujo
-    for (const l of [...doc.layers].reverse()) list.append(this.layerRow(l));
+    for (const l of [...doc.layers].reverse()) if (app.mode === 'gis' || !isGisLayer(l)) list.append(this.layerRow(l));
     const add = h(
       'div',
       { class: 'grid-btns' },
@@ -146,11 +149,11 @@ export class Panels {
         const l = makeVectorLayer(`Capa ${doc.layers.filter((x) => x.kind === 'vector').length + 1}`);
         app.history.commit(addLayer(this.doc, l, this.doc.activeLayerId));
       }),
-      btn('+ Mapa base', () => {
+      app.mode === 'gis' && btn('+ Mapa base', () => {
         const l = makeRasterLayer('basemap', 'Mapa base: Esri satélite', { source: 'esri_imagery' });
         app.history.commit({ ...addLayer(this.doc, l), layers: [l, ...this.doc.layers] });
       }),
-      btn('+ Relieve', () => {
+      app.mode === 'gis' && btn('+ Relieve', () => {
         const l = makeRasterLayer('hillshade', 'Relieve sombreado', defaultHillshadeSettings());
         const layers = this.doc.layers.slice();
         // por defecto sobre los mapas base y bajo el dibujo
@@ -165,7 +168,7 @@ export class Panels {
       sec(
         'Documento',
         row('Escala ref. 1:', num(doc.refScale, (v) => v > 0 && app.history.commit({ ...this.doc, refScale: v }), { step: 500 })),
-        h('p', { class: 'hint' }, 'Grosores (mm) y textos (pt) se miden en el papel a esta escala. Sistema: WGS84 / UTM 19S (EPSG:32719).'),
+        h('p', { class: 'hint' }, `Grosores (mm) y textos (pt) se miden en el papel a esta escala.${app.mode === 'gis' ? ' Sistema: WGS84 / UTM 19S (EPSG:32719).' : ''}`),
       ),
     ];
   }
@@ -239,7 +242,7 @@ export class Panels {
       if (l.kind === 'vector') {
         actions.append(
           btn('Zoom a capa', () => app.zoomToShapes(l.items)),
-          btn('Aplicar QML/QLR', () => app.applyQmlToLayer(l.id)),
+          app.mode === 'gis' && btn('Aplicar QML/QLR', () => app.applyQmlToLayer(l.id)),
           btn('Seleccionar todo', () => {
             app.history.silent({ ...this.doc, activeLayerId: l.id });
             app.editor.setSelection(l.items.filter((s) => !s.locked && s.visible !== false).map((s) => s.id));

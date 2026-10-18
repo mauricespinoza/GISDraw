@@ -1428,3 +1428,34 @@ body {
 .rt-bar .rt-btn.ok { color: #15803d; font-weight: 700; }
 .rt-bar .rt-hint { flex: 1 1 100%; opacity: .65; font-size: 11px; }
 .rt-edit { min-height: 30px; padding: 4px 8px; border: 2px solid var(--accent, #0ea5e9); border-radius: 8px; background: rgba(255,255,255,.96); box-shadow: 0 0 0 4px rgba(14,165,233,.2), 0 8px 24px rgba(0,0,0,.25); outline: none; white-space: pre-wrap; word-break: break-word; -webkit-user-select: text; user-select: text; }
+
+/* ---- modos Canvas / GIS ---- */
+.mode-switch {
+  flex: none;
+  display: flex;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.mode-switch button {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  background: #1e293b;
+  color: #94a3b8;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mode-switch button.on {
+  background: var(--accent, #38bdf8);
+  color: #082f49;
+}
+
+#app.mode-canvas #coords,
+#app.mode-canvas #btn-redraw,
+#app.mode-canvas #attribution {
+  display: none !important;
+}

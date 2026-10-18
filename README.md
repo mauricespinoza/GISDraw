@@ -55,6 +55,22 @@ node test/pdf.test.mjs       # Illustrator (.ai) / PDF vectorial: capas, colores
 node test/sw.test.mjs        # todo módulo está en el precache offline
 ```
 
+## Modos Canvas y GIS
+
+El conmutador **Canvas | GIS** (arriba, junto al logo) elige qué se muestra. Se
+recuerda en el navegador y **la app abre en Canvas**.
+
+- **Canvas** (por defecto): solo dibujo, sobre fondo blanco. Sin mapa base,
+  relieve, coordenadas del cursor, atribuciones, grilla de coordenadas en la
+  lámina, ni las pestañas Relieve, Georref. y Atributos, ni los importadores y
+  exportadores GIS (GeoPackage, GeoJSON, GeoTIFF, QGIS, FieldDraw). Se conservan
+  el dibujo, el estilo, la geología, las etiquetas, el layout, las imágenes
+  (PNG/JPG, `.ai`), SVG, PDF e Illustrator.
+- **GIS**: todo lo anterior, como era antes de los modos.
+
+El modo no toca el proyecto: las capas de mapa base y relieve de un proyecto se
+ocultan en Canvas (y en la lámina) y reaparecen al volver a GIS.
+
 ## Entrada: lápiz, dedo y ratón
 
 | | Tablet | PC |

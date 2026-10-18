@@ -9,7 +9,7 @@
  * - Teselas (TILES): mapas base y DEM Terrarium ya vistos, con tope.
  */
 
-const VERSION = 'v19';
+const VERSION = 'v20';
 const PRECACHE = `gisdrawer-shell-${VERSION}`;
 const TILES = 'gisdrawer-tiles';
 const TILE_LIMIT = 5000;
@@ -46,6 +46,7 @@ const SHELL = [
   './src/labels.js',
   './src/layout/compose.js',
   './src/layout/styles.js',
+  './src/mode.js',
   './src/main.js',
   './src/ops.js',
   './src/ornaments.js',

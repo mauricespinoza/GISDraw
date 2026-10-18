@@ -17,6 +17,10 @@
     <div id="app">
       <header id="topbar">
         <div class="brand"><img src="icons/logo.svg" alt="" width="30" height="30" /><span>GIS<b>Drawer</b></span></div>
+        <div class="mode-switch" role="group" aria-label="Modo">
+          <button id="btn-mode-canvas" data-tip="Modo Canvas: solo dibujo, sin mapa ni coordenadas">Canvas</button>
+          <button id="btn-mode-gis" data-tip="Modo GIS: mapa base, relieve, coordenadas, georreferenciación y formatos GIS">GIS</button>
+        </div>
         <div class="menu-wrap">
           <button id="btn-file" class="tb" aria-haspopup="true">Archivo ▾</button>
           <div id="menu-file" class="menu" hidden></div>
