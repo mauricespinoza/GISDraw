@@ -1120,6 +1120,18 @@ body {
   width: 56px;
 }
 
+.pb-range {
+  flex: none;
+  width: 90px;
+  height: 30px;
+  accent-color: var(--accent, #38bdf8);
+}
+
+.pb-val {
+  white-space: nowrap;
+  min-width: 34px;
+}
+
 .pb-sel {
   height: 30px;
   border: 1px solid var(--line);

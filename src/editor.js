@@ -34,7 +34,6 @@ import {
   makeRectPath,
   makeText,
   nearestOnPath,
-  polylineToNodes,
   rotateShape,
   scaleShape,
   shapeBBox,
@@ -43,6 +42,9 @@ import {
   translateShape,
   unionBBox,
   cloneNode,
+  DEFAULT_SMOOTH,
+  freehandToNodes,
+  nodesSignature,
 } from './vector.js';
 
 export const TOOLS = {
@@ -1194,20 +1196,23 @@ export class Editor {
     this.preview = null;
     const layer = this.ensureDrawableLayer();
     if (!layer || d.pts.length < 2) return this.changed();
-    let pts = simplify(d.pts, this.view.mpp * (this.settings.pencilTolerance ?? 1.5));
+    const mpp = this.view.mpp;
+    // puntos originales (casi sin simplificar): de ellos sale el trazo y, después, cualquier otro nivel de suavizado
+    let pts = simplify(d.pts, mpp * 0.25).map((p) => ({ x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }));
     // terminar cerca del inicio = forma cerrada
     const first = pts[0];
     const last = pts[pts.length - 1];
-    const closed = pts.length > 3 && Math.hypot(first.x - last.x, first.y - last.y) < SNAP_PX * this.view.mpp;
+    const closed = pts.length > 3 && Math.hypot(first.x - last.x, first.y - last.y) < SNAP_PX * mpp;
     if (closed) pts = pts.slice(0, -1);
     else if (this.settings.snap) {
       // engancha el final a la geometría existente
       const { point } = this.snapPoint([last.x, last.y]);
       pts[pts.length - 1] = { x: point[0], y: point[1] };
     }
-    const smooth = this.settings.smoothing ?? 0.25;
-    const nodes = polylineToNodes(pts, smooth, closed);
+    const level = this.settings.pencilSmooth ?? DEFAULT_SMOOTH;
+    const nodes = freehandToNodes(pts, level, mpp, closed);
     const shape = makePath(nodes, { closed, style: { ...this.getCurrentStyle() } });
+    shape.freehand = { pts, mpp, closed, level, sig: nodesSignature(nodes) };
     shape.name = closed ? 'Polígono libre' : 'Trazo libre';
     this.history.commit(addShapes(this.doc, layer.id, [shape]));
     this.snapDirty = true;

@@ -53,6 +53,7 @@ node test/ornaments.test.mjs # ornamentos, onda, tramas, halos
 node test/richtext.test.mjs # texto con formato por tramos (color/tamaño/negrita/cursiva)
 node test/pdf.test.mjs       # Illustrator (.ai) / PDF vectorial: capas, colores, textos
 node test/mode.test.mjs      # modos Canvas/GIS, hoja del lienzo y valores por defecto
+node test/freehand.test.mjs  # lápiz: suavizado 0–100 % y re-suavizado del trazo
 node test/sw.test.mjs        # todo módulo está en el precache offline
 ```
 
@@ -112,6 +113,17 @@ añadir a la selección, duplicar, pegar…
 Lo que **no se puede** desde una web: el doble toque del Apple Pencil 2 y el
 apretón del Pencil Pro no llegan a Safari. Los reemplazan los botones de la
 barra contextual.
+
+### Trazo libre (lápiz, B): suavizado
+
+El control **Suavizado** (0–100 %) aparece en la barra de propiedades al usar el
+lápiz y en el panel Estilo → «Trazo libre (lápiz)». Es el suavizado **por
+defecto** de los próximos trazos (50 %, se recuerda) y, mientras un trazo libre
+recién dibujado sigue seleccionado, lo **re-suaviza en vivo** a partir de los
+puntos originales (un solo paso de deshacer). 0 % deja el trazo casi como se
+dibujó; 100 % promedia el temblor de la mano, simplifica y lo redondea sin
+lazos. Si después se mueve el trazo o se editan sus nodos, deja de poder
+re-suavizarse (el control solo cambia el valor por defecto).
 
 ## Herramientas
 

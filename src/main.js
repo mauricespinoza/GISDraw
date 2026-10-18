@@ -17,7 +17,7 @@ import { h } from './ui/dom.js';
 import { DASHES, defaultStyle } from './style.js';
 import { copyShapes, pasteShapes, arrange, group, ungroup, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame } from './ops.js';
 import { formatDMS, toLonLat } from './proj.js';
-import { shapeBBox, unionBBox, walkShapes, newId } from './vector.js';
+import { shapeBBox, unionBBox, walkShapes, newId, DEFAULT_SMOOTH, canResmooth, resmooth } from './vector.js';
 import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles } from './io/store.js';
 import { parseQML, styleFor } from './io/qml.js';
 import { parseAsciiGrid } from './raster/dem.js';
@@ -112,8 +112,7 @@ class App {
       snap: true,
       trace: false,
       fingerDraws: false,
-      smoothing: 0.25,
-      pencilTolerance: 1.5,
+      pencilSmooth: DEFAULT_SMOOTH, // % de suavizado del lápiz (trazo libre)
       opentopoKey: '',
       mode: 'canvas',
       googleClientId: '',
@@ -498,6 +497,9 @@ class App {
       return [wrap, off];
     };
     items.push(h('span', { class: 'pb-head' }, sel.length ? `${sel.length} sel.` : 'Nuevo'));
+    // con el lápiz (o un trazo libre seleccionado) el suavizado va primero: es lo que se está ajustando
+    const smooth = this.smoothControl();
+    if (smooth) items.push(...smooth, h('span', { class: 'pb-sep' }));
     items.push(lbl('Trazo'), ...colorIn('stroke'));
     const w = h('input', { type: 'number', class: 'pb-num', min: 0, step: 0.05, value: Number(st.strokeWidth || 0).toFixed(2), 'data-tip': 'Grosor del trazo (mm en el papel)' });
     w.addEventListener('change', () => {
@@ -1027,6 +1029,51 @@ class App {
   /* --------------------------------------------------------- edición */
 
   /** Cambia el estilo de la selección (todas las hojas de los grupos) o el de dibujo. */
+  /** Trazos libres seleccionados que aún se pueden re-suavizar (recién dibujados y sin editar). */
+  resmoothable() {
+    return this.editor.selectedShapes().filter(canResmooth);
+  }
+
+  /** Suavizado actual: el del trazo libre seleccionado, o el que se usará al dibujar. */
+  smoothLevel() {
+    return this.resmoothable()[0]?.freehand.level ?? this.settings.pencilSmooth ?? DEFAULT_SMOOTH;
+  }
+
+  /**
+   * Nivel de suavizado (0–100 %). Es el de por defecto para los próximos trazos
+   * libres y, si hay trazos libres recién dibujados seleccionados, los
+   * re-suaviza en vivo a partir de los puntos originales.
+   */
+  setSmooth(level, final) {
+    level = Math.max(0, Math.min(100, Math.round(level)));
+    this.saveSettings({ pencilSmooth: level });
+    const targets = this.resmoothable();
+    if (!targets.length) return;
+    if (!final && !this.history.anchor) this.history.begin();
+    const base = this.history.anchor || this.history.doc;
+    const next = mapShapes(base, targets.map((s) => s.id), (s) => resmooth(s, level));
+    if (final) {
+      if (this.history.anchor) {
+        this.history.preview(next);
+        this.history.end();
+      } else this.history.commit(next);
+    } else this.history.preview(next);
+  }
+
+  /** Control de suavizado (lápiz activo o trazo libre seleccionado); null si no viene al caso. */
+  smoothControl() {
+    if (this.editor.tool !== 'pencil' && !this.resmoothable().length) return null;
+    const level = this.smoothLevel();
+    const val = h('span', { class: 'pb-u pb-val' }, `${level} %`);
+    const r = h('input', { type: 'range', class: 'pb-range', min: 0, max: 100, step: 1, value: level, 'data-tip': 'Suavizado del trazo libre: 0 = tal cual se dibujó, 100 = muy redondeado. Con un trazo libre seleccionado lo cambia en vivo; también es el valor para los próximos.' });
+    r.addEventListener('input', () => {
+      val.textContent = `${r.value} %`;
+      this.setSmooth(Number(r.value), false);
+    });
+    r.addEventListener('change', () => this.setSmooth(Number(r.value), true));
+    return [h('span', { class: 'pb-l' }, 'Suavizado'), r, val];
+  }
+
   editStyle(patch, final) {
     const ed = this.editor;
     const sel = ed.selectedShapes();

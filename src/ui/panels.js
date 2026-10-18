@@ -430,7 +430,12 @@ export class Panels {
     });
     if (shapes.length === 1 && target?.type === 'text') out.push(this.textSection(target));
     else if (texts.length && shapes.length > 1) out.push(this.multiTextSection(texts, shapes));
-    out.push(strokeSec, fillSec, lineSec, objSec);
+    const smoothSec = sec(
+      'Trazo libre (lápiz)',
+      row('Suavizado', ...slider({ min: 0, max: 100, step: 1, value: app.smoothLevel(), fmt: (v) => `${v} %`, oninput: (v) => app.setSmooth(v, false), onchange: (v) => app.setSmooth(v, true) })),
+      h('p', { class: 'hint' }, 'Es el suavizado por defecto del lápiz (B): 0 % deja el trazo casi como se dibujó, 100 % lo redondea mucho. Un trazo libre recién dibujado se puede re-suavizar con este control (o con el de la barra de arriba) mientras esté seleccionado y sin editar sus nodos.'),
+    );
+    out.push(strokeSec, fillSec, lineSec, objSec, smoothSec);
     if (shapes.length) {
       let length = 0;
       let area = 0;
