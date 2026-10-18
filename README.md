@@ -51,6 +51,7 @@ node test/core.test.mjs      # proyección, geometría, estilo, operaciones, eti
 node test/georef.test.mjs    # transformaciones, residuos y remuestreo
 node test/ornaments.test.mjs # ornamentos, onda, tramas, halos
 node test/richtext.test.mjs # texto con formato por tramos (color/tamaño/negrita/cursiva)
+node test/pdf.test.mjs       # Illustrator (.ai) / PDF vectorial: capas, colores, textos
 node test/sw.test.mjs        # todo módulo está en el precache offline
 ```
 
@@ -369,10 +370,11 @@ entiende `mix-blend-mode`).
 | QML / QLR (QGIS) | símbolo único, categorizado, graduado y por reglas; símbolos de varias capas (relleno + contorno, línea con borde, flechas, degradados, marcadores); etiquetado simple | dentro del GeoPackage; **.qlr + GeoPackage** (Archivo → Exportar → Simbología QGIS); .qml de la capa activa |
 | GeoJSON | WGS84 o con `crs` | WGS84 (RFC 7946) o UTM 19S |
 | GeoTIFF | elevación (una banda) o imagen RGB(A), en su sistema | relieve calculado, imagen georreferenciada |
-| **SVG / Illustrator** | archivo .svg (una capa por capa de primer nivel) y **pegar con Ctrl+V** lo copiado en Illustrator | **lámina con un grupo por capa** (.svg) y **script de Illustrator (.jsx) que crea una capa real por capa**; copiar (Ctrl+C) deja SVG en puntos para pegar en Illustrator |
+| **SVG / Illustrator** | **archivo .ai nativo** (una capa por capa de Illustrator, las ocultas llegan ocultas), **PDF vectorial**, archivo .svg (una capa por capa de primer nivel) y **pegar con Ctrl+V** lo copiado en Illustrator | **lámina con un grupo por capa** (.svg) y **script de Illustrator (.jsx) que crea una capa real por capa**; copiar (Ctrl+C) deja SVG en puntos para pegar en Illustrator |
 | **FieldDraw** | proyecto `.fdproj.json`, paquete `.fdproj.zip` o GeoJSON exportado, con simbología y georreferencia | — |
 | ASCII grid | elevación | — |
 | Proyecto `.gisdrawer` | sí | sí (además se guarda solo en el navegador) |
+| **Google Drive** | cualquiera de los anteriores, elegido en Drive (Archivo → Importar → Desde Google Drive) | — |
 
 **Simbología en QGIS (.qlr)**: se descargan `dibujo.qlr` y `dibujo.gpkg`.
 Con los dos en la misma carpeta, arrastrar el `.qlr` a QGIS (o Capa → Añadir
@@ -403,6 +405,18 @@ Inkscape) se pega como dibujo.
 
 **Illustrator, ida y vuelta**:
 
+- *Abrir un .ai*: Archivo → Importar → «Illustrator (.ai, .svg) / PDF
+  vectorial». Se lee la copia PDF que Illustrator guarda dentro del .ai
+  (opción «Crear archivo compatible con PDF» del cuadro Guardar como, activada
+  por omisión): cada capa de Illustrator es una capa de GISDrawer con su
+  nombre, con trazados Bézier, rellenos (también par-impar y con huecos),
+  trazos, segmentados, transparencias, máscaras de recorte, degradados,
+  colores CMYK y de tinta plana (Pantone) y textos con su fuente, tamaño,
+  negrita y acentos. Las capas ocultas en Illustrator llegan ocultas. No se
+  importan las imágenes incrustadas, las máscaras de opacidad ni los .ai
+  antiguos (Illustrator 8 o anterior, PostScript); si el .ai se guardó sin
+  la opción de compatibilidad con PDF, la app lo avisa. De un PDF de varias
+  páginas (o varias mesas de trabajo) se importa la primera.
 - *Pegar en GISDrawer lo copiado en Illustrator*: en Illustrator,
   Preferencias → Gestión del portapapeles → «Copiar como: código SVG».
   Ctrl+V en GISDrawer lo convierte en dibujo editable con nodos Bézier,
@@ -422,6 +436,25 @@ Inkscape) se pega como dibujo.
   Etiquetas, Grilla y coordenadas, Marco, Título, Leyenda, Norte, Escala y
   Datos. El SVG de la lámina también trae un grupo con `id` y `data-name`
   por capa, como los escribe Illustrator.
+
+**Google Drive**: Archivo → Importar → Desde Google Drive baja un archivo de
+Drive y lo importa según su extensión (.ai, .pdf, .svg, .gpkg, .geojson,
+.tif, .asc, .jpg/.png para georreferenciar, .qml/.qlr, FieldDraw o
+.gisdrawer). Se configura una vez en Archivo → Configurar Google Drive, con
+credenciales propias de un proyecto de Google Cloud (la app es estática y no
+trae claves):
+
+1. En [console.cloud.google.com](https://console.cloud.google.com), crear un
+   proyecto y activar **Google Drive API** y **Google Picker API**.
+2. Credenciales → **Clave de API**. Con solo la clave se pueden abrir
+   archivos compartidos con «cualquier persona con el enlace»: se pega el
+   enlace del archivo.
+3. Para elegir archivos de la propia cuenta con el selector de Google:
+   Credenciales → **ID de cliente de OAuth**, tipo «Aplicación web», con el
+   origen de la app (p. ej. `https://usuario.github.io`) en «Orígenes de
+   JavaScript autorizados», y configurar la pantalla de consentimiento. La
+   app pide solo el permiso `drive.file`: ve únicamente los archivos que se
+   eligen en el selector.
 
 **FieldDraw**: Archivo → Importar → Proyecto FieldDraw. Crea las capas
 Unidades, Trazas, Medidas y Puntos de control, en UTM 19S, con los colores y

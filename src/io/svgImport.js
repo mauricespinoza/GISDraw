@@ -736,7 +736,9 @@ function subsToShapes(subs, style, name) {
     const p = makePath(close(first), { closed: true, style, name, holes: rest.map(close) });
     return [p];
   }
-  const out = subs.map((sp) => makePath(close(sp), { closed: !!sp.closed && sp.nodes.length > 2, style: { ...style }, name }));
+  // cerrado con 3 nodos o más, o con 2 si alguno es curvo (una lente)
+  const canClose = (sp) => sp.nodes.length > 2 || (sp.nodes.length === 2 && sp.nodes.some((n) => n.hIn || n.hOut));
+  const out = subs.map((sp) => makePath(close(sp), { closed: !!sp.closed && canClose(sp), style: { ...style }, name }));
   return out.length > 1 ? [makeGroup(out, { name })] : out;
 }
 
