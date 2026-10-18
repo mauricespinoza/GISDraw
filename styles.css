@@ -374,7 +374,7 @@ body {
   grid-area: view;
   position: relative;
   overflow: hidden;
-  background: #dfe5ec;
+  background: #ffffff;
   isolation: isolate;
 }
 

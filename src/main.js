@@ -1628,7 +1628,7 @@ class App {
     const hgt = Math.round(this.view.h);
     const stage = document.getElementById('stage');
     if (kind === 'svg') {
-      const parts = [];
+      const parts = [`<rect width="${w}" height="${hgt}" fill="#ffffff"/>`];
       for (const el of stage.children) {
         if (el.classList.contains('overlay-svg') || el.style.display === 'none') continue;
         const blend = el.style.mixBlendMode && el.style.mixBlendMode !== 'normal' ? ` style="mix-blend-mode:${el.style.mixBlendMode}"` : '';
