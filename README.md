@@ -53,6 +53,9 @@ node test/ornaments.test.mjs # ornamentos, onda, tramas, halos
 node test/richtext.test.mjs # texto con formato por tramos (color/tamaño/negrita/cursiva)
 node test/pdf.test.mjs       # Illustrator (.ai) / PDF vectorial: capas, colores, textos
 node test/mode.test.mjs      # modos Canvas/GIS, hoja del lienzo y valores por defecto
+node test/freehand.test.mjs  # lápiz: suavizado 0–100 % y re-suavizado del trazo
+node test/trace.test.mjs     # Trace: grafo nodado, alterno, tolerancia
+node test/geomops.test.mjs  # Join, Merge, Split y Hole
 node test/sw.test.mjs        # todo módulo está en el precache offline
 ```
 
@@ -113,6 +116,39 @@ Lo que **no se puede** desde una web: el doble toque del Apple Pencil 2 y el
 apretón del Pencil Pro no llegan a Safari. Los reemplazan los botones de la
 barra contextual.
 
+### Join, Merge, Split y Hole (menú «Geometría ▾» y clic secundario / mantener el dedo)
+
+- **Join (Ctrl+J)**: dos o más líneas seleccionadas se encadenan en **una sola**
+  por los extremos más cercanos (se invierten las que haga falta; si los
+  extremos están a menos de 2 px se funden en un vértice, si no se agrega un
+  tramo recto). Con una sola línea la cierra.
+- **Merge (Ctrl+J)**: dos o más polígonos seleccionados se funden en uno (la
+  unión, con los huecos que resulten; si no se tocan quedan como polígonos
+  separados y avisa). Conserva el estilo del de más abajo.
+- **Split**: un polígono seleccionado y, con Mayús, una línea existente que lo
+  cruza de borde a borde → «Dividir con la línea seleccionada» (la línea se
+  conserva); o «Dividir dibujando una línea…»: se dibuja una línea nueva que
+  cruza el polígono (con snap y Trace) y no queda en el dibujo. Admite varias
+  líneas y polígonos con huecos; cada parte conserva el estilo.
+- **Hole**: el polígono de más abajo pierde la zona que cubren los de encima:
+  una forma dentro le abre un **hueco**; una que lo traslapa le muerde un
+  trozo. «Hueco con la forma de arriba» consume la forma, «Hueco conservando
+  la forma» la deja; «Hueco dibujando una forma…» dibuja el contorno del hueco.
+
+Las curvas Bézier se aplanan al operar (la geometría booleana es de
+polilíneas). Todo se deshace con Ctrl+Z.
+
+### Trazo libre (lápiz, B): suavizado
+
+El control **Suavizado** (0–100 %) aparece en la barra de propiedades al usar el
+lápiz y en el panel Estilo → «Trazo libre (lápiz)». Es el suavizado **por
+defecto** de los próximos trazos (50 %, se recuerda) y, mientras un trazo libre
+recién dibujado sigue seleccionado, lo **re-suaviza en vivo** a partir de los
+puntos originales (un solo paso de deshacer). 0 % deja el trazo casi como se
+dibujó; 100 % promedia el temblor de la mano, simplifica y lo redondea sin
+lazos. Si después se mueve el trazo o se editan sus nodos, deja de poder
+re-suavizarse (el control solo cambia el valor por defecto).
+
 ## Herramientas
 
 | Tecla | Herramienta |
@@ -127,8 +163,9 @@ barra contextual.
 | T | Texto (el cuadro se abre al soltar; Enter termina, Mayús+Enter salto de línea) · O Punto (símbolo) · I Cuentagotas · H Mano |
 | C | **Tijera**: corta una línea en dos o abre un polígono en el punto tocado |
 | Z | **Zoom**: clic acerca, Alt+clic aleja, arrastre = zoom a un recuadro |
-| K | **Trace**: al poner un vértice sobre una línea existente, la nueva sigue la geometría hasta ese punto (camino más corto, como en QGIS) |
+| K | **Trace**: al poner un vértice sobre una línea existente, la nueva sigue la geometría hasta ese punto (camino más corto, como en QGIS). El grafo está **nodado**: se conecta donde los elementos comparten un vértice, donde un vértice cae sobre el borde de otro (un contacto que termina en el borde de un polígono) y donde se cruzan, y funde vértices que distan menos de ~0,4 px. **Alt** al poner el vértice toma el recorrido alterno (por el otro lado de un polígono); si no hay conexión avisa en vez de unir en recta; ⌫ quita de una vez todo un recorrido |
 | S | Snapping a vértices y segmentos |
+| 🔗 | **Move Joined** (botón de la barra, como Snap y Trace; activo por defecto): con la herramienta Nodos, al mover un vértice se mueven también los vértices coincidentes de otras líneas y polígonos (huecos incluidos) y no se engancha a ellos |
 
 Atajos al estilo de **Illustrator** (la lista completa sale con **?** o F1, o
 con el botón ⌨ de la barra superior):

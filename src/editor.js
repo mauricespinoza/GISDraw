@@ -34,7 +34,6 @@ import {
   makeRectPath,
   makeText,
   nearestOnPath,
-  polylineToNodes,
   rotateShape,
   scaleShape,
   shapeBBox,
@@ -43,6 +42,10 @@ import {
   translateShape,
   unionBBox,
   cloneNode,
+  flattenNodes,
+  DEFAULT_SMOOTH,
+  freehandToNodes,
+  nodesSignature,
 } from './vector.js';
 
 export const TOOLS = {
@@ -122,8 +125,30 @@ export class Editor {
     return { mmToM: u.mmToM, ptToM: u.ptToM, mpp: this.view.mpp };
   }
 
+  /**
+   * Dividir (Split) o hacer un hueco (Hole) dibujando una forma nueva: la
+   * línea o el contorno que se dibuje a continuación no queda en el dibujo,
+   * solo corta a los polígonos `ids`. Enter, doble toque o «Terminar» lo ejecuta;
+   * Esc lo cancela.
+   */
+  beginCut(kind, ids) {
+    this.setTool(kind === 'split' ? 'pen' : 'polygon');
+    this.cutMode = { kind, ids: [...ids], tool: this.tool };
+    this.onMessage(
+      kind === 'split'
+        ? 'Dividir: dibuja la línea que cruza el polígono de borde a borde (clic en cada vértice; Enter o doble clic para terminar; Esc cancela)'
+        : 'Hueco: dibuja el contorno del hueco (clic en cada vértice; Enter o doble clic para cerrar; Esc cancela)',
+      9000,
+    );
+  }
+
   setTool(tool) {
     if (!TOOLS[tool]) return;
+    if (this.cutMode && tool !== this.cutMode.tool) {
+      this.cutMode = null;
+      this.draft = null;
+      this.hover = null;
+    }
     if (this.draft) this.finishDraft(false);
     this.tool = tool;
     this.preview = null;
@@ -220,7 +245,8 @@ export class Editor {
   }
 
   graph() {
-    if (!this._graph) this._graph = buildGraph(this.snapIndex());
+    // vértices a menos de ~0,4 px se funden: los trazos digitalizados a ojo quedan conectados
+    if (!this._graph) this._graph = buildGraph(this.snapIndex(), { tol: this.view.mpp * 0.4 });
     return this._graph;
   }
 
@@ -346,7 +372,7 @@ export class Editor {
     if (!d) {
       // hover del lápiz o del ratón: cursor de snapping y línea elástica
       if (e.pointerType === 'touch') return;
-      if (DRAW_TOOLS.has(this.tool) || this.tool === 'node') this.updateHover(sp);
+      if (DRAW_TOOLS.has(this.tool) || this.tool === 'node') this.updateHover(sp, e.altKey);
       return;
     }
     this.toolMove(e, sp);
@@ -958,7 +984,7 @@ export class Editor {
             if (e.altKey) return this.toggleSmooth(shape.id, ring, i);
             this.activeNode = { id: shape.id, ring, index: i };
             this.history.begin();
-            this.drag = { mode: 'node', id: shape.id, ring, index: i };
+            this.drag = { mode: 'node', id: shape.id, ring, index: i, joined: this.settings.moveJoined === false ? [] : this.findJoined(shape, ring, i) };
             this.changed();
             return;
           }
@@ -985,30 +1011,60 @@ export class Editor {
     return { ...shape, holes };
   }
 
+  /**
+   * Nodos de OTRAS formas (líneas y polígonos, huecos incluidos) que comparten
+   * el vértice `index` del anillo `ring` de `shape`: mismas coordenadas, con una
+   * tolerancia mínima por números de coma flotante o por importaciones. Son los
+   * que se mueven junto con él cuando «Move Joined» está activo.
+   */
+  findJoined(shape, ring, index) {
+    const n = this.ringNodes(shape, ring)[index];
+    if (!n) return [];
+    const tol = Math.min(this.view.mpp * 0.35, 0.5);
+    const out = [];
+    for (const { shape: s } of allTopShapes(this.doc, { unlockedOnly: true })) {
+      if (s.type !== 'path') continue;
+      const rings = [-1, ...(s.holes || []).map((_, i) => i)];
+      for (const r of rings) {
+        this.ringNodes(s, r).forEach((q, i) => {
+          if (s.id === shape.id && r === ring && i === index) return;
+          if (Math.hypot(q.x - n.x, q.y - n.y) <= tol) out.push({ id: s.id, ring: r, index: i });
+        });
+      }
+    }
+    return out;
+  }
+
   nodeDrag(e, wp) {
     const d = this.drag;
     let p = wp;
+    const joined = d.joined || [];
     if (this.settings.snap) {
-      // no engancharse a la propia forma
+      // no engancharse a la propia forma ni a las que se mueven con ella
+      const skip = new Set([d.id, ...joined.map((j) => j.id)]);
       const s = this.snapIndex().query(wp, SNAP_PX * this.view.mpp);
-      if (s && s.meta?.id !== d.id) p = s.point;
+      if (s && !skip.has(s.meta?.id)) p = s.point;
     }
-    const doc = mapShapes(this.history.anchor || this.doc, [d.id], (shape) =>
-      this.updateRing(shape, d.ring, (nodes) =>
-        nodes.map((n, i) => {
-          if (i !== d.index) return n;
-          const dx = p[0] - n.x;
-          const dy = p[1] - n.y;
-          return {
-            ...n,
-            x: p[0],
-            y: p[1],
-            hIn: n.hIn ? { x: n.hIn.x + dx, y: n.hIn.y + dy } : null,
-            hOut: n.hOut ? { x: n.hOut.x + dx, y: n.hOut.y + dy } : null,
-          };
-        }),
-      ),
-    );
+    const move = (nodes, index) =>
+      nodes.map((n, i) => {
+        if (i !== index) return n;
+        const dx = p[0] - n.x;
+        const dy = p[1] - n.y;
+        return {
+          ...n,
+          x: p[0],
+          y: p[1],
+          hIn: n.hIn ? { x: n.hIn.x + dx, y: n.hIn.y + dy } : null,
+          hOut: n.hOut ? { x: n.hOut.x + dx, y: n.hOut.y + dy } : null,
+        };
+      });
+    const targets = [{ id: d.id, ring: d.ring, index: d.index }, ...joined];
+    const ids = new Set(targets.map((t) => t.id));
+    const doc = mapShapes(this.history.anchor || this.doc, ids, (shape) => {
+      let out = shape;
+      for (const t of targets) if (t.id === shape.id) out = this.updateRing(out, t.ring, (nodes) => move(nodes, t.index));
+      return out;
+    });
     this.history.preview(doc);
   }
 
@@ -1123,12 +1179,15 @@ export class Editor {
     if (this.settings.trace && snap?.segment != null && nodes.length) {
       const prevSnap = this.draft.snaps[this.draft.snaps.length - 1];
       if (prevSnap?.segment != null) {
-        const path = tracePath(this.snapIndex(), this.graph(), prevSnap, snap);
+        // Alt = el otro camino (por el otro lado de un polígono, por ejemplo)
+        const path = tracePath(this.snapIndex(), this.graph(), prevSnap, snap, { alt: e.altKey });
         if (path && path.length > 2) {
           for (const q of path.slice(1, -1)) {
             nodes.push(makeNode(q[0], q[1]));
-            this.draft.snaps.push(null);
+            this.draft.snaps.push({ traced: true }); // vértice de un recorrido: se deshace junto con el recorrido
           }
+        } else if (!path && Math.hypot(prevSnap.point[0] - snap.point[0], prevSnap.point[1] - snap.point[1]) > this.view.mpp) {
+          this.onMessage('Trace: esos dos puntos no están conectados por ningún borde (se unieron en línea recta)');
         }
       }
     }
@@ -1139,13 +1198,13 @@ export class Editor {
     this.changed();
   }
 
-  updateHover(sp) {
+  updateHover(sp, alt = false) {
     const wp = this.view.toWorld(...sp);
     const { point, snap } = this.snapPoint(wp);
     let tracePreview = null;
     if (this.settings.trace && this.draft && snap?.segment != null && this.draft.snaps.length) {
       const prev = this.draft.snaps[this.draft.snaps.length - 1];
-      if (prev?.segment != null) tracePreview = tracePath(this.snapIndex(), this.graph(), prev, snap, { maxVisited: 40000 });
+      if (prev?.segment != null) tracePreview = tracePath(this.snapIndex(), this.graph(), prev, snap, { maxVisited: 40000, alt });
     }
     this.hover = { sp, wp: point, snap, tracePreview };
     this.changed();
@@ -1162,6 +1221,15 @@ export class Editor {
     const closed = close || this.tool === 'polygon';
     if (nodes.length < (closed ? 3 : 2)) {
       this.changed();
+      return;
+    }
+    if (this.cutMode) {
+      // la forma dibujada es solo la cortadora: no entra al dibujo
+      const mode = this.cutMode;
+      this.cutMode = null;
+      const pts = flattenNodes(nodes, closed, Math.max(1e-3, this.view.mpp * 0.2)).map((p) => [p[0], p[1]]);
+      this.setTool('select');
+      this.onCut?.(mode, pts);
       return;
     }
     const st = this.getCurrentStyle();
@@ -1183,6 +1251,11 @@ export class Editor {
     if (!this.draft) return false;
     this.draft.nodes.pop();
     this.draft.snaps.pop();
+    // un recorrido de Trace entero (sus vértices intermedios) sale de una vez
+    while (this.draft.snaps.length && this.draft.snaps[this.draft.snaps.length - 1]?.traced) {
+      this.draft.nodes.pop();
+      this.draft.snaps.pop();
+    }
     if (!this.draft.nodes.length) this.draft = null;
     this.changed();
     return true;
@@ -1194,20 +1267,23 @@ export class Editor {
     this.preview = null;
     const layer = this.ensureDrawableLayer();
     if (!layer || d.pts.length < 2) return this.changed();
-    let pts = simplify(d.pts, this.view.mpp * (this.settings.pencilTolerance ?? 1.5));
+    const mpp = this.view.mpp;
+    // puntos originales (casi sin simplificar): de ellos sale el trazo y, después, cualquier otro nivel de suavizado
+    let pts = simplify(d.pts, mpp * 0.25).map((p) => ({ x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }));
     // terminar cerca del inicio = forma cerrada
     const first = pts[0];
     const last = pts[pts.length - 1];
-    const closed = pts.length > 3 && Math.hypot(first.x - last.x, first.y - last.y) < SNAP_PX * this.view.mpp;
+    const closed = pts.length > 3 && Math.hypot(first.x - last.x, first.y - last.y) < SNAP_PX * mpp;
     if (closed) pts = pts.slice(0, -1);
     else if (this.settings.snap) {
       // engancha el final a la geometría existente
       const { point } = this.snapPoint([last.x, last.y]);
       pts[pts.length - 1] = { x: point[0], y: point[1] };
     }
-    const smooth = this.settings.smoothing ?? 0.25;
-    const nodes = polylineToNodes(pts, smooth, closed);
+    const level = this.settings.pencilSmooth ?? DEFAULT_SMOOTH;
+    const nodes = freehandToNodes(pts, level, mpp, closed);
     const shape = makePath(nodes, { closed, style: { ...this.getCurrentStyle() } });
+    shape.freehand = { pts, mpp, closed, level, sig: nodesSignature(nodes) };
     shape.name = closed ? 'Polígono libre' : 'Trazo libre';
     this.history.commit(addShapes(this.doc, layer.id, [shape]));
     this.snapDirty = true;
@@ -1396,7 +1472,10 @@ export class Editor {
     }
     if (e.key === 'Escape') {
       if (this.draft) this.cancelDraft();
-      else if (this.tool !== 'select') this.setTool('select');
+      else if (this.cutMode) {
+        this.setTool('select');
+        this.onMessage('Cancelado');
+      } else if (this.tool !== 'select') this.setTool('select');
       else this.setSelection([]);
       return;
     }

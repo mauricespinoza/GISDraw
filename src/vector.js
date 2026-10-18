@@ -394,6 +394,93 @@ export function polylineToNodes(points, smoothing = 0.28, closed = false) {
   });
 }
 
+/* ----------------------------------------------------------- trazo libre */
+
+export const DEFAULT_SMOOTH = 50; // % de suavizado del lápiz por defecto
+
+/**
+ * Qué hace un nivel de suavizado (0–100 %): 0 deja el trazo casi como se
+ * dibujó (poligonal); 100 lo redondea mucho. `window` = pasadas de promedio
+ * contra el temblor de la mano, `tolerance` = px de simplificación y
+ * `tension` = curvatura de las manijas.
+ */
+export function freehandParams(level) {
+  const t = Math.max(0, Math.min(100, Number(level) || 0)) / 100;
+  return { passes: Math.round(t * 6), tolerance: 0.25 * Math.exp(t * Math.log(40)), tension: t * 0.5 };
+}
+
+/** Promedio móvil 1-2-1 (los extremos de un trazo abierto no se mueven). */
+function relax(pts, passes, closed) {
+  let cur = pts;
+  for (let k = 0; k < passes && cur.length > 2; k++) {
+    const n = cur.length;
+    cur = cur.map((p, i) => {
+      if (!closed && (i === 0 || i === n - 1)) return p;
+      const a = cur[(i - 1 + n) % n];
+      const b = cur[(i + 1) % n];
+      return { x: 0.25 * a.x + 0.5 * p.x + 0.25 * b.x, y: 0.25 * a.y + 0.5 * p.y + 0.25 * b.y };
+    });
+  }
+  return cur;
+}
+
+/**
+ * Puntos del lápiz → nodos de un trazo. `raw` son los puntos dibujados
+ * (con el final ya descartado si el trazo se cierra) y `mpp` los metros por
+ * píxel en que se dibujó, que fija la tolerancia.
+ */
+export function freehandToNodes(raw, level, mpp, closed = false) {
+  const { passes, tolerance, tension } = freehandParams(level);
+  const pts = simplify(relax(raw, passes, closed), tolerance * mpp);
+  return curveThrough(pts, tension, closed);
+}
+
+/**
+ * Nodos con manijas a lo largo de la tangente de cada punto (la dirección de
+ * vecino a vecino), de largo proporcional al segmento vecino. Así el trazo se
+ * redondea sin los lazos y sobrepasos de un Catmull-Rom con muy pocos puntos.
+ * `tension` 0–0,5; satura en 0,45 del segmento (0 = poligonal).
+ */
+function curveThrough(points, tension, closed) {
+  const n = points.length;
+  if (n < 3 || tension <= 0) return points.map((p) => makeNode(p.x, p.y));
+  const t = tension * 2; // 0–1
+  const k = 0.45 * (2 * t - t * t);
+  return points.map((p, i) => {
+    const prev = points[closed ? (i - 1 + n) % n : Math.max(0, i - 1)];
+    const next = points[closed ? (i + 1) % n : Math.min(n - 1, i + 1)];
+    let dx = next.x - prev.x;
+    let dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len;
+    dy /= len;
+    const lin = Math.hypot(p.x - prev.x, p.y - prev.y) * k;
+    const lout = Math.hypot(next.x - p.x, next.y - p.y) * k;
+    const first = !closed && i === 0;
+    const last = !closed && i === n - 1;
+    return makeNode(p.x, p.y, first ? null : { x: p.x - dx * lin, y: p.y - dy * lin }, last ? null : { x: p.x + dx * lout, y: p.y + dy * lout }, true);
+  });
+}
+
+/** Huella de los nodos: cambia si el trazo se edita o se mueve (entonces ya no se puede re-suavizar). */
+export function nodesSignature(nodes) {
+  let a = 0;
+  for (const p of nodes) a += p.x + 1.7 * p.y + (p.hIn ? 0.3 * p.hIn.x : 0) + (p.hOut ? 0.7 * p.hOut.y : 0);
+  return `${nodes.length}:${a.toFixed(3)}`;
+}
+
+/** ¿Se puede re-suavizar? Trazo libre recién dibujado y sin tocar. */
+export function canResmooth(shape) {
+  return !!(shape && shape.type === 'path' && shape.freehand && !shape.holes && shape.freehand.sig === nodesSignature(shape.nodes));
+}
+
+/** Trazo libre con otro nivel de suavizado, a partir de los puntos originales. */
+export function resmooth(shape, level) {
+  const f = shape.freehand;
+  const nodes = freehandToNodes(f.pts, level, f.mpp, f.closed);
+  return { ...shape, nodes, freehand: { ...f, level, sig: nodesSignature(nodes) } };
+}
+
 /* ------------------------------------------------------------------- bbox */
 
 /** Caja en coordenadas de mundo. Para textos se estima con `mpp` (m/px) y `ptToPx`. */

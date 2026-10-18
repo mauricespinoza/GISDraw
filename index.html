@@ -25,11 +25,16 @@
           <button id="btn-file" class="tb" aria-haspopup="true">Archivo ▾</button>
           <div id="menu-file" class="menu" hidden></div>
         </div>
+        <div class="menu-wrap">
+          <button id="btn-geom" class="tb" aria-haspopup="true" data-tip="Join, Merge, Split y Hole sobre la selección">Geometría ▾</button>
+          <div id="menu-geom" class="menu" hidden></div>
+        </div>
         <button id="btn-undo" class="tb icon" data-tip="Deshacer  Ctrl+Z" aria-label="Deshacer">↶</button>
         <button id="btn-redo" class="tb icon" data-tip="Rehacer  Ctrl+Mayús+Z" aria-label="Rehacer">↷</button>
         <span class="sep"></span>
         <button id="btn-snap" class="tb toggle" data-tip="Snapping a vértices y bordes  S">🧲 Snap</button>
         <button id="btn-trace" class="tb toggle" data-tip="Trace: seguir la geometría existente  K">〰 Trace</button>
+        <button id="btn-joined" class="tb toggle" data-tip="Move Joined: al mover un nodo (herramienta Nodos) se mueven también los nodos de otras líneas y polígonos que lo comparten">🔗 Move Joined</button>
         <button id="btn-finger" class="tb toggle" data-tip="El dedo dibuja (pantallas sin lápiz)">✍︎ Dedo</button>
         <span class="sep"></span>
         <label class="scale-box" data-tip="Escala de la vista (Ctrl+1: escala de referencia)"><span id="scale-label">1:</span><input id="in-scale" inputmode="numeric" /><span id="scale-unit"></span></label>
