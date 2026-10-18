@@ -579,6 +579,25 @@ class PdfDoc {
     return data;
   }
 
+  /**
+   * Datos de una imagen: aplica los filtros hasta uno de imagen (JPEG, JPEG
+   * 2000, fax, JBIG2), que queda sin aplicar y se informa en `filter`.
+   */
+  decodeImage(st) {
+    let filters = this.res(st.dict.Filter);
+    let parms = this.res(st.dict.DecodeParms);
+    if (!Array.isArray(filters)) {
+      filters = filters ? [filters] : [];
+      parms = [parms];
+    }
+    const names = filters.map((f) => nameOf(this.res(f)));
+    const at = names.findIndex((n) => ['DCTDecode', 'DCT', 'JPXDecode', 'CCITTFaxDecode', 'CCF', 'JBIG2Decode'].includes(n));
+    if (at < 0) return { data: this.decode(st), filter: null };
+    const pre = new Stream({ ...st.dict, Filter: filters.slice(0, at), DecodeParms: Array.isArray(parms) ? parms.slice(0, at) : null }, st.bytes);
+    const n = names[at];
+    return { data: at ? this.decode(pre) : st.bytes, filter: n === 'DCT' ? 'DCTDecode' : n === 'CCF' ? 'CCITTFaxDecode' : n };
+  }
+
   trailer() {
     let root = null;
     let encrypt = null;
@@ -1006,9 +1025,9 @@ function makeColorSpace(pdf, cs, resources, depth = 0) {
   cs = pdf.res(cs);
   const nm = nameOf(cs);
   if (nm) {
-    if (nm === 'DeviceGray' || nm === 'G' || nm === 'CalGray') return { n: 1, rgb: ([g]) => [g, g, g] };
-    if (nm === 'DeviceRGB' || nm === 'RGB' || nm === 'CalRGB') return { n: 3, rgb: (c) => c };
-    if (nm === 'DeviceCMYK' || nm === 'CMYK') return { n: 4, rgb: cmyk };
+    if (nm === 'DeviceGray' || nm === 'G' || nm === 'CalGray') return { n: 1, kind: 'gray', rgb: ([g]) => [g, g, g] };
+    if (nm === 'DeviceRGB' || nm === 'RGB' || nm === 'CalRGB') return { n: 3, kind: 'rgb', rgb: (c) => c };
+    if (nm === 'DeviceCMYK' || nm === 'CMYK') return { n: 4, kind: 'cmyk', rgb: cmyk };
     if (nm === 'Pattern') return { n: 0, pattern: true, rgb: () => [0.5, 0.5, 0.5] };
     const named = pdf.res(pdf.res(resources?.ColorSpace)?.[nm]);
     if (named && depth < 6) return makeColorSpace(pdf, named, resources, depth + 1);
@@ -1024,9 +1043,9 @@ function makeColorSpace(pdf, cs, resources, depth = 0) {
       return makeColorSpace(pdf, new Name(n === 1 ? 'DeviceGray' : n === 4 ? 'DeviceCMYK' : 'DeviceRGB'), resources, depth + 1);
     }
     case 'CalRGB':
-      return { n: 3, rgb: (c) => c };
+      return { n: 3, kind: 'rgb', rgb: (c) => c };
     case 'CalGray':
-      return { n: 1, rgb: ([g]) => [g, g, g] };
+      return { n: 1, kind: 'gray', rgb: ([g]) => [g, g, g] };
     case 'Lab':
       return { n: 3, rgb: labToRgb };
     case 'Indexed':
@@ -1036,6 +1055,7 @@ function makeColorSpace(pdf, cs, resources, depth = 0) {
       const bytes = look instanceof Stream ? pdf.decode(look) : Uint8Array.from((look?.s || '').split('').map((c) => c.charCodeAt(0)));
       return {
         n: 1,
+        indexed: true,
         rgb: ([i]) => {
           const at = Math.round(i) * base.n;
           return base.rgb([...bytes.subarray(at, at + base.n)].map((v) => v / 255));
@@ -1096,6 +1116,37 @@ class Converter {
     this.fonts = new Map();
     this.ocNames = new Map();
     this.depth = 0;
+    this.images = [];
+    this.pixels = new Map(); // XObject de imagen → píxeles (una imagen colocada varias veces se lee una vez)
+  }
+
+  /**
+   * Imagen colocada: sus píxeles y la matriz del cuadrado unidad de la imagen
+   * a la página (SVG). Se devuelve aparte del SVG: GISDrawer la vuelve una
+   * capa de imagen.
+   */
+  addImage(xo, gs, resources) {
+    const M = mul(gs.ctm, this.F);
+    const pts = [[0, 0], [1, 0], [0, 1], [1, 1]].map(([u, v]) => apply(M, u, v));
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => p[1]);
+    const box = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    if (box[2] - box[0] < 0.5 || box[3] - box[1] < 0.5) return;
+    if (!this.pixels.has(xo)) {
+      let px = null;
+      try {
+        px = imagePixels(this.pdf, xo, resources, gs.fill?.css || '#000000', (w) => this.warn(w));
+      } catch {
+        this.warn('una imagen no se pudo leer');
+      }
+      this.pixels.set(xo, px);
+    }
+    const px = this.pixels.get(xo);
+    if (!px) return;
+    const layer = this.ocName(xo.dict.OC) ?? this.mc.find((m) => m.layer != null)?.layer ?? '';
+    // de píxel de la imagen (fila 0 arriba) al recuadro de la imagen en la página
+    const T = mul(mul([1 / px.w, 0, 0, -1 / px.h, 0, 1], M), [1, 0, 0, 1, -box[0], -box[1]]);
+    this.images.push({ layer, px, box, T, area: Math.abs(M[0] * M[3] - M[1] * M[2]), opacity: gs.fa < 1 ? gs.fa : 1 });
   }
 
   uid(p) {
@@ -1393,7 +1444,7 @@ class Converter {
               this.exec(pdf.decode(xo), pdf.res(xo.dict.Resources) || resources, gs, depth + 1);
               if (oc != null) this.mc.pop();
               gs = saved;
-            } else if (st === 'Image') this.warn('las imágenes incrustadas no se importan (usa Archivo → GeoTIFF o Georreferenciar)');
+            } else if (st === 'Image') this.addImage(xo, gs, resources);
             break;
           }
           case 'BI': {
@@ -1402,7 +1453,7 @@ class Converter {
             const m = /\sID[\s\S]*?\sEI(?=[\s]|$)/.exec(s);
             lx.p += m ? m.index + m[0].length : s.length;
             lx.peeked = [];
-            this.warn('las imágenes incrustadas no se importan (usa Archivo → GeoTIFF o Georreferenciar)');
+            this.warn('las imágenes en línea (pequeñas, dentro del contenido) no se importan');
             break;
           }
           // ---- contenido marcado (capas de Illustrator)
@@ -1652,6 +1703,163 @@ function invert(M) {
   return [a, b, c, d, -(M[4] * a + M[5] * c), -(M[4] * b + M[5] * d)];
 }
 
+/* ============================================================= imágenes */
+
+/** Lector de muestras de 1, 2, 4, 8 o 16 bits (de 16 se toma el byte alto). */
+function sampler(data, w, ncomp, bpc) {
+  const rowBytes = Math.ceil((w * ncomp * bpc) / 8);
+  if (bpc === 8) return (row, i) => data[row * rowBytes + i] ?? 0;
+  if (bpc === 16) return (row, i) => data[row * rowBytes + i * 2] ?? 0;
+  const max = (1 << bpc) - 1;
+  return (row, i) => {
+    const bit = i * bpc;
+    const byte = data[row * rowBytes + (bit >> 3)] ?? 0;
+    return (byte >> (8 - bpc - (bit & 7))) & max;
+  };
+}
+
+/** Máscara suave (SMask) o explícita (Mask) → alfa por píxel (0..255) del tamaño de la imagen. */
+function maskAlpha(pdf, st, w, h, soft) {
+  const d = st.dict;
+  const mw = pdf.res(d.Width) | 0;
+  const mh = pdf.res(d.Height) | 0;
+  if (!mw || !mh) return null;
+  const { data, filter } = pdf.decodeImage(st);
+  if (filter) return null;
+  const bpc = soft ? pdf.res(d.BitsPerComponent) || 8 : 1;
+  const max = bpc === 16 ? 255 : (1 << bpc) - 1;
+  const dec = pdf.res(d.Decode);
+  const get = sampler(data, mw, 1, bpc);
+  const lut = new Uint8Array(max + 1);
+  for (let s = 0; s <= max; s++) {
+    let v = s / max;
+    if (Array.isArray(dec)) v = dec[0] + v * (dec[1] - dec[0]);
+    // máscara explícita: 0 se pinta, 1 se tapa (como una máscara de esténcil)
+    lut[s] = Math.round(clamp(soft ? v : 1 - v) * 255);
+  }
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const my = Math.min(mh - 1, Math.floor(((y + 0.5) * mh) / h));
+    for (let x = 0; x < w; x++) out[y * w + x] = lut[get(my, Math.min(mw - 1, Math.floor(((x + 0.5) * mw) / w)))];
+  }
+  return out;
+}
+
+/**
+ * XObject de imagen → { w, h, rgba } (píxeles con alfa) o { w, h, jpeg, alpha? }
+ * (bytes JPEG tal cual, para que los decodifique el navegador). null si no se lee.
+ */
+export function imagePixels(pdf, xo, resources, fillCss = '#000000', warn = () => {}) {
+  const d = xo.dict;
+  const R = (k) => pdf.res(d[k]);
+  const w = R('Width') | 0;
+  const h = R('Height') | 0;
+  if (!w || !h) return null;
+  if (w * h > 80e6) {
+    warn(`una imagen de ${w}×${h} px es demasiado grande para importarla`);
+    return null;
+  }
+  const { data, filter } = pdf.decodeImage(xo);
+  const isMask = R('ImageMask') === true;
+  const out = { w, h };
+  let rgba = null;
+  if (filter === 'DCTDecode') out.jpeg = data;
+  else if (filter) {
+    warn(`las imágenes ${filter === 'JPXDecode' ? 'JPEG 2000' : filter} no se importan`);
+    return null;
+  } else if (isMask) {
+    // máscara de esténcil: pinta con el color de relleno donde la muestra es 0
+    const inv = (R('Decode') || [0, 1])[0] === 1;
+    const c = [1, 3, 5].map((i) => parseInt(fillCss.slice(i, i + 2), 16));
+    const get = sampler(data, w, 1, 1);
+    rgba = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0, k = 0; y < h; y++) {
+      for (let x = 0; x < w; x++, k += 4) {
+        rgba[k] = c[0];
+        rgba[k + 1] = c[1];
+        rgba[k + 2] = c[2];
+        rgba[k + 3] = (get(y, x) === 1) !== inv ? 0 : 255;
+      }
+    }
+  } else {
+    const cs = makeColorSpace(pdf, d.ColorSpace, resources);
+    const n = cs.n || 1;
+    const bpc = R('BitsPerComponent') || 8;
+    const max = bpc === 16 ? 255 : (1 << bpc) - 1;
+    const dec = R('Decode') || (cs.indexed ? [0, max] : new Array(n).fill([0, 1]).flat());
+    const val = (c, s) => dec[2 * c] + (s * (dec[2 * c + 1] - dec[2 * c])) / max;
+    const get = sampler(data, w, n, bpc);
+    rgba = new Uint8ClampedArray(w * h * 4);
+    if (n === 1) {
+      // una componente (gris, paleta, tinta plana): tabla por valor de muestra
+      const lut = new Uint8Array((max + 1) * 3);
+      for (let s = 0; s <= max; s++) {
+        const rgb = cs.rgb([val(0, s)]);
+        for (let c = 0; c < 3; c++) lut[s * 3 + c] = Math.round(clamp(rgb[c]) * 255);
+      }
+      for (let y = 0, k = 0; y < h; y++) {
+        for (let x = 0; x < w; x++, k += 4) {
+          const s = get(y, x) * 3;
+          rgba[k] = lut[s];
+          rgba[k + 1] = lut[s + 1];
+          rgba[k + 2] = lut[s + 2];
+          rgba[k + 3] = 255;
+        }
+      }
+    } else {
+      const fast = cs.kind === 'rgb' || cs.kind === 'cmyk';
+      const cache = new Map();
+      const comps = new Array(n);
+      for (let y = 0, k = 0; y < h; y++) {
+        for (let x = 0; x < w; x++, k += 4) {
+          for (let c = 0; c < n; c++) comps[c] = val(c, get(y, x * n + c));
+          let rgb;
+          if (cs.kind === 'rgb') rgb = comps;
+          else if (cs.kind === 'cmyk') rgb = cmyk(comps);
+          else {
+            const key = comps.join();
+            rgb = cache.get(key);
+            if (!rgb) {
+              rgb = cs.rgb(comps.slice());
+              if (cache.size < 65536) cache.set(key, rgb);
+            }
+          }
+          rgba[k] = clamp(rgb[0]) * 255;
+          rgba[k + 1] = clamp(rgb[1]) * 255;
+          rgba[k + 2] = clamp(rgb[2]) * 255;
+          rgba[k + 3] = 255;
+        }
+        if (!fast && cache.size >= 65536) cache.clear();
+      }
+    }
+    // máscara por rango de color: [min max …] por componente, en valores de muestra
+    const ck = R('Mask');
+    if (Array.isArray(ck)) {
+      const rng = ck.map((v) => Number(pdf.res(v)));
+      for (let y = 0, k = 3; y < h; y++) {
+        for (let x = 0; x < w; x++, k += 4) {
+          let inside = true;
+          for (let c = 0; c < n && inside; c++) {
+            const s = get(y, x * n + c);
+            inside = s >= rng[2 * c] && s <= rng[2 * c + 1];
+          }
+          if (inside) rgba[k] = 0;
+        }
+      }
+    }
+  }
+  // transparencia: máscara suave (Illustrator, Photoshop) o explícita
+  const sm = R('SMask');
+  const mk = R('Mask');
+  const alpha = sm instanceof Stream ? maskAlpha(pdf, sm, w, h, true) : mk instanceof Stream ? maskAlpha(pdf, mk, w, h, false) : null;
+  if (alpha) {
+    if (rgba) for (let i = 0, k = 3; i < alpha.length; i++, k += 4) rgba[k] = (rgba[k] * alpha[i]) / 255;
+    else out.alpha = alpha;
+  }
+  if (rgba) out.rgba = rgba;
+  return out;
+}
+
 /* ============================================================== entrada */
 
 /**
@@ -1699,7 +1907,9 @@ export function pdfToSvg(bytes, { name = 'PDF', page = 0 } = {}) {
   if (/saved without PDF Content|sin contenido PDF|ohne PDF-Inhalt/i.test(allText.replace(/<[^>]+>/g, '')) || (/\/AIPrivateData/.test(pdf.text) && /without PDF Content/i.test(pdf.text))) {
     throw new Error('El .ai se guardó sin «Crear archivo compatible con PDF». En Illustrator: Archivo → Guardar como… → Illustrator (.ai) y marca esa opción, o exporta como SVG o PDF.');
   }
-  return { svg: conv.svg(name), warnings: [...warnings], hiddenLayers: [...hidden], pages: pages.length, layers: conv.order.filter(Boolean) };
+  const layers = conv.order.filter(Boolean);
+  for (const im of conv.images) if (im.layer && !layers.includes(im.layer)) layers.push(im.layer);
+  return { svg: conv.svg(name), warnings: [...warnings], hiddenLayers: [...hidden], pages: pages.length, layers, images: conv.images };
 }
 
 /**
@@ -1708,8 +1918,16 @@ export function pdfToSvg(bytes, { name = 'PDF', page = 0 } = {}) {
  */
 export function importPdf(bytes, opts = {}) {
   const r = pdfToSvg(bytes, { name: opts.name || 'PDF' });
-  const res = importSvg(r.svg, { ...opts, unitMm: PT_MM });
-  return { ...res, warnings: [...new Set([...r.warnings, ...res.warnings])], hiddenLayers: r.hiddenLayers };
+  let extraBox = null;
+  for (const im of r.images) extraBox = extraBox ? [Math.min(extraBox[0], im.box[0]), Math.min(extraBox[1], im.box[1]), Math.max(extraBox[2], im.box[2]), Math.max(extraBox[3], im.box[3])] : im.box.slice();
+  const res = importSvg(r.svg, { ...opts, unitMm: PT_MM, extraBox });
+  // imágenes en el terreno: [x0, y0, x1, y1] (y hacia arriba), en el mismo lugar que las formas
+  const images = r.images.map((im) => {
+    const a = res.toWorld(im.box[0], im.box[3]);
+    const b = res.toWorld(im.box[2], im.box[1]);
+    return { ...im, bounds: [a[0], a[1], b[0], b[1]] };
+  });
+  return { ...res, images, warnings: [...new Set([...r.warnings, ...res.warnings])], hiddenLayers: r.hiddenLayers };
 }
 
 /** ¿Los bytes son un PDF (o un .ai moderno, que lo es)? */

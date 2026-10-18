@@ -542,7 +542,7 @@ const DEFAULT_NAMES = { path: 'Trazado', rect: 'Rectángulo', circle: 'Círculo'
  *   centrado en `center`. `layers`: lo mismo repartido por capa de primer
  *   nivel. `gisdrawer`: si el SVG lo copió GISDrawer, sus formas originales.
  */
-export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = null } = {}) {
+export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = null, extraBox = null } = {}) {
   const raw = String(text);
   const at = raw.search(/<svg[\s>]/i);
   if (at < 0) throw new Error('No es SVG');
@@ -690,7 +690,12 @@ export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = nu
   if (loose.length) layersMm.unshift({ name: root.getAttribute('data-name') || (root.getAttribute('id') || '').replace(/_/g, ' ') || 'SVG', shapes: loose });
 
   // de mm de papel (y hacia abajo) al terreno, centrado
-  const box = bboxMm(shapesMm);
+  let box = bboxMm(shapesMm);
+  // algo más que debe quedar en su lugar junto a las formas (las imágenes de un PDF)
+  if (extraBox) {
+    const [a, b, c, d] = extraBox;
+    box = box ? { minX: Math.min(box.minX, a), minY: Math.min(box.minY, b), maxX: Math.max(box.maxX, c), maxY: Math.max(box.maxY, d) } : { minX: a, minY: b, maxX: c, maxY: d };
+  }
   const mPerMm = refScale / 1000;
   const cx = box ? (box.minX + box.maxX) / 2 : 0;
   const cy = box ? (box.minY + box.maxY) / 2 : 0;
@@ -703,7 +708,7 @@ export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = nu
   };
   const shapes = shapesMm.map(place).map(clean);
   const layers = layersMm.map((l) => ({ name: l.name, shapes: l.shapes.map(place).map(clean) }));
-  return { shapes, layers, warnings: [...warnings], gisdrawer: null, sizeMm: box ? [(box.maxX - box.minX) * k, (box.maxY - box.minY) * k] : [0, 0] };
+  return { shapes, layers, warnings: [...warnings], gisdrawer: null, toWorld, sizeMm: box ? [(box.maxX - box.minX) * k, (box.maxY - box.minY) * k] : [0, 0] };
 }
 
 const pick = (decls) => Object.fromEntries(Object.entries(decls).filter(([key]) => STYLE_PROPS.includes(key)));

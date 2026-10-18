@@ -129,6 +129,43 @@ const ai = buildPdf(objs, { objStm: true });
   ok(line && Math.abs(line.style.strokeWidth - 2 * 25.4 / 72) < 0.01, `grosor de trazo: ${line?.style.strokeWidth}`);
 }
 
+/* ------------------------------------------------- imágenes incrustadas */
+{
+  const raw = (bytes) => ({ dict: '/Filter /FlateDecode', data: deflateSync(Buffer.from(bytes)) });
+  const img = raw([0, 1, 2, 3]); // índices de paleta, 2×2
+  img.dict += ' /Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace [/Indexed /DeviceRGB 3 <FF000000FF000000FFFFFFFF>] /SMask 6 0 R';
+  const smask = raw([255, 128, 0, 255]);
+  smask.dict += ' /Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray';
+  const jpg = { dict: '/Type /XObject /Subtype /Image /Width 4 /Height 3 /BitsPerComponent 8 /ColorSpace /DeviceCMYK /Filter /DCTDecode', data: Buffer.from([0xff, 0xd8, 1, 2, 3, 0xff, 0xd9]) };
+  const pdf = buildPdf([
+    '<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R] >> >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R /Im1 8 0 R >> /Properties << /MC0 7 0 R >> >> >>',
+    flate('/OC /MC0 BDC q 100 0 0 50 20 30 cm /Im0 Do Q q 100 0 0 50 20 130 cm /Im0 Do Q q -40 0 0 30 190 10 cm /Im1 Do Q EMC 0 0 1 RG 10 10 m 190 190 l S'),
+    img,
+    smask,
+    '<< /Type /OCG /Name (Fotos) >>',
+    jpg,
+  ]);
+  const r = pdfToSvg(pdf);
+  ok(r.images.length === 3 && r.images.every((im) => im.layer === 'Fotos'), `imágenes en su capa: ${r.images.map((i) => i.layer)}`);
+  ok(r.layers.includes('Fotos'), 'una capa con solo imágenes figura entre las capas');
+  const [a, b2, c] = r.images;
+  ok(a.box.join() === '20,120,120,170', `recuadro en la página: ${a.box}`);
+  ok(a.px === b2.px, 'la misma imagen colocada dos veces se lee una vez');
+  const px = [...a.px.rgba];
+  ok(px.slice(0, 8).join() === '255,0,0,255,0,255,0,128' && px.slice(8).join() === '0,0,255,0,255,255,255,255', `paleta y máscara suave: ${px}`);
+  // fila 0 de la imagen arriba: el píxel (0,0) va a la esquina superior izquierda del recuadro
+  ok(Math.abs(a.T[0] - 50) < 1e-9 && Math.abs(a.T[3] - 25) < 1e-9 && Math.abs(a.T[5]) < 1e-9, `matriz de píxel a página: ${a.T}`);
+  ok(c.px.jpeg && c.px.jpeg[0] === 0xff && c.px.w === 4, 'JPEG se entrega tal cual');
+  ok(c.T[0] < 0 && Math.abs(c.T[4] - 40) < 1e-9, `imagen volteada en horizontal: ${c.T}`);
+  const res = importPdf(pdf, { refScale: 1000, center: [0, 0] });
+  // 1 pt a 1:1000 = 0,3528 m; las imágenes cuentan para centrar el conjunto
+  const [x0, y0, x1, y1] = res.images[0].bounds;
+  ok(Math.abs(x1 - x0 - 100 * 0.35278) < 0.01 && Math.abs(y1 - y0 - 50 * 0.35278) < 0.01 && y1 > y0, `imagen en el terreno: ${res.images[0].bounds}`);
+  ok(Math.abs(res.images[1].bounds[1] - res.images[0].bounds[3] - 50 * 0.35278) < 0.01, 'la segunda copia queda 50 pt más arriba');
+}
+
 /* ------------------------------------------------- casos que no se leen */
 {
   const legacy = new Uint8Array(Buffer.from('%!PS-Adobe-3.0\n%%Creator: Adobe Illustrator(TM) 8.0\n'));

@@ -370,7 +370,7 @@ entiende `mix-blend-mode`).
 | QML / QLR (QGIS) | símbolo único, categorizado, graduado y por reglas; símbolos de varias capas (relleno + contorno, línea con borde, flechas, degradados, marcadores); etiquetado simple | dentro del GeoPackage; **.qlr + GeoPackage** (Archivo → Exportar → Simbología QGIS); .qml de la capa activa |
 | GeoJSON | WGS84 o con `crs` | WGS84 (RFC 7946) o UTM 19S |
 | GeoTIFF | elevación (una banda) o imagen RGB(A), en su sistema | relieve calculado, imagen georreferenciada |
-| **SVG / Illustrator** | **archivo .ai nativo** (una capa por capa de Illustrator, las ocultas llegan ocultas), **PDF vectorial**, archivo .svg (una capa por capa de primer nivel) y **pegar con Ctrl+V** lo copiado en Illustrator | **lámina con un grupo por capa** (.svg) y **script de Illustrator (.jsx) que crea una capa real por capa**; copiar (Ctrl+C) deja SVG en puntos para pegar en Illustrator |
+| **SVG / Illustrator** | **archivo .ai nativo**, como proyecto nuevo (una capa por capa de Illustrator, imágenes incrustadas como capas de imagen, las ocultas llegan ocultas), **PDF vectorial**, archivo .svg (una capa por capa de primer nivel) y **pegar con Ctrl+V** lo copiado en Illustrator | **lámina con un grupo por capa** (.svg) y **script de Illustrator (.jsx) que crea una capa real por capa**; copiar (Ctrl+C) deja SVG en puntos para pegar en Illustrator |
 | **FieldDraw** | proyecto `.fdproj.json`, paquete `.fdproj.zip` o GeoJSON exportado, con simbología y georreferencia | — |
 | ASCII grid | elevación | — |
 | Proyecto `.gisdrawer` | sí | sí (además se guarda solo en el navegador) |
@@ -406,16 +406,24 @@ Inkscape) se pega como dibujo.
 **Illustrator, ida y vuelta**:
 
 - *Abrir un .ai*: Archivo → Importar → «Illustrator (.ai, .svg) / PDF
-  vectorial». Se lee la copia PDF que Illustrator guarda dentro del .ai
+  vectorial». Un .ai o un PDF **se abre como proyecto nuevo** (Ctrl+Z vuelve
+  al anterior), con el mapa base oculto porque la figura no está
+  georreferenciada. Se lee la copia PDF que Illustrator guarda dentro del .ai
   (opción «Crear archivo compatible con PDF» del cuadro Guardar como, activada
   por omisión): cada capa de Illustrator es una capa de GISDrawer con su
   nombre, con trazados Bézier, rellenos (también par-impar y con huecos),
   trazos, segmentados, transparencias, máscaras de recorte, degradados,
   colores CMYK y de tinta plana (Pantone) y textos con su fuente, tamaño,
-  negrita y acentos. Las capas ocultas en Illustrator llegan ocultas. No se
-  importan las imágenes incrustadas, las máscaras de opacidad ni los .ai
-  antiguos (Illustrator 8 o anterior, PostScript); si el .ai se guardó sin
-  la opción de compatibilidad con PDF, la app lo avisa. De un PDF de varias
+  negrita y acentos. **Las imágenes incrustadas** (relieves, fotos, rásters
+  colocados con «Incrustar»; RGB, CMYK, gris, paleta o JPEG, con su
+  transparencia, giradas o volteadas como en la página) llegan como capas de
+  imagen con su nombre de capa, debajo de las capas vectoriales y en su
+  lugar. Las capas ocultas en Illustrator llegan ocultas. Las imágenes
+  **vinculadas** que no se incrustaron no viajan dentro del .ai: en
+  Illustrator, panel Vínculos → «Incrustar imagen» antes de guardar. No se
+  importan las máscaras de opacidad, las imágenes JPEG 2000 ni los .ai
+  antiguos (Illustrator 8 o anterior, PostScript); si el .ai se guardó sin la
+  opción de compatibilidad con PDF, la app lo avisa. De un PDF de varias
   páginas (o varias mesas de trabajo) se importa la primera.
 - *Pegar en GISDrawer lo copiado en Illustrator*: en Illustrator,
   Preferencias → Gestión del portapapeles → «Copiar como: código SVG».
