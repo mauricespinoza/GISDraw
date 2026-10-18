@@ -130,28 +130,58 @@ const scaleOf = (m) => Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
  * [{ nodes: [{x, y, hIn, hOut}], closed }]. Las cuadráticas y los arcos se
  * pasan a cúbicas, que es lo que guarda GISDrawer.
  */
-export function parsePathD(d) {
+export function parsePathD(d, M = null) {
   const s = String(d || '');
   let i = 0;
+  const N = s.length;
   const skip = () => {
-    while (i < s.length && /[\s,]/.test(s[i])) i++;
+    // espacio, coma, tabulación, saltos de línea
+    let c;
+    while (i < N && ((c = s.charCodeAt(i)) === 32 || c === 44 || c === 10 || c === 13 || c === 9 || c === 12)) i++;
   };
+  // número SVG: signo, enteros, decimales y exponente; sin regex ni subcadenas
   const num = () => {
     skip();
-    const m = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/.exec(s.slice(i, i + 40));
-    if (!m) return null;
-    i += m[0].length;
-    return Number(m[0]);
+    const st = i;
+    let c = s.charCodeAt(i);
+    if (c === 45 || c === 43) c = s.charCodeAt(++i);
+    let digits = 0;
+    while (c >= 48 && c <= 57) {
+      c = s.charCodeAt(++i);
+      digits++;
+    }
+    if (c === 46) {
+      c = s.charCodeAt(++i);
+      while (c >= 48 && c <= 57) {
+        c = s.charCodeAt(++i);
+        digits++;
+      }
+    }
+    if (!digits) {
+      i = st;
+      return null;
+    }
+    if (c === 101 || c === 69) {
+      let j = i + 1;
+      let e = s.charCodeAt(j);
+      if (e === 45 || e === 43) e = s.charCodeAt(++j);
+      if (e >= 48 && e <= 57) {
+        while (e >= 48 && e <= 57) e = s.charCodeAt(++j);
+        i = j;
+      }
+    }
+    return +s.substring(st, i);
   };
   const flag = () => {
     skip();
-    const c = s[i];
-    if (c === '0' || c === '1') {
+    const c = s.charCodeAt(i);
+    if (c === 48 || c === 49) {
       i++;
-      return c === '1';
+      return c === 49;
     }
     return null;
   };
+  const isLetter = (c) => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
   const subs = [];
   let cur = null;
   let x = 0;
@@ -161,23 +191,34 @@ export function parsePathD(d) {
   let lastC = null; // último control de cúbica (para S)
   let lastQ = null; // último control de cuadrática (para T)
   let cmd = null;
+  // con una matriz, los nodos salen ya transformados (sin una segunda copia de cada trazo)
+  const ma = M ? M[0] : 1;
+  const mb = M ? M[1] : 0;
+  const mc = M ? M[2] : 0;
+  const md = M ? M[3] : 1;
+  const me = M ? M[4] : 0;
+  const mf = M ? M[5] : 0;
+  const pt = (px, py) => ({ x: ma * px + mc * py + me, y: mb * px + md * py + mf });
   const start = (px, py) => {
-    cur = { nodes: [{ x: px, y: py, hIn: null, hOut: null }], closed: false };
+    const q = pt(px, py);
+    cur = { nodes: [{ x: q.x, y: q.y, hIn: null, hOut: null }], closed: false };
     subs.push(cur);
   };
   const lineTo = (px, py) => {
     if (!cur) start(x, y);
-    cur.nodes.push({ x: px, y: py, hIn: null, hOut: null });
+    const q = pt(px, py);
+    cur.nodes.push({ x: q.x, y: q.y, hIn: null, hOut: null });
   };
   const cubicTo = (c1x, c1y, c2x, c2y, px, py) => {
     if (!cur) start(x, y);
-    cur.nodes[cur.nodes.length - 1].hOut = { x: c1x, y: c1y };
-    cur.nodes.push({ x: px, y: py, hIn: { x: c2x, y: c2y }, hOut: null });
+    cur.nodes[cur.nodes.length - 1].hOut = pt(c1x, c1y);
+    const q = pt(px, py);
+    cur.nodes.push({ x: q.x, y: q.y, hIn: pt(c2x, c2y), hOut: null });
   };
   while (i < s.length) {
     skip();
     if (i >= s.length) break;
-    if (/[a-zA-Z]/.test(s[i])) cmd = s[i++];
+    if (isLetter(s.charCodeAt(i))) cmd = s[i++];
     else if (!cmd) break;
     const rel = cmd === cmd.toLowerCase();
     const C = cmd.toUpperCase();
@@ -571,19 +612,39 @@ export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = nu
     if (el.tagName.toLowerCase().replace(/^svg:/, '') === 'style') css = css.concat(parseCss(el.textContent));
   }
   css.sort((a, b) => a.spec - b.spec || a.order - b.order);
+  for (const r of css) r.picked = pick(r.decls); // una sola vez, no por elemento
+  const usesId = css.some((r) => r.parts.some((q) => q[0] === '#'));
 
   // raíz: viewBox desplazado
   const vb = (root.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
   const rootM = vb.length === 4 ? [1, 0, 0, 1, -vb[0], -vb[1]] : ID;
 
+  // Los selectores son simples (etiqueta, clase, id): el estilo de un elemento depende solo de su padre y de sus
+  // propios atributos. Miles de trazos hermanos con la misma clase comparten el cálculo.
+  const memo = new WeakMap(); // objeto de estilo del padre → Map(clave → estilo)
   const computed = (el, parent) => {
     const own = {};
-    for (const p of STYLE_PROPS) if (el.hasAttribute(p)) own[p] = el.getAttribute(p);
-    for (const r of css) if (matches(el, r.parts)) Object.assign(own, pick(r.decls));
-    if (el.hasAttribute('style')) Object.assign(own, pick(parseDecls(el.getAttribute('style'))));
+    let key = el.tagName;
+    if (css.length) key += `|${el.getAttribute('class') || ''}${usesId ? `|${el.getAttribute('id') || ''}` : ''}`;
+    for (const p of STYLE_PROPS) {
+      const v = el.getAttribute(p);
+      if (v != null) {
+        own[p] = v;
+        key += `|${p}=${v}`;
+      }
+    }
+    const styleAttr = el.getAttribute('style');
+    if (styleAttr != null) key += `|style=${styleAttr}`;
+    let table = parent ? memo.get(parent) : null;
+    if (parent && !table) memo.set(parent, (table = new Map()));
+    const hit = table?.get(key);
+    if (hit) return hit;
+    if (css.length) for (const r of css) if (matches(el, r.parts)) Object.assign(own, r.picked);
+    if (styleAttr != null) Object.assign(own, pick(parseDecls(styleAttr)));
     const out = {};
-    for (const [key, v] of Object.entries(parent || {})) if (INHERITED.has(key)) out[key] = v;
-    for (const [key, v] of Object.entries(own)) if (v !== 'inherit') out[key] = v;
+    for (const k2 in parent || {}) if (INHERITED.has(k2)) out[k2] = parent[k2];
+    for (const k2 in own) if (own[k2] !== 'inherit') out[k2] = own[k2];
+    table?.set(key, out);
     return out;
   };
 
@@ -610,7 +671,7 @@ export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = nu
           const hh = parseFloat(el.getAttribute('height'));
           if (v2.length === 4 && w > 0 && hh > 0) M = mul(M, [w / v2[2], 0, 0, hh / v2[3], -v2[0] * (w / v2[2]), -v2[1] * (hh / v2[3])]);
         }
-        for (const c of el.children) out.push(...walk(c, M, cs, op));
+        for (const c of el.children) for (const q of walk(c, M, cs, op)) out.push(q);
         const name = el.getAttribute('data-name') || (el.getAttribute('id') || '').replace(/_/g, ' ') || null;
         out = withClip(el, out, M, cs);
         if (out.length > 1 || (out.length === 1 && name)) {
@@ -638,9 +699,9 @@ export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = nu
       case 'line':
       case 'polyline':
       case 'polygon': {
-        const subs = parsePathD(shapeToD(el)).map((sp) => ({ ...sp, nodes: sp.nodes.map((n) => mapNode(n, M)) }));
+        const subs = parsePathD(shapeToD(el), M);
         if (!subs.length) return [];
-        const style = toGdStyle(cs, scaleOf(M) * k, op, byId, warnings);
+        const style = styleFor(cs, scaleOf(M) * k, op);
         const name = el.getAttribute('data-name') || el.getAttribute('id') || DEFAULT_NAMES[tag];
         out = subsToShapes(subs, style, name);
         return withClip(el, out, M, cs);
@@ -668,12 +729,23 @@ export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = nu
       const d = shapeToD(c);
       if (!d) continue;
       const cmm = mul(cm, parseTransform(c.getAttribute('transform')));
-      for (const sp of parsePathD(d)) geo.push({ ...sp, closed: true, nodes: sp.nodes.map((n) => mapNode(n, cmm)) });
+      for (const sp of parsePathD(d, cmm)) geo.push({ ...sp, closed: true });
     }
     if (!geo.length) return shapes;
     const mask = subsToShapes(geo, { ...defaultStyle(), fill: 'none', stroke: 'none' }, 'Máscara')[0];
     if (!mask || mask.type !== 'path') return shapes;
     return [makeGroup([mask, ...shapes], { clip: true })];
+  };
+
+  // el mismo estilo calculado (mismas propiedades, escala y opacidad) se reutiliza, con copia propia para cada forma
+  const styles = new WeakMap(); // estilo calculado del elemento → Map(escala|opacidad → estilo)
+  const styleFor = (cs, kMm, op) => {
+    let t = styles.get(cs);
+    if (!t) styles.set(cs, (t = new Map()));
+    const key = `${kMm}|${op}`;
+    let st = t.get(key);
+    if (!st) t.set(key, (st = toGdStyle(cs, kMm, op, byId, warnings)));
+    return { ...st, gradient: st.gradient && { ...st.gradient, stops: st.gradient.stops.map((q) => q.slice()) } };
   };
 
   const shapesMm = [];
@@ -702,25 +774,23 @@ export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = nu
   // anchor { svg: [x, y], world: [X, Y] }: ese punto del SVG cae justo en ese punto del mundo (en vez de centrar las formas)
   if (anchor) center = [anchor.world[0] - (anchor.svg[0] - cx) * k * mPerMm, anchor.world[1] + (anchor.svg[1] - cy) * k * mPerMm];
   const toWorld = (x, y) => [center[0] + (x - cx) * k * mPerMm, center[1] - (y - cy) * k * mPerMm];
-  const place = (s) => mapShapePoints(s, toWorld);
-  const clean = (s) => {
+  // una sola pasada sobre los objetos recién creados; `shapes` y `layers` comparten los mismos objetos
+  const placed = new Set();
+  const place = (s) => {
+    if (placed.has(s)) return s;
+    placed.add(s);
     delete s._svgName;
-    if (s.type === 'group') s.children.forEach(clean);
+    if (s.type === 'group') s.children.forEach(place);
+    else mapPointsInPlace(s, toWorld);
     return s;
   };
-  const shapes = shapesMm.map(place).map(clean);
-  const layers = layersMm.map((l) => ({ name: l.name, shapes: l.shapes.map(place).map(clean) }));
+  const shapes = shapesMm.map(place);
+  const layers = layersMm.map((l) => ({ name: l.name, shapes: l.shapes.map(place) }));
   return { shapes, layers, warnings: [...warnings], gisdrawer: null, toWorld, sizeMm: box ? [(box.maxX - box.minX) * k, (box.maxY - box.minY) * k] : [0, 0] };
 }
 
 const pick = (decls) => Object.fromEntries(Object.entries(decls).filter(([key]) => STYLE_PROPS.includes(key)));
 const clamp01 = (v) => (Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1);
-
-function mapNode(n, M) {
-  const p = apply(M, n.x, n.y);
-  return { x: p[0], y: p[1], hIn: n.hIn ? xy(apply(M, n.hIn.x, n.hIn.y)) : null, hOut: n.hOut ? xy(apply(M, n.hOut.x, n.hOut.y)) : null, smooth: false };
-}
-const xy = (p) => ({ x: p[0], y: p[1] });
 
 /** Subtrayectos → trazos de GISDrawer. Cerrados con relleno: el primero es el contorno y el resto huecos. */
 function subsToShapes(subs, style, name) {
@@ -926,6 +996,30 @@ function textShapes(el, M, cs, opacity, kMm, computed) {
 }
 
 /* ================================================================ util */
+
+/** Como `mapShapePoints`, pero sobre la propia forma (sin copiarla); los grupos no se recorren aquí. */
+function mapPointsInPlace(s, f) {
+  const n = (q) => {
+    if (!q) return;
+    const [x, y] = f(q.x, q.y);
+    q.x = x;
+    q.y = y;
+  };
+  if (s.type === 'path') {
+    for (const q of s.nodes) {
+      n(q);
+      n(q.hIn);
+      n(q.hOut);
+    }
+    for (const h of s.holes || []) {
+      for (const q of h) {
+        n(q);
+        n(q.hIn);
+        n(q.hOut);
+      }
+    }
+  } else if (s.type === 'text' || s.type === 'point') n(s);
+}
 
 /** Aplica `f(x, y) → [x, y]` a todos los puntos de una forma (copia). */
 export function mapShapePoints(s, f) {

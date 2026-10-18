@@ -9,7 +9,7 @@
  * - Teselas (TILES): mapas base y DEM Terrarium ya vistos, con tope.
  */
 
-const VERSION = 'v21';
+const VERSION = 'v22';
 const PRECACHE = `gisdrawer-shell-${VERSION}`;
 const TILES = 'gisdrawer-tiles';
 const TILE_LIMIT = 5000;
@@ -37,11 +37,13 @@ const SHELL = [
   './src/io/geojson.js',
   './src/io/gdrive.js',
   './src/io/geotiff.js',
+  './src/io/importWorker.js',
   './src/io/gpkg.js',
   './src/io/loader.js',
   './src/io/pdfImport.js',
   './src/io/qml.js',
   './src/io/store.js',
+  './src/io/transport.js',
   './src/io/wkb.js',
   './src/labels.js',
   './src/layout/compose.js',

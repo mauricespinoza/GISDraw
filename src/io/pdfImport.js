@@ -21,6 +21,7 @@
  */
 
 import { importSvg, PT_MM } from './svgImport.js';
+import { canvasFromMm, canvasRect } from '../mode.js';
 
 /* ============================================================== inflate */
 
@@ -30,17 +31,34 @@ const DBASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 3
 const DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
 const CLORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
 
+/**
+ * Tabla de decodificación Huffman de un solo acceso: se indexa con los
+ * próximos `bits` bits (el primero en el bit menos significativo) y da
+ * `(largo << 16) | símbolo`; 0 = código inválido.
+ */
 function huffman(lengths) {
   const count = new Uint16Array(16);
-  for (const l of lengths) count[l]++;
+  let max = 0;
+  for (const l of lengths) {
+    count[l]++;
+    if (l > max) max = l;
+  }
   count[0] = 0;
-  const offs = new Uint16Array(16);
-  for (let i = 1; i < 16; i++) offs[i] = offs[i - 1] + count[i - 1];
-  const symbol = new Uint16Array(lengths.length);
-  lengths.forEach((l, s) => {
-    if (l) symbol[offs[l]++] = s;
-  });
-  return { count, symbol };
+  const bits = Math.max(1, max);
+  const size = 1 << bits;
+  const table = new Int32Array(size);
+  const next = new Uint16Array(17);
+  for (let l = 1; l < 16; l++) next[l + 1] = (next[l] + count[l]) << 1;
+  for (let sym = 0; sym < lengths.length; sym++) {
+    const l = lengths[sym];
+    if (!l) continue;
+    let code = next[l]++;
+    let rev = 0;
+    for (let k = 0; k < l; k++, code >>= 1) rev = (rev << 1) | (code & 1);
+    const entry = (l << 16) | sym;
+    for (let j = rev; j < size; j += 1 << l) table[j] = entry;
+  }
+  return { table, bits, mask: size - 1 };
 }
 
 let FIXED = null;
@@ -50,41 +68,41 @@ let FIXED = null;
  * basura al final, como los que se ven en PDF reales: devuelve lo que alcanzó.
  */
 export function inflate(data) {
-  let pos = (data[0] & 0x0f) === 8 && ((data[0] << 8) | data[1]) % 31 === 0 ? 2 : 0;
+  const len = data.length;
+  let pos = len > 1 && (data[0] & 0x0f) === 8 && ((data[0] << 8) | data[1]) % 31 === 0 ? 2 : 0;
   let bitBuf = 0;
   let bitCnt = 0;
-  let out = new Uint8Array(Math.max(1024, data.length * 4));
+  let out = new Uint8Array(Math.max(1024, len * 4));
   let n = 0;
-  const need = (k) => {
-    if (n + k <= out.length) return;
+  const grow = (k) => {
     const o2 = new Uint8Array(Math.max(out.length * 2, n + k));
     o2.set(out.subarray(0, n));
     out = o2;
   };
-  const bits = (k) => {
-    while (bitCnt < k) {
-      if (pos >= data.length) throw new Error('eof');
-      bitBuf |= data[pos++] << bitCnt;
+  // deja al menos 25 bits en el búfer (los que falten al final del dato valen 0 y se detectan al gastarlos)
+  let over = 0;
+  const refill = () => {
+    while (bitCnt <= 24) {
+      if (pos < len) bitBuf |= data[pos++] << bitCnt;
+      else over++;
       bitCnt += 8;
     }
+  };
+  const bits = (k) => {
+    if (bitCnt < k) refill();
     const v = bitBuf & ((1 << k) - 1);
     bitBuf >>>= k;
     bitCnt -= k;
     return v;
   };
   const decode = (h) => {
-    let code = 0;
-    let first = 0;
-    let index = 0;
-    for (let len = 1; len < 16; len++) {
-      code |= bits(1);
-      const c = h.count[len];
-      if (code - c < first) return h.symbol[index + (code - first)];
-      index += c;
-      first = (first + c) << 1;
-      code <<= 1;
-    }
-    throw new Error('código Huffman inválido');
+    if (bitCnt < 15) refill();
+    const e = h.table[bitBuf & h.mask];
+    const l = e >> 16;
+    if (!l) throw new Error('código Huffman inválido');
+    bitBuf >>>= l;
+    bitCnt -= l;
+    return e & 0xffff;
   };
   try {
     let last = 0;
@@ -92,14 +110,21 @@ export function inflate(data) {
       last = bits(1);
       const type = bits(2);
       if (type === 0) {
+        // bloque sin comprimir: se vuelve al borde de byte, devolviendo lo que se leyó de más
+        bitCnt -= bitCnt & 7;
+        pos -= bitCnt >> 3;
+        pos += over; // los bytes ficticios de más no existen
+        over = 0;
         bitBuf = 0;
         bitCnt = 0;
-        const len = data[pos] | (data[pos + 1] << 8);
+        const l = data[pos] | (data[pos + 1] << 8);
         pos += 4;
-        need(len);
-        out.set(data.subarray(pos, pos + len), n);
-        n += Math.min(len, data.length - pos);
-        pos += len;
+        if (n + l > out.length) grow(l);
+        const take = Math.min(l, len - pos);
+        out.set(data.subarray(pos, pos + take), n);
+        n += take;
+        pos += l;
+        if (take < l) throw new Error('eof');
         continue;
       }
       let lit;
@@ -128,20 +153,40 @@ export function inflate(data) {
         lit = huffman(lens.slice(0, hlit));
         dist = huffman(lens.slice(hlit, hlit + hdist));
       } else throw new Error('bloque deflate inválido');
+      const ltab = lit.table;
+      const lmask = lit.mask;
       for (;;) {
-        const sym = decode(lit);
+        if (bitCnt < 15) refill();
+        let e = ltab[bitBuf & lmask];
+        let l = e >> 16;
+        if (!l) throw new Error('código Huffman inválido');
+        bitBuf >>>= l;
+        bitCnt -= l;
+        const sym = e & 0xffff;
         if (sym < 256) {
-          need(1);
+          if (n >= out.length) grow(1);
           out[n++] = sym;
         } else if (sym === 256) break;
         else {
           const s = sym - 257;
-          const len = LBASE[s] + bits(LEXT[s]);
-          const ds = decode(dist);
-          const d = DBASE[ds] + bits(DEXT[ds]);
-          need(len);
-          for (let i = 0; i < len; i++, n++) out[n] = out[n - d];
+          const ml = LBASE[s] + (LEXT[s] ? bits(LEXT[s]) : 0);
+          if (bitCnt < 15) refill();
+          e = dist.table[bitBuf & dist.mask];
+          l = e >> 16;
+          if (!l) throw new Error('código Huffman inválido');
+          bitBuf >>>= l;
+          bitCnt -= l;
+          const ds = e & 0xffff;
+          const d = DBASE[ds] + (DEXT[ds] ? bits(DEXT[ds]) : 0);
+          if (d > n) throw new Error('distancia inválida');
+          if (n + ml > out.length) grow(ml);
+          if (d >= ml) {
+            out.copyWithin(n, n - d, n - d + ml);
+            n += ml;
+          } else for (let i = 0; i < ml; i++, n++) out[n] = out[n - d];
         }
+        // más bytes ficticios de los que caben en el búfer: el dato se acabó
+        if (over > 4) throw new Error('eof');
       }
     }
   } catch {
@@ -181,6 +226,7 @@ class Stream {
   }
 }
 
+const OPS = new Map(); // palabras clave cortas ya vistas (los objetos Op no cambian)
 const isWs = (c) => c === 32 || c === 10 || c === 13 || c === 9 || c === 12 || c === 0;
 const isDelim = (c) => c === 40 || c === 41 || c === 60 || c === 62 || c === 91 || c === 93 || c === 123 || c === 125 || c === 47 || c === 37;
 const nameOf = (v) => (v instanceof Name ? v.name : null);
@@ -246,6 +292,51 @@ class Lexer {
     if (c === 91 || c === 93 || c === 123 || c === 125) {
       this.p++;
       return String.fromCharCode(c);
+    }
+    if ((c >= 48 && c <= 57) || c === 45 || c === 43 || c === 46) {
+      // número (lo más común en un flujo de contenido): se lee sin armar cadenas
+      let p = this.p;
+      const neg = c === 45;
+      if (neg || c === 43) p++;
+      let v = 0;
+      let digits = 0;
+      let d;
+      while (p < this.end && (d = b[p] - 48) >= 0 && d <= 9) {
+        v = v * 10 + d;
+        p++;
+        digits++;
+      }
+      if (p < this.end && b[p] === 46) {
+        p++;
+        let f = 0;
+        let div = 1;
+        while (p < this.end && (d = b[p] - 48) >= 0 && d <= 9 && div < 1e15) {
+          f = f * 10 + d;
+          div *= 10;
+          p++;
+          digits++;
+        }
+        v += f / div;
+      }
+      const nx = p < this.end ? b[p] : 32;
+      if (digits > 0 && (isWs(nx) || isDelim(nx))) {
+        this.p = p;
+        return neg ? -v : v;
+      }
+    }
+    // palabra clave corta (q, Q, cm, re, BDC…): se reutiliza el mismo objeto
+    const t0 = this.p;
+    let e = t0;
+    while (e < this.end && !isWs(b[e]) && !isDelim(b[e])) e++;
+    if (e - t0 > 0 && e - t0 <= 3 && !((c >= 48 && c <= 57) || c === 45 || c === 43 || c === 46)) {
+      const key = ((e - t0) << 24) | (b[t0] << 16) | ((e - t0 > 1 ? b[t0 + 1] : 0) << 8) | (e - t0 > 2 ? b[t0 + 2] : 0);
+      let op = OPS.get(key);
+      if (!op) {
+        op = new Op(String.fromCharCode(...b.subarray(t0, e)));
+        OPS.set(key, op);
+      }
+      this.p = e;
+      return op;
     }
     let s = '';
     while (this.p < this.end && !isWs(b[this.p]) && !isDelim(b[this.p])) s += String.fromCharCode(b[this.p++]);
@@ -339,7 +430,10 @@ class Lexer {
 /* ============================================================== filtros */
 
 function ascii85(b) {
-  const out = [];
+  let zeros = 0;
+  for (let i = 0; i < b.length; i++) if (b[i] === 122) zeros++;
+  const out = new Uint8Array(Math.ceil((b.length * 4) / 5) + zeros * 4 + 8);
+  let n = 0;
   let tuple = 0;
   let count = 0;
   for (let i = 0; i < b.length; i++) {
@@ -347,12 +441,15 @@ function ascii85(b) {
     if (c === 126) break; // ~>
     if (isWs(c)) continue;
     if (c === 122 && count === 0) {
-      out.push(0, 0, 0, 0);
+      n += 4; // «z» = cuatro ceros (el búfer ya está en 0)
       continue;
     }
     tuple = tuple * 85 + (c - 33);
     if (++count === 5) {
-      out.push((tuple >>> 24) & 255, (tuple >>> 16) & 255, (tuple >>> 8) & 255, tuple & 255);
+      out[n++] = (tuple >>> 24) & 255;
+      out[n++] = (tuple >>> 16) & 255;
+      out[n++] = (tuple >>> 8) & 255;
+      out[n++] = tuple & 255;
       tuple = 0;
       count = 0;
     }
@@ -360,9 +457,9 @@ function ascii85(b) {
   if (count > 1) {
     for (let k = count; k < 5; k++) tuple = tuple * 85 + 84;
     const bytes = [(tuple >>> 24) & 255, (tuple >>> 16) & 255, (tuple >>> 8) & 255, tuple & 255];
-    out.push(...bytes.slice(0, count - 1));
+    for (let k = 0; k < count - 1; k++) out[n++] = bytes[k];
   }
-  return Uint8Array.from(out);
+  return out.subarray(0, n);
 }
 
 function asciiHex(b) {
@@ -465,7 +562,17 @@ function unpredict(b, parms) {
 /* ============================================================ documento */
 
 /** Bytes → texto latin1 para buscar con expresiones regulares (mismo índice por byte). */
+let LATIN1 = null;
 function latin1(u8) {
+  // TextDecoder('latin1') es windows-1252: cada byte da un solo carácter, así que los índices coinciden (y es mucho más rápido)
+  if (LATIN1 === null) {
+    try {
+      LATIN1 = new TextDecoder('latin1');
+    } catch {
+      LATIN1 = false;
+    }
+  }
+  if (LATIN1) return LATIN1.decode(u8);
   let s = '';
   for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
   return s;
@@ -474,21 +581,62 @@ function latin1(u8) {
 class PdfDoc {
   constructor(bytes) {
     this.b = bytes;
-    this.text = latin1(bytes);
     this.where = new Map(); // num → posición de "obj" | { stm, index }
     this.cache = new Map();
     this.scan();
   }
 
+  /** Texto latin1 de un tramo de bytes (para buscar con expresiones regulares sin pasar todo el archivo a texto). */
+  str(a, b) {
+    return latin1(this.b.subarray(Math.max(0, a), Math.min(this.b.length, b)));
+  }
+
+  /** Posición de `pat` (texto ASCII) desde `from`, o -1. */
+  find(pat, from = 0) {
+    const b = this.b;
+    const c0 = pat.charCodeAt(0);
+    const n = pat.length;
+    for (let i = b.indexOf(c0, from); i >= 0 && i + n <= b.length; i = b.indexOf(c0, i + 1)) {
+      let k = 1;
+      while (k < n && b[i + k] === pat.charCodeAt(k)) k++;
+      if (k === n) return i;
+    }
+    return -1;
+  }
+
+  /**
+   * Localiza los objetos («n g obj») recorriendo los bytes, sin armar un
+   * texto del tamaño del archivo (un .ai pesa decenas de MB).
+   */
   scan() {
-    const re = /(\d+)\s+(\d+)\s+obj\b/g;
-    let m;
+    const b = this.b;
+    const len = b.length;
     const stms = [];
-    while ((m = re.exec(this.text))) {
-      const prev = this.text.charCodeAt(m.index - 1);
-      if (m.index > 0 && !isWs(prev) && !isDelim(prev) && prev !== 62) continue;
-      this.where.set(Number(m[1]), m.index + m[0].length);
-      if (/\/Type\s*\/ObjStm/.test(this.text.slice(re.lastIndex, re.lastIndex + 300))) stms.push(Number(m[1]));
+    const digit = (c) => c >= 48 && c <= 57;
+    for (let i = b.indexOf(111); i >= 0 && i + 3 <= len; i = b.indexOf(111, i + 1)) {
+      if (b[i + 1] !== 98 || b[i + 2] !== 106) continue; // "obj"
+      const after = b[i + 3];
+      if (i + 3 < len && !isWs(after) && !isDelim(after)) continue;
+      // hacia atrás: espacio, generación, espacio, número
+      let j = i - 1;
+      if (j < 0 || !isWs(b[j])) continue;
+      while (j >= 0 && isWs(b[j])) j--;
+      let e = j;
+      while (j >= 0 && digit(b[j])) j--;
+      if (j === e || j < 0 || !isWs(b[j])) continue;
+      while (j >= 0 && isWs(b[j])) j--;
+      e = j;
+      while (j >= 0 && digit(b[j])) j--;
+      if (j === e) continue;
+      const start = j + 1;
+      if (start > 0) {
+        const prev = b[start - 1];
+        if (!isWs(prev) && !isDelim(prev) && prev !== 62) continue;
+      }
+      let num = 0;
+      for (let k = start; k <= e; k++) num = num * 10 + (b[k] - 48);
+      this.where.set(num, i + 3);
+      if (/\/Type\s*\/ObjStm/.test(this.str(i + 3, i + 303))) stms.push(num);
     }
     // objetos comprimidos en flujos de objetos (PDF 1.5+): solo los que no están sueltos
     for (const sn of stms) {
@@ -542,8 +690,8 @@ class PdfDoc {
     if (this.b[start] === 10) start++;
     let len = this.res(v.Length);
     let end = typeof len === 'number' ? start + len : -1;
-    if (end < 0 || !/^\s*endstream/.test(this.text.slice(end, end + 20))) {
-      end = this.text.indexOf('endstream', start);
+    if (end < 0 || !/^\s*endstream/.test(this.str(end, end + 20))) {
+      end = this.find('endstream', start);
       if (end < 0) end = this.b.length;
       if (this.b[end - 1] === 10) end--;
       if (this.b[end - 1] === 13) end--;
@@ -601,16 +749,18 @@ class PdfDoc {
   trailer() {
     let root = null;
     let encrypt = null;
-    const re = /trailer\s*<</g;
-    let m;
-    while ((m = re.exec(this.text))) {
-      const d = new Lexer(this.b, m.index + m[0].length - 2).object();
+    for (let at = this.find('trailer'); at >= 0; at = this.find('trailer', at + 7)) {
+      const lx = new Lexer(this.b, at + 7);
+      const t = lx.token();
+      if (t !== '<<') continue;
+      const d = lx.object(t);
       if (d?.Root) root = d.Root;
       if (d?.Encrypt) encrypt = d.Encrypt;
     }
     if (!root) {
       for (const num of this.where.keys()) {
-        if (!/\/XRef/.test(this.text.slice(this.where.get(num), this.where.get(num) + 400))) continue;
+        const w = this.where.get(num);
+        if (typeof w !== 'number' || !/\/XRef/.test(this.str(w, w + 400))) continue;
         const st = this.get(num);
         if (st instanceof Stream && nameOf(st.dict.Type) === 'XRef' && st.dict.Root) {
           root = st.dict.Root;
@@ -1091,7 +1241,7 @@ const mul = (A, B) => [
 ];
 const apply = (M, x, y) => [x * M[0] + y * M[2] + M[4], x * M[1] + y * M[3] + M[5]];
 const ID = [1, 0, 0, 1, 0, 0];
-const f3 = (v) => +(+v).toFixed(3);
+const f3 = (v) => Math.round(v * 1000) / 1000;
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 // caracteres no válidos en XML 1.0 (códigos de control de fuentes sin ToUnicode)
 const xmlText = (s) => esc(s.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f￾￿]/g, ''));
@@ -1143,7 +1293,7 @@ class Converter {
     }
     const px = this.pixels.get(xo);
     if (!px) return;
-    const layer = this.ocName(xo.dict.OC) ?? this.mc.find((m) => m.layer != null)?.layer ?? '';
+    const layer = this.ocName(xo.dict.OC) ?? this.curLayer();
     // de píxel de la imagen (fila 0 arriba) al recuadro de la imagen en la página
     const T = mul(mul([1 / px.w, 0, 0, -1 / px.h, 0, 1], M), [1, 0, 0, 1, -box[0], -box[1]]);
     this.images.push({ layer, px, box, T, area: Math.abs(M[0] * M[3] - M[1] * M[2]), opacity: gs.fa < 1 ? gs.fa : 1 });
@@ -1166,8 +1316,14 @@ class Converter {
     };
   }
 
+  /** Capa de Illustrator vigente: la más externa marcada (el contenido anidado pertenece a ella). */
+  curLayer() {
+    for (let i = 0; i < this.mc.length; i++) if (this.mc[i].layer != null) return this.mc[i].layer;
+    return '';
+  }
+
   emit(svg, clips) {
-    const layer = this.mc.find((m) => m.layer != null)?.layer ?? '';
+    const layer = this.curLayer();
     if (!this.buckets.has(layer)) {
       this.buckets.set(layer, []);
       this.order.push(layer);
@@ -1194,29 +1350,54 @@ class Converter {
     let tm = ID;
     let tlm = ID;
     let inText = false;
-    const full = () => mul(gs.ctm, this.F);
-    const pt = (x, y) => apply(full(), x, y);
+    // matriz del espacio de usuario a la página (SVG): se rehace solo cuando cambia la CTM
+    let fmCtm = null;
+    let fm = null;
+    const full = () => {
+      if (gs.ctm !== fmCtm) {
+        fmCtm = gs.ctm;
+        fm = mul(gs.ctm, this.F);
+      }
+      return fm;
+    };
+    const grow = (sp, X, Y) => {
+      if (X < sp.x0) sp.x0 = X;
+      if (X > sp.x1) sp.x1 = X;
+      if (Y < sp.y0) sp.y0 = Y;
+      if (Y > sp.y1) sp.y1 = Y;
+    };
     const moveTo = (x, y) => {
-      const p = pt(x, y);
-      cur = { d: `M${f3(p[0])} ${f3(p[1])}`, pts: [p] };
+      const m = full();
+      const X = x * m[0] + y * m[2] + m[4];
+      const Y = x * m[1] + y * m[3] + m[5];
+      cur = { d: `M${f3(X)} ${f3(Y)}`, n: 1, x0: X, y0: Y, x1: X, y1: Y, closed: false };
       path.push(cur);
       start = [x, y];
-      return p;
     };
     let last = [0, 0];
     const lineTo = (x, y) => {
       if (!cur) moveTo(last[0], last[1]);
-      const p = pt(x, y);
-      cur.d += `L${f3(p[0])} ${f3(p[1])}`;
-      cur.pts.push(p);
+      const m = full();
+      const X = x * m[0] + y * m[2] + m[4];
+      const Y = x * m[1] + y * m[3] + m[5];
+      cur.d += `L${f3(X)} ${f3(Y)}`;
+      cur.n++;
+      grow(cur, X, Y);
     };
     const curveTo = (x1, y1, x2, y2, x3, y3) => {
       if (!cur) moveTo(last[0], last[1]);
-      const a = pt(x1, y1);
-      const b = pt(x2, y2);
-      const c = pt(x3, y3);
-      cur.d += `C${f3(a[0])} ${f3(a[1])} ${f3(b[0])} ${f3(b[1])} ${f3(c[0])} ${f3(c[1])}`;
-      cur.pts.push(a, b, c);
+      const m = full();
+      const AX = x1 * m[0] + y1 * m[2] + m[4];
+      const AY = x1 * m[1] + y1 * m[3] + m[5];
+      const BX = x2 * m[0] + y2 * m[2] + m[4];
+      const BY = x2 * m[1] + y2 * m[3] + m[5];
+      const CX = x3 * m[0] + y3 * m[2] + m[4];
+      const CY = x3 * m[1] + y3 * m[3] + m[5];
+      cur.d += `C${f3(AX)} ${f3(AY)} ${f3(BX)} ${f3(BY)} ${f3(CX)} ${f3(CY)}`;
+      cur.n += 3;
+      grow(cur, AX, AY);
+      grow(cur, BX, BY);
+      grow(cur, CX, CY);
     };
     const closePath = () => {
       if (cur) {
@@ -1233,35 +1414,44 @@ class Converter {
     const scaleOf = () => Math.sqrt(Math.abs(gs.ctm[0] * gs.ctm[3] - gs.ctm[1] * gs.ctm[2])) || 1;
     const paint = (fill, stroke, evenOdd) => {
       // el PDF rellena los subtrayectos abiertos como si estuvieran cerrados
-      const d = path.map((s) => (fill && !stroke && !s.closed && s.pts.length > 2 ? `${s.d}Z` : s.d)).join('');
+      let d = '';
+      for (const sp of path) d += fill && !stroke && !sp.closed && sp.n > 2 ? `${sp.d}Z` : sp.d;
       if (d && (fill || stroke)) {
-        const at = [`d="${d}"`];
+        let at = `<path d="${d}"`;
         if (fill) {
-          at.push(`fill="${this.paintRef(gs.fill, gs, resources)}"`);
-          if (gs.fa < 1) at.push(`fill-opacity="${f3(gs.fa)}"`);
-          if (evenOdd) at.push('fill-rule="evenodd"');
-        } else at.push('fill="none"');
+          at += ` fill="${this.paintRef(gs.fill, gs, resources)}"`;
+          if (gs.fa < 1) at += ` fill-opacity="${f3(gs.fa)}"`;
+          if (evenOdd) at += ' fill-rule="evenodd"';
+        } else at += ' fill="none"';
         if (stroke) {
           const k = scaleOf();
-          at.push(`stroke="${this.paintRef(gs.stroke, gs, resources)}"`, `stroke-width="${f3(Math.max(gs.lw * k, 0.1))}"`);
-          if (gs.sa < 1) at.push(`stroke-opacity="${f3(gs.sa)}"`);
-          if (gs.cap) at.push(`stroke-linecap="${gs.cap === 1 ? 'round' : 'square'}"`);
-          if (gs.join) at.push(`stroke-linejoin="${gs.join === 1 ? 'round' : 'bevel'}"`);
-          else if (gs.miter !== 10 && gs.miter !== 4) at.push(`stroke-miterlimit="${f3(gs.miter)}"`);
-          const dash = (gs.dash[0] || []).map((v) => f3(v * k));
-          if (dash.length && dash.some((v) => v > 0)) at.push(`stroke-dasharray="${dash.join(' ')}"`);
-        } else at.push('stroke="none"');
-        this.emit(`<path ${at.join(' ')}/>`, gs.clips);
+          at += ` stroke="${this.paintRef(gs.stroke, gs, resources)}" stroke-width="${f3(Math.max(gs.lw * k, 0.1))}"`;
+          if (gs.sa < 1) at += ` stroke-opacity="${f3(gs.sa)}"`;
+          if (gs.cap) at += ` stroke-linecap="${gs.cap === 1 ? 'round' : 'square'}"`;
+          if (gs.join) at += ` stroke-linejoin="${gs.join === 1 ? 'round' : 'bevel'}"`;
+          else if (gs.miter !== 10 && gs.miter !== 4) at += ` stroke-miterlimit="${f3(gs.miter)}"`;
+          const dash = gs.dash[0] || [];
+          if (dash.length && dash.some((v) => v > 0)) at += ` stroke-dasharray="${dash.map((v) => f3(v * k)).join(' ')}"`;
+        } else at += ' stroke="none"';
+        this.emit(`${at}/>`, gs.clips);
       }
       endPath();
     };
     const endPath = () => {
       if (pendingClip && path.length) {
-        const d = path.map((s) => s.d).join('');
-        const pts = path.flatMap((s) => s.pts);
-        const xs = pts.map((p) => p[0]);
-        const ys = pts.map((p) => p[1]);
-        const covers = Math.min(...xs) <= 0.5 && Math.min(...ys) <= 0.5 && Math.max(...xs) >= this.W - 0.5 && Math.max(...ys) >= this.H - 0.5;
+        let d = '';
+        let x0 = Infinity;
+        let y0 = Infinity;
+        let x1 = -Infinity;
+        let y1 = -Infinity;
+        for (const sp of path) {
+          d += sp.d;
+          x0 = Math.min(x0, sp.x0);
+          y0 = Math.min(y0, sp.y0);
+          x1 = Math.max(x1, sp.x1);
+          y1 = Math.max(y1, sp.y1);
+        }
+        const covers = x0 <= 0.5 && y0 <= 0.5 && x1 >= this.W - 0.5 && y1 >= this.H - 0.5;
         // un recorte que cubre toda la página (el de la mesa de trabajo) no recorta nada: se omite
         if (!covers) {
           const id = this.uid('c');
@@ -1291,7 +1481,7 @@ class Converter {
         adv += tx;
         tm = mul([1, 0, 0, 1, tx, 0], tm);
       }
-      if (visible && this.texts.length < 20000) this.texts.push({ M, end: apply(mul(tm, full()), 0, gs.ts), text, fs: gs.fs, font: gs.font, fill: gs.fill, fa: gs.fa, clips: gs.clips.slice(), layer: this.mc.find((m) => m.layer != null)?.layer ?? '', adv });
+      if (visible && this.texts.length < 20000) this.texts.push({ M, end: apply(mul(tm, full()), 0, gs.ts), text, fs: gs.fs, font: gs.font, fill: gs.fill, fa: gs.fa, clips: gs.clips.slice(), layer: this.curLayer(), adv });
     };
 
     for (;;) {
@@ -1313,7 +1503,7 @@ class Converter {
             if (gstack.length) gs = gstack.pop();
             break;
           case 'cm':
-            if (a.length >= 6) gs.ctm = mul(a.slice(-6).map(Number), gs.ctm);
+            if (a.length >= 6) gs.ctm = mul([Number(a[a.length - 6]), Number(a[a.length - 5]), Number(a[a.length - 4]), Number(a[a.length - 3]), Number(a[a.length - 2]), Number(a[a.length - 1])], gs.ctm);
             break;
           case 'w': gs.lw = Number(a[a.length - 1]) || 0; break;
           case 'J': gs.cap = Number(a[a.length - 1]) || 0; break;
@@ -1345,29 +1535,50 @@ class Converter {
             break;
           }
           // ---- trayectos
-          case 'm': last = [num(a.length - 2), num(a.length - 1)]; moveTo(...last); break;
-          case 'l': lineTo(num(a.length - 2), num(a.length - 1)); last = [num(a.length - 2), num(a.length - 1)]; break;
+          case 'm': {
+            const x = num(a.length - 2);
+            const y = num(a.length - 1);
+            last = [x, y];
+            moveTo(x, y);
+            break;
+          }
+          case 'l': {
+            const x = num(a.length - 2);
+            const y = num(a.length - 1);
+            lineTo(x, y);
+            last = [x, y];
+            break;
+          }
           case 'c': {
-            const v = a.slice(-6).map(Number);
-            curveTo(...v);
-            last = [v[4], v[5]];
+            const n = a.length;
+            const x3 = num(n - 2);
+            const y3 = num(n - 1);
+            curveTo(num(n - 6), num(n - 5), num(n - 4), num(n - 3), x3, y3);
+            last = [x3, y3];
             break;
           }
           case 'v': {
-            const v = a.slice(-4).map(Number);
-            curveTo(last[0], last[1], ...v);
-            last = [v[2], v[3]];
+            const n = a.length;
+            const x3 = num(n - 2);
+            const y3 = num(n - 1);
+            curveTo(last[0], last[1], num(n - 4), num(n - 3), x3, y3);
+            last = [x3, y3];
             break;
           }
           case 'y': {
-            const v = a.slice(-4).map(Number);
-            curveTo(v[0], v[1], v[2], v[3], v[2], v[3]);
-            last = [v[2], v[3]];
+            const n = a.length;
+            const x3 = num(n - 2);
+            const y3 = num(n - 1);
+            curveTo(num(n - 4), num(n - 3), x3, y3, x3, y3);
+            last = [x3, y3];
             break;
           }
           case 'h': closePath(); break;
           case 're': {
-            const [x, y, w, hh] = a.slice(-4).map(Number);
+            const x = num(a.length - 4);
+            const y = num(a.length - 3);
+            const w = num(a.length - 2);
+            const hh = num(a.length - 1);
             moveTo(x, y);
             lineTo(x + w, y);
             lineTo(x + w, y + hh);
@@ -1729,7 +1940,6 @@ function maskAlpha(pdf, st, w, h, soft) {
   const bpc = soft ? pdf.res(d.BitsPerComponent) || 8 : 1;
   const max = bpc === 16 ? 255 : (1 << bpc) - 1;
   const dec = pdf.res(d.Decode);
-  const get = sampler(data, mw, 1, bpc);
   const lut = new Uint8Array(max + 1);
   for (let s = 0; s <= max; s++) {
     let v = s / max;
@@ -1738,9 +1948,18 @@ function maskAlpha(pdf, st, w, h, soft) {
     lut[s] = Math.round(clamp(soft ? v : 1 - v) * 255);
   }
   const out = new Uint8Array(w * h);
+  if (bpc === 8 && mw === w && mh === h && data.length >= w * h) {
+    // lo normal: máscara del mismo tamaño que la imagen
+    for (let i = 0, n = w * h; i < n; i++) out[i] = lut[data[i]];
+    return out;
+  }
+  const get = sampler(data, mw, 1, bpc);
+  const xs = new Int32Array(w);
+  for (let x = 0; x < w; x++) xs[x] = Math.min(mw - 1, Math.floor(((x + 0.5) * mw) / w));
   for (let y = 0; y < h; y++) {
     const my = Math.min(mh - 1, Math.floor(((y + 0.5) * mh) / h));
-    for (let x = 0; x < w; x++) out[y * w + x] = lut[get(my, Math.min(mw - 1, Math.floor(((x + 0.5) * mw) / w)))];
+    const row = y * w;
+    for (let x = 0; x < w; x++) out[row + x] = lut[get(my, xs[x])];
   }
   return out;
 }
@@ -1763,7 +1982,7 @@ export function imagePixels(pdf, xo, resources, fillCss = '#000000', warn = () =
   const isMask = R('ImageMask') === true;
   const out = { w, h };
   let rgba = null;
-  if (filter === 'DCTDecode') out.jpeg = data;
+  if (filter === 'DCTDecode') out.jpeg = data.slice(); // copia propia: `data` es un tramo del archivo entero
   else if (filter) {
     warn(`las imágenes ${filter === 'JPXDecode' ? 'JPEG 2000' : filter} no se importan`);
     return null;
@@ -1790,7 +2009,37 @@ export function imagePixels(pdf, xo, resources, fillCss = '#000000', warn = () =
     const val = (c, s) => dec[2 * c] + (s * (dec[2 * c + 1] - dec[2 * c])) / max;
     const get = sampler(data, w, n, bpc);
     rgba = new Uint8ClampedArray(w * h * 4);
-    if (n === 1) {
+    const plain = bpc === 8 && data.length >= w * h * n && dec.every((v, i) => v === (i % 2)); // Decode por defecto
+    if (n === 1 && bpc === 8 && data.length >= w * h) {
+      // una componente de 8 bits (gris, paleta, tinta plana): tabla por valor
+      const lut = new Uint8Array(256 * 3);
+      for (let s = 0; s <= max; s++) {
+        const rgb = cs.rgb([val(0, s)]);
+        for (let c = 0; c < 3; c++) lut[s * 3 + c] = Math.round(clamp(rgb[c]) * 255);
+      }
+      for (let i = 0, k = 0, N = w * h; i < N; i++, k += 4) {
+        const s = data[i] * 3;
+        rgba[k] = lut[s];
+        rgba[k + 1] = lut[s + 1];
+        rgba[k + 2] = lut[s + 2];
+        rgba[k + 3] = 255;
+      }
+    } else if (plain && cs.kind === 'rgb' && n === 3) {
+      for (let i = 0, j = 0, k = 0, N = w * h; i < N; i++, j += 3, k += 4) {
+        rgba[k] = data[j];
+        rgba[k + 1] = data[j + 1];
+        rgba[k + 2] = data[j + 2];
+        rgba[k + 3] = 255;
+      }
+    } else if (plain && cs.kind === 'cmyk' && n === 4) {
+      for (let i = 0, j = 0, k = 0, N = w * h; i < N; i++, j += 4, k += 4) {
+        const kk = 255 - data[j + 3];
+        rgba[k] = ((255 - data[j]) * kk) / 255;
+        rgba[k + 1] = ((255 - data[j + 1]) * kk) / 255;
+        rgba[k + 2] = ((255 - data[j + 2]) * kk) / 255;
+        rgba[k + 3] = 255;
+      }
+    } else if (n === 1) {
       // una componente (gris, paleta, tinta plana): tabla por valor de muestra
       const lut = new Uint8Array((max + 1) * 3);
       for (let s = 0; s <= max; s++) {
@@ -1903,9 +2152,13 @@ export function pdfToSvg(bytes, { name = 'PDF', page = 0 } = {}) {
     const n = conv.ocName(r);
     if (n) hidden.add(n);
   }
-  const allText = [...conv.buckets.values()].flat().map((x) => x.svg).join(' ');
-  if (/saved without PDF Content|sin contenido PDF|ohne PDF-Inhalt/i.test(allText.replace(/<[^>]+>/g, '')) || (/\/AIPrivateData/.test(pdf.text) && /without PDF Content/i.test(pdf.text))) {
-    throw new Error('El .ai se guardó sin «Crear archivo compatible con PDF». En Illustrator: Archivo → Guardar como… → Illustrator (.ai) y marca esa opción, o exporta como SVG o PDF.');
+  // una página casi vacía con el aviso «guardado sin contenido PDF» (solo se mira si hay poco que mirar)
+  const items = [...conv.buckets.values()].flat();
+  if (!conv.images.length && items.length <= 30) {
+    const allText = items.map((x) => x.svg).join(' ');
+    if (/saved without PDF Content|sin contenido PDF|ohne PDF-Inhalt/i.test(allText.replace(/<[^>]+>/g, '')) || (pdf.find('without PDF Content') >= 0 && pdf.find('/AIPrivateData') >= 0)) {
+      throw new Error('El .ai se guardó sin «Crear archivo compatible con PDF». En Illustrator: Archivo → Guardar como… → Illustrator (.ai) y marca esa opción, o exporta como SVG o PDF.');
+    }
   }
   const layers = conv.order.filter(Boolean);
   for (const im of conv.images) if (im.layer && !layers.includes(im.layer)) layers.push(im.layer);
@@ -1920,9 +2173,11 @@ export function importPdf(bytes, opts = {}) {
   const r = pdfToSvg(bytes, { name: opts.name || 'PDF' });
   let extraBox = null;
   for (const im of r.images) extraBox = extraBox ? [Math.min(extraBox[0], im.box[0]), Math.min(extraBox[1], im.box[1]), Math.max(extraBox[2], im.box[2]), Math.max(extraBox[3], im.box[3])] : im.box.slice();
-  // opts.placePage(pageMm) → centro del mundo donde cae el centro de la mesa de trabajo (si no, se centran las formas)
+  // opts.placeCanvas: la mesa de trabajo pasa a ser la hoja del lienzo (se devuelve en `canvas`) y el dibujo cae sobre ella
   const pageMm = r.pagePt.map((v) => v * PT_MM);
-  const at = opts.placePage?.(pageMm);
+  const canvas = opts.placeCanvas ? canvasFromMm(pageMm[0], pageMm[1]) : null;
+  const rect = canvas ? canvasRect({ canvas, refScale: opts.refScale ?? 25000 }) : null;
+  const at = rect ? [rect.x + rect.w / 2, rect.y + rect.h / 2] : null;
   const res = importSvg(r.svg, { ...opts, unitMm: PT_MM, extraBox, anchor: at ? { svg: [r.pagePt[0] / 2, r.pagePt[1] / 2], world: at } : null });
   // imágenes en el terreno: [x0, y0, x1, y1] (y hacia arriba), en el mismo lugar que las formas
   const images = r.images.map((im) => {
@@ -1930,7 +2185,9 @@ export function importPdf(bytes, opts = {}) {
     const b = res.toWorld(im.box[2], im.box[1]);
     return { ...im, bounds: [a[0], a[1], b[0], b[1]] };
   });
-  return { ...res, images, pageMm, warnings: [...new Set([...r.warnings, ...res.warnings])], hiddenLayers: r.hiddenLayers };
+  // `toWorld` es una función: el resultado debe poder viajar entre hilos
+  delete res.toWorld;
+  return { ...res, images, pageMm, canvas, warnings: [...new Set([...r.warnings, ...res.warnings])], hiddenLayers: r.hiddenLayers };
 }
 
 /** ¿Los bytes son un PDF (o un .ai moderno, que lo es)? */
