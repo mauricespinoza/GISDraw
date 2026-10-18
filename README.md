@@ -454,6 +454,13 @@ Inkscape) se pega como dibujo.
   antiguos (Illustrator 8 o anterior, PostScript); si el .ai se guardó sin la
   opción de compatibilidad con PDF, la app lo avisa. De un PDF de varias
   páginas (o varias mesas de trabajo) se importa la primera.
+- *Velocidad*: el .ai / PDF se lee en un hilo aparte (la interfaz no se
+  congela) y las formas vuelven empaquetadas; el descompresor, el lector de
+  trazados, la búsqueda de objetos y la lectura de imágenes están optimizados.
+  En pruebas, un .ai de 11 MB con 3 imágenes pasó de 0,8 s a 0,4 s hasta verse,
+  y un PDF vectorial de 13 MB con 41 000 trazos de 5,6 s a 3,9 s, con el
+  mayor congelamiento de la interfaz de 9 s a 2 s. Un SVG de 15 MB con 38 000
+  trazos, de 2,1 s a 1,6 s. Las imágenes grandes se guardan en segundo plano.
 - *Pegar en GISDrawer lo copiado en Illustrator*: en Illustrator,
   Preferencias → Gestión del portapapeles → «Copiar como: código SVG».
   Ctrl+V en GISDrawer lo convierte en dibujo editable con nodos Bézier,

@@ -6,6 +6,8 @@
 
 import { deflateSync } from 'node:zlib';
 import { inflate, pdfToSvg, importPdf, isPdfBytes } from '../src/io/pdfImport.js';
+import { packLayers, unpackLayers } from '../src/io/transport.js';
+import { importSvg, parsePathD } from '../src/io/svgImport.js';
 
 let pass = 0;
 let fail = 0;
@@ -164,6 +166,69 @@ const ai = buildPdf(objs, { objStm: true });
   const [x0, y0, x1, y1] = res.images[0].bounds;
   ok(Math.abs(x1 - x0 - 100 * 0.35278) < 0.01 && Math.abs(y1 - y0 - 50 * 0.35278) < 0.01 && y1 > y0, `imagen en el terreno: ${res.images[0].bounds}`);
   ok(Math.abs(res.images[1].bounds[1] - res.images[0].bounds[3] - 50 * 0.35278) < 0.01, 'la segunda copia queda 50 pt más arriba');
+}
+
+/* ------------------------------------------- filtros, números y rutas rápidas */
+{
+  // ASCII85 + Flate (lo que escribe, por ejemplo, reportlab), con la «z» de cuatro ceros
+  const a85 = (bytes) => {
+    let out = '';
+    for (let i = 0; i < bytes.length; i += 4) {
+      const chunk = bytes.slice(i, i + 4);
+      const n = chunk.length;
+      let v = 0;
+      for (let k = 0; k < 4; k++) v = v * 256 + (chunk[k] ?? 0);
+      if (n === 4 && v === 0) {
+        out += 'z';
+        continue;
+      }
+      let c = '';
+      for (let k = 0; k < 5; k++, v = Math.floor(v / 85)) c = String.fromCharCode(33 + (v % 85)) + c;
+      out += c.slice(0, n + 1);
+    }
+    return `${out}~>`;
+  };
+  const content = 'q 1 0 0 rg 10 10 m 60.5 10 l 60.5 -.5 l h f Q  0 0 1 RG .5 w 0 0 m 5 5 l S';
+  const body = Buffer.concat([deflateSync(Buffer.from(content)), Buffer.alloc(8)]);
+  const enc = { dict: '/Filter [/ASCII85Decode /FlateDecode]', data: Buffer.from(a85(body), 'latin1') };
+  const pdf = buildPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << >> >>',
+    enc,
+  ]);
+  const r = pdfToSvg(pdf);
+  ok(r.svg.includes('fill="#ff0000"') && r.svg.includes('M10 90L60.5 90L60.5 100.5Z'), `ASCII85 + Flate, números con punto inicial: ${r.svg.slice(200, 420)}`);
+  ok(r.svg.includes('stroke="#0000ff"') && r.svg.includes('stroke-width="0.5"'), 'trazo con ".5 w"');
+
+  // rutas SVG: exponentes, signos pegados, decimales sin cero y banderas de arco pegadas
+  const sub = parsePathD('M10-5.5e1L.5.5 1e-1,2')[0];
+  ok(sub.nodes.length === 3 && sub.nodes[0].y === -55 && sub.nodes[1].x === 0.5 && sub.nodes[1].y === 0.5 && Math.abs(sub.nodes[2].x - 0.1) < 1e-12 && sub.nodes[2].y === 2, `números compactos: ${JSON.stringify(sub.nodes.map((n) => [n.x, n.y]))}`);
+  const arc = parsePathD('M0 0a5 5 0 01 10 0')[0];
+  ok(arc.nodes.length >= 3 && Math.abs(arc.nodes[arc.nodes.length - 1].x - 10) < 1e-9, 'arco con banderas pegadas');
+  const moved = parsePathD('M1 2 c1 1 2 2 3 3', [2, 0, 0, 3, 10, 20])[0];
+  ok(moved.nodes[0].x === 12 && moved.nodes[0].y === 26 && moved.nodes[1].hIn.x === 10 + 2 * 3 && moved.nodes[0].hOut.y === 20 + 3 * 3, 'parsePathD con matriz');
+
+  // estilos compartidos entre trazos hermanos: cada forma conserva el suyo (sin compartir objetos)
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><style>.a{fill:#f00}</style><g id="L"><path class="a" d="M0 0L1 1L2 0z"/><path class="a" d="M0 5L1 6L2 5z"/><path d="M0 9L1 9" stroke="#00f"/></g></svg>';
+  const res = importSvg(svg, { refScale: 1000 });
+  const [p1, p2, p3] = res.layers[0].shapes;
+  ok(p1.style !== p2.style && p1.style.gradient !== p2.style.gradient && p1.style.fill === '#ff0000' && p2.style.fill === '#ff0000', 'estilos iguales pero objetos distintos');
+  ok(p3.style.stroke === '#0000ff' && p3.style.fill !== '#ff0000', 'otro trazo, otro estilo');
+  p1.style.fill = '#00ff00';
+  ok(p2.style.fill === '#ff0000', 'cambiar uno no cambia al hermano');
+}
+
+/* ------------------------------------- formas entre hilos (empaquetadas) */
+{
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><g id="Capa_1" data-name="Capa 1"><path d="M0 0C10 0 10 10 20 10L30 30 0 30z M5 5L10 5L10 10z" fill="#336699" stroke="#000" stroke-width="2"/><path d="M1 1L2 2" stroke="#f00" stroke-dasharray="3 1"/><g id="G"><path d="M3 3L9 3L9 9z" fill="#fa0"/><path d="M4 4L8 4L8 8z" fill="#af0"/></g><text x="5" y="5" font-size="9">Hola</text></g></svg>';
+  const r = importSvg(svg, { refScale: 25000 });
+  const { layers, transfer } = packLayers(r.layers);
+  ok(transfer.length > 0 && layers[0].shapes.every((s) => s.type !== 'path' || ArrayBuffer.isView(s.nodes)), 'los nodos viajan como arreglos de números');
+  ok(layers[0].shapes[0].style && Object.keys(layers[0].shapes[0].style).length < 12, 'el estilo viaja como diferencia con el de por defecto');
+  const back = unpackLayers(layers);
+  ok(JSON.stringify(back, (k, v) => (k === 'id' ? undefined : v)) === JSON.stringify(r.layers, (k, v) => (k === 'id' ? undefined : v)), 'ida y vuelta idéntica');
+  ok(back[0].shapes.length === r.layers[0].shapes.length && back[0].shapes[0].id === r.layers[0].shapes[0].id, 'conserva los identificadores');
 }
 
 /* ------------------------------------------------- casos que no se leen */

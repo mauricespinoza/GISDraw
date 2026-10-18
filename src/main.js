@@ -38,10 +38,40 @@ const makeCanvas = (w, h) => {
 const canvasBlob = (c) => (c.convertToBlob ? c.convertToBlob({ type: 'image/png' }) : new Promise((r) => c.toBlob(r, 'image/png')));
 
 /**
+ * Lee el .ai / PDF en un hilo aparte (la interfaz sigue viva mientras tanto).
+ * Si el navegador no puede crear el hilo, se lee aquí mismo.
+ */
+async function importPdfOffThread(buf, opts) {
+  let worker = null;
+  try {
+    worker = await new Promise((resolve, reject) => {
+      const w = new Worker(new URL('./io/importWorker.js', import.meta.url), { type: 'module' });
+      w.onerror = (e) => {
+        e.preventDefault?.();
+        w.terminate();
+        reject(new Error('worker'));
+      };
+      w.postMessage({ buf: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), opts });
+      w.onmessage = (e) => resolve({ w, data: e.data });
+    });
+  } catch {
+    worker = null;
+  }
+  if (worker) {
+    worker.w.terminate();
+    if (!worker.data.ok) throw new Error(worker.data.error);
+    const { unpackLayers } = await import('./io/transport.js');
+    return { ...worker.data.result, layers: unpackLayers(worker.data.result.layers) };
+  }
+  const { importPdf } = await import('./io/pdfImport.js');
+  return importPdf(buf, opts);
+}
+
+/**
  * Imagen de un PDF / .ai (píxeles o JPEG, con su alfa) → imagen alineada a
  * los ejes, ya girada o volteada como en la página, en PNG para guardarla.
  */
-async function rasterizePdfImage(im) {
+async function rasterizePdfImage(im) {  // → { bitmap, blob: Promise<Blob> }
   const { px, T, box } = im;
   const src = makeCanvas(px.w, px.h);
   const sctx = src.getContext('2d');
@@ -62,14 +92,18 @@ async function rasterizePdfImage(im) {
   ppu = Math.min(ppu, 8192 / Math.max(bw, bh, 1e-9));
   const W = Math.max(1, Math.round(bw * ppu));
   const H = Math.max(1, Math.round(bh * ppu));
-  const out = makeCanvas(W, H);
-  const ctx = out.getContext('2d');
-  ctx.imageSmoothingQuality = 'high';
-  ctx.globalAlpha = im.opacity ?? 1;
-  ctx.setTransform(T[0] * ppu, T[1] * ppu, T[2] * ppu, T[3] * ppu, T[4] * ppu, T[5] * ppu);
-  ctx.drawImage(src, 0, 0);
-  const [bitmap, blob] = await Promise.all([createImageBitmap(out), canvasBlob(out)]);
-  return { bitmap, blob };
+  // imagen sin girar, volteada ni transparente, de su tamaño: no hace falta volver a dibujarla
+  const plain = (im.opacity ?? 1) === 1 && Math.abs(T[1]) < 1e-9 && Math.abs(T[2]) < 1e-9 && T[0] > 0 && T[3] > 0 && Math.abs(W - px.w) <= 1 && Math.abs(H - px.h) <= 1;
+  let out = src;
+  if (!plain) {
+    out = makeCanvas(W, H);
+    const ctx = out.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.globalAlpha = im.opacity ?? 1;
+    ctx.setTransform(T[0] * ppu, T[1] * ppu, T[2] * ppu, T[3] * ppu, T[4] * ppu, T[5] * ppu);
+    ctx.drawImage(src, 0, 0);
+  }
+  return { bitmap: await createImageBitmap(out), blob: canvasBlob(out) };
 }
 
 class App {
@@ -1427,19 +1461,12 @@ class App {
     this.flushEdits();
     this.message(`Leyendo ${fileName}…`, 0);
     await new Promise((r) => setTimeout(r, 30));
-    const { importPdf } = await import('./io/pdfImport.js');
     const title = fileName.replace(/\.\w+$/, '');
     const fresh = { ...newDocument(), title };
     const canvasMode = this.mode !== 'gis';
     // en Canvas la hoja toma el tamaño de la mesa de trabajo del .ai y el dibujo cae sobre ella
-    const placePage = canvasMode
-      ? (pageMm) => {
-          fresh.canvas = canvasFromMm(pageMm[0], pageMm[1]);
-          const rect = canvasRect(fresh);
-          return [rect.x + rect.w / 2, rect.y + rect.h / 2];
-        }
-      : null;
-    const r = importPdf(buf, { refScale: fresh.refScale, center: [this.view.cx, this.view.cy], name: title, placePage });
+    const r = await importPdfOffThread(buf, { refScale: fresh.refScale, center: [this.view.cx, this.view.cy], name: title, placeCanvas: canvasMode });
+    if (r.canvas) fresh.canvas = r.canvas;
     if (!r.layers.some((L) => L.shapes.length) && !r.images.length) return this.message(`${fileName} no trae formas ni imágenes${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, 6000);
     const placeholder = fresh.activeLayerId; // la capa «Dibujo» vacía del proyecto nuevo
     let doc = { ...fresh, layers: fresh.layers.map((l) => (l.kind === 'basemap' ? { ...l, visible: false } : l)) };
@@ -1470,7 +1497,12 @@ class App {
           const { bitmap, blob } = await rasterizePdfImage(im);
           fileId = newId('F');
           imageFiles.set(fileId, { bitmap, x0: im.bounds[0], y0: im.bounds[1], x1: im.bounds[2], y1: im.bounds[3] });
-          await saveFile(fileId, { kind: 'image', name: `${title}.png`, format: 'bitmap', mime: 'image/png', buffer: await blob.arrayBuffer(), bounds: im.bounds });
+          // el PNG para guardar se codifica y escribe en segundo plano: el dibujo ya se puede ver y usar
+          const id = fileId;
+          blob
+            .then((b) => b.arrayBuffer())
+            .then((buffer) => saveFile(id, { kind: 'image', name: `${title}.png`, format: 'bitmap', mime: 'image/png', buffer, bounds: im.bounds }))
+            .catch(() => null);
           byPx.set(key, fileId);
         }
         const k = (seen.get(im.layer) || 0) + 1;
