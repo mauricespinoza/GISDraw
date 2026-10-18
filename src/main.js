@@ -27,6 +27,50 @@ import { APP_VERSION } from './version.js';
 
 const SETTINGS_KEY = 'gd.settings';
 
+const makeCanvas = (w, h) => {
+  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  return c;
+};
+const canvasBlob = (c) => (c.convertToBlob ? c.convertToBlob({ type: 'image/png' }) : new Promise((r) => c.toBlob(r, 'image/png')));
+
+/**
+ * Imagen de un PDF / .ai (píxeles o JPEG, con su alfa) → imagen alineada a
+ * los ejes, ya girada o volteada como en la página, en PNG para guardarla.
+ */
+async function rasterizePdfImage(im) {
+  const { px, T, box } = im;
+  const src = makeCanvas(px.w, px.h);
+  const sctx = src.getContext('2d');
+  if (px.rgba) sctx.putImageData(new ImageData(px.rgba, px.w, px.h), 0, 0);
+  else {
+    const bmp = await createImageBitmap(new Blob([px.jpeg], { type: 'image/jpeg' }));
+    sctx.drawImage(bmp, 0, 0, px.w, px.h);
+    if (px.alpha) {
+      const id = sctx.getImageData(0, 0, px.w, px.h);
+      for (let i = 0, k = 3; i < px.alpha.length; i++, k += 4) id.data[k] = px.alpha[i];
+      sctx.putImageData(id, 0, 0);
+    }
+  }
+  // misma cantidad de píxeles que la original, hasta 8192 de lado
+  const bw = box[2] - box[0];
+  const bh = box[3] - box[1];
+  let ppu = Math.sqrt((px.w * px.h) / (im.area || bw * bh || 1));
+  ppu = Math.min(ppu, 8192 / Math.max(bw, bh, 1e-9));
+  const W = Math.max(1, Math.round(bw * ppu));
+  const H = Math.max(1, Math.round(bh * ppu));
+  const out = makeCanvas(W, H);
+  const ctx = out.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.globalAlpha = im.opacity ?? 1;
+  ctx.setTransform(T[0] * ppu, T[1] * ppu, T[2] * ppu, T[3] * ppu, T[4] * ppu, T[5] * ppu);
+  ctx.drawImage(src, 0, 0);
+  const [bitmap, blob] = await Promise.all([createImageBitmap(out), canvasBlob(out)]);
+  return { bitmap, blob };
+}
+
 class App {
   constructor() {
     this.settings = {
@@ -1224,19 +1268,13 @@ class App {
   async importSvgFile(file = null) {
     const [f] = file ? [file] : await pickFiles('.svg,.ai,.pdf,image/svg+xml,application/pdf,application/illustrator,application/postscript');
     if (!f) return;
-    const doc0 = this.history.doc;
-    const opts = { refScale: doc0.refScale, center: [this.view.cx, this.view.cy] };
     const buf = new Uint8Array(await f.arrayBuffer());
     const head = new TextDecoder('latin1').decode(buf.subarray(0, 1024));
-    let r;
-    if (/%PDF-|%!PS-Adobe/.test(head) || /\.(ai|pdf)$/i.test(f.name)) {
-      this.message(`Leyendo ${f.name}…`, 0);
-      const { importPdf } = await import('./io/pdfImport.js');
-      r = importPdf(buf, { ...opts, name: f.name.replace(/\.\w+$/, '') });
-    } else {
-      const { importSvg } = await import('./io/svgImport.js');
-      r = importSvg(new TextDecoder().decode(buf), opts);
-    }
+    const base = f.name.replace(/\.\w+$/, '');
+    if (/%PDF-|%!PS-Adobe/.test(head) || /\.(ai|pdf)$/i.test(f.name)) return this.openPdfProject(buf, f.name);
+    const doc0 = this.history.doc;
+    const { importSvg } = await import('./io/svgImport.js');
+    const r = importSvg(new TextDecoder().decode(buf), { refScale: doc0.refScale, center: [this.view.cx, this.view.cy] });
     if (r.gisdrawer) {
       this.clipboard = r.gisdrawer.shapes;
       return this.pasteInternal(true);
@@ -1245,8 +1283,7 @@ class App {
     const all = [];
     for (const L of r.layers) {
       if (!L.shapes.length) continue;
-      const layer = makeVectorLayer(L.name || f.name.replace(/\.\w+$/, ''), { items: L.shapes });
-      if (r.hiddenLayers?.includes(L.name)) layer.visible = false;
+      const layer = makeVectorLayer(L.name || base, { items: L.shapes });
       doc = addLayer(doc, layer, doc.activeLayerId);
       all.push(...L.shapes);
     }
@@ -1254,6 +1291,72 @@ class App {
     this.history.commit(doc);
     this.zoomToShapes(all);
     this.message(`${all.length} objeto(s) en ${r.layers.length} capa(s) desde ${f.name}${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, 6000);
+  }
+
+  /**
+   * .ai de Illustrator o PDF: se abre como PROYECTO NUEVO (Ctrl+Z vuelve al
+   * anterior), con una capa vectorial por capa de Illustrator y una capa de
+   * imagen por cada imagen incrustada, bajo las vectoriales. El mapa base
+   * queda oculto: la figura no está georreferenciada.
+   */
+  async openPdfProject(buf, fileName) {
+    this.flushEdits();
+    this.message(`Leyendo ${fileName}…`, 0);
+    await new Promise((r) => setTimeout(r, 30));
+    const { importPdf } = await import('./io/pdfImport.js');
+    const title = fileName.replace(/\.\w+$/, '');
+    const fresh = { ...newDocument(), title };
+    const r = importPdf(buf, { refScale: fresh.refScale, center: [this.view.cx, this.view.cy], name: title });
+    if (!r.layers.some((L) => L.shapes.length) && !r.images.length) return this.message(`${fileName} no trae formas ni imágenes${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, 6000);
+    const placeholder = fresh.activeLayerId; // la capa «Dibujo» vacía del proyecto nuevo
+    let doc = { ...fresh, layers: fresh.layers.map((l) => (l.kind === 'basemap' ? { ...l, visible: false } : l)) };
+    const all = [];
+    for (const L of r.layers) {
+      if (!L.shapes.length) continue;
+      const layer = makeVectorLayer(L.name || title, { items: L.shapes });
+      if (r.hiddenLayers?.includes(L.name)) layer.visible = false;
+      doc = addLayer(doc, layer, doc.activeLayerId);
+      all.push(...L.shapes);
+    }
+    if (all.length) doc = { ...doc, layers: doc.layers.filter((l) => l.id !== placeholder) };
+    // imágenes: debajo de las capas vectoriales, en el orden en que se dibujan
+    const boxes = [];
+    if (r.images.length) {
+      this.message(`Preparando ${r.images.length} imagen(es) de ${fileName}…`, 0);
+      const built = new Map();
+      const count = new Map();
+      for (const im of r.images) count.set(im.layer, (count.get(im.layer) || 0) + 1);
+      const seen = new Map();
+      for (const im of r.images) {
+        // una misma imagen colocada varias veces con igual tamaño comparte el archivo
+        const key = [im.T.slice(0, 4).map((v) => v.toFixed(6)).join(), im.opacity].join('|');
+        let byPx = built.get(im.px);
+        if (!byPx) built.set(im.px, (byPx = new Map()));
+        let fileId = byPx.get(key);
+        if (!fileId) {
+          const { bitmap, blob } = await rasterizePdfImage(im);
+          fileId = newId('F');
+          imageFiles.set(fileId, { bitmap, x0: im.bounds[0], y0: im.bounds[1], x1: im.bounds[2], y1: im.bounds[3] });
+          await saveFile(fileId, { kind: 'image', name: `${title}.png`, format: 'bitmap', mime: 'image/png', buffer: await blob.arrayBuffer(), bounds: im.bounds });
+          byPx.set(key, fileId);
+        }
+        const k = (seen.get(im.layer) || 0) + 1;
+        seen.set(im.layer, k);
+        const name = `${im.layer || title}${count.get(im.layer) > 1 ? ` · imagen ${k}` : ' · imagen'}`;
+        const l = makeRasterLayer('image', name, { fileId, bounds: im.bounds });
+        if (r.hiddenLayers?.includes(im.layer)) l.visible = false;
+        const layers = doc.layers.slice();
+        const fv = layers.findIndex((x) => x.kind === 'vector');
+        layers.splice(fv < 0 ? layers.length : fv, 0, l);
+        doc = { ...doc, layers };
+        boxes.push({ x: im.bounds[0], y: im.bounds[1], w: im.bounds[2] - im.bounds[0], h: im.bounds[3] - im.bounds[1] });
+      }
+    }
+    this.history.commit(doc);
+    const box = unionBBox([...all.map((s) => shapeBBox(s, this.editor.est())), ...boxes]);
+    if (box) this.view.fit(box);
+    const nVec = doc.layers.filter((l) => l.kind === 'vector').length;
+    this.message(`Proyecto nuevo «${title}»: ${all.length} objeto(s) en ${nVec} capa(s)${r.images.length ? ` y ${r.images.length} imagen(es)` : ''} · Ctrl+Z vuelve al proyecto anterior${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, 9000);
   }
 
   /** Importa un archivo según su extensión (lo usa Google Drive, que entrega un archivo cualquiera). */
@@ -1525,7 +1628,7 @@ class App {
     const hgt = Math.round(this.view.h);
     const stage = document.getElementById('stage');
     if (kind === 'svg') {
-      const parts = [];
+      const parts = [`<rect width="${w}" height="${hgt}" fill="#ffffff"/>`];
       for (const el of stage.children) {
         if (el.classList.contains('overlay-svg') || el.style.display === 'none') continue;
         const blend = el.style.mixBlendMode && el.style.mixBlendMode !== 'normal' ? ` style="mix-blend-mode:${el.style.mixBlendMode}"` : '';
