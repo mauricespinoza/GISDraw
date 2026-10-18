@@ -111,6 +111,7 @@ class App {
     this.settings = {
       snap: true,
       trace: false,
+      moveJoined: true,
       fingerDraws: false,
       pencilSmooth: DEFAULT_SMOOTH, // % de suavizado del lápiz (trazo libre)
       opentopoKey: '',
@@ -139,6 +140,7 @@ class App {
     this.editor.onPlainKey = (e) => this.plainKey(e);
     this.editor.onContextMenu = (sp, info) => this.showContextMenu(sp, info);
     this.editor.onPointerStart = () => this.hideContextMenu();
+    this.editor.onCut = (mode, pts) => this.runCut(mode, pts);
     this.swatchFront = 'stroke';
     this.editor.onStylePicked = (st) => {
       if (!this.editor.selection.size) this.setCurrentStyle(st);
@@ -539,6 +541,7 @@ class App {
     $('btn-redo').onclick = () => this.history.redo();
     $('btn-snap').onclick = () => this.saveSettings({ snap: !this.settings.snap });
     $('btn-trace').onclick = () => this.saveSettings({ trace: !this.settings.trace });
+    $('btn-joined').onclick = () => this.saveSettings({ moveJoined: !this.settings.moveJoined });
     $('btn-finger').onclick = () => this.saveSettings({ fingerDraws: !this.settings.fingerDraws });
     $('btn-redraw').onclick = () => {
       const n = this.raster.redrawHillshades(this.history.doc.layers);
@@ -569,8 +572,23 @@ class App {
       menu.replaceChildren(...this.fileMenuItems());
       menu.hidden = false;
     };
+    const geomMenu = $('menu-geom');
+    $('btn-geom').onclick = (e) => {
+      e.stopPropagation();
+      if (!geomMenu.hidden) {
+        geomMenu.hidden = true;
+        return;
+      }
+      menu.hidden = true;
+      const r = e.currentTarget.getBoundingClientRect();
+      geomMenu.style.left = `${r.left}px`;
+      geomMenu.style.top = `${r.bottom + 4}px`;
+      geomMenu.replaceChildren(...this.geomMenuItems());
+      geomMenu.hidden = false;
+    };
     document.addEventListener('pointerdown', (e) => {
       if (!menu.hidden && !menu.contains(e.target) && e.target.id !== 'btn-file') menu.hidden = true;
+      if (!geomMenu.hidden && !geomMenu.contains(e.target) && e.target.id !== 'btn-geom') geomMenu.hidden = true;
     });
     this.viewport.addEventListener('pointermove', (e) => {
       if (e.pointerType === 'touch') return;
@@ -683,6 +701,7 @@ class App {
     const set = (id, on) => document.getElementById(id)?.classList.toggle('on', !!on);
     set('btn-snap', this.settings.snap);
     set('btn-trace', this.settings.trace);
+    set('btn-joined', this.settings.moveJoined !== false);
     set('btn-finger', this.settings.fingerDraws);
   }
 
@@ -729,6 +748,10 @@ class App {
           this.saveSettings({ insertOnTap: !this.settings.insertOnTap });
           this.updateContextBar();
         }, this.settings.insertOnTap ? 'on' : ''),
+        b(this.settings.moveJoined !== false ? 'Move Joined ✓' : 'Move Joined', () => {
+          this.saveSettings({ moveJoined: this.settings.moveJoined === false });
+          this.updateContextBar();
+        }, this.settings.moveJoined !== false ? 'on' : ''),
         b('Abrir / cerrar', () => ed.toggleClosed()),
         b('Invertir', () => ed.reverseSelected()),
       );
@@ -841,10 +864,21 @@ class App {
       groups.push([
         n > 1 ? it('Agrupar', 'Ctrl+G', () => commitSel(group(doc, ed.selection))) : null,
         sel.some((s) => s.type === 'group') ? it('Desagrupar', 'Ctrl+Mayús+G', () => commitSel(ungroup(doc, ed.selection))) : null,
-        paths.length && paths.length <= 2 && paths.some((p) => !p.closed) ? it(paths.length === 1 ? 'Cerrar trazo' : 'Unir trazos', 'Ctrl+J', () => this.joinSelected()) : null,
         paths.length ? it('Invertir dirección', '', () => ed.reverseSelected()) : null,
         it('Seleccionar mismo relleno y trazo', '', () => ed.setSelection(selectSame(doc, ed.selection, 'fillstroke', { scope: 'all' }))),
       ]);
+      const g = this.geomState();
+      groups.push(
+        [
+          g.canJoin ? it(g.lines.length === 1 ? 'Cerrar trazo (Join)' : 'Unir líneas (Join)', 'Ctrl+J', () => this.joinSelected()) : null,
+          g.canMerge ? it('Fusionar polígonos (Merge)', 'Ctrl+J', () => this.mergeSelected()) : null,
+          g.canSplitSel ? it('Dividir con la línea seleccionada (Split)', '', () => this.splitSelected()) : null,
+          g.canSplitDraw ? it('Dividir dibujando una línea (Split)…', '', () => this.splitByDrawing()) : null,
+          g.canHole ? it('Hueco con la forma de arriba (Hole)', '', () => this.holeSelected(false)) : null,
+          g.canHole ? it('Hueco conservando la forma (Hole)', '', () => this.holeSelected(true)) : null,
+          g.canHoleDraw ? it('Hueco dibujando una forma (Hole)…', '', () => this.holeByDrawing()) : null,
+        ],
+      );
       groups.push([
         it('Bloquear', 'Ctrl+2', () => this.lockSelection()),
         it('Ocultar', 'Ctrl+3', () => this.hideSelection()),
@@ -891,12 +925,122 @@ class App {
     ) ?? prompt('Coordenadas', t);
   }
 
+  /** Qué se puede hacer con la selección: Join, Merge, Split y Hole. */
+  geomState() {
+    const sel = this.editor.selectedShapes().filter((s) => s.type === 'path');
+    const lines = sel.filter((s) => !s.closed);
+    const polys = sel.filter((s) => s.closed);
+    return {
+      lines,
+      polys,
+      canJoin: lines.length >= 1 && !polys.length,
+      canMerge: polys.length >= 2 && !lines.length,
+      canSplitSel: polys.length >= 1 && lines.length >= 1,
+      canSplitDraw: polys.length >= 1,
+      canHole: polys.length >= 2,
+      canHoleDraw: polys.length >= 1,
+    };
+  }
+
+  /** Tolerancia (m) con que se aplanan las curvas al operar: lo que se ve en el papel, sin facetas. */
+  geomTol() {
+    return Math.max(1e-3, Math.min(this.history.doc.refScale * 5e-5, this.view.mpp * 0.25));
+  }
+
+  /** Confirma el resultado de una operación de geometría y selecciona lo que quedó. */
+  applyGeom(r, done = '') {
+    if (r.error) return this.message(r.error, 6000);
+    this.history.commit(r.doc);
+    this.editor.setSelection(r.ids || (r.id ? [r.id] : []));
+    this.editor.snapDirty = true;
+    this.message(r.warning || done, r.warning ? 7000 : 3000);
+  }
+
+  /** Ctrl+J: une líneas (Join) o fusiona polígonos (Merge), según lo seleccionado. */
+  async joinOrMerge() {
+    const g = this.geomState();
+    if (g.polys.length >= 2 && !g.lines.length) return this.mergeSelected();
+    return this.joinSelected();
+  }
+
+  /** Join: dos o más líneas en una; una sola línea se cierra. */
   joinSelected() {
     const r = joinPaths(this.history.doc, this.editor.selection, 2 * this.view.mpp);
-    if (r.error) return this.message(r.error);
-    this.history.commit(r.doc);
-    this.editor.setSelection([r.id]);
-    this.editor.snapDirty = true;
+    this.applyGeom(r, this.geomState().lines.length > 1 ? 'Líneas unidas en una' : 'Trazo cerrado');
+  }
+
+  /** Merge: la unión de los polígonos seleccionados. */
+  async mergeSelected() {
+    const { mergePolygons, loadJsts } = await import('./geomOps.js');
+    const r = mergePolygons(await loadJsts(), this.history.doc, this.editor.selection, { tol: this.geomTol() });
+    this.applyGeom(r, 'Polígonos fusionados');
+  }
+
+  /** Split con las líneas seleccionadas (existentes) sobre los polígonos seleccionados. */
+  async splitSelected() {
+    const { splitPolygons, selectedLines, loadJsts } = await import('./geomOps.js');
+    const tol = this.geomTol();
+    const doc = this.history.doc;
+    const r = splitPolygons(await loadJsts(), doc, this.editor.selection, selectedLines(doc, this.editor.selection, tol), { tol });
+    this.applyGeom(r, `${r.divided || 1} polígono(s) dividido(s)`);
+  }
+
+  /** Split dibujando una línea nueva que cruce el polígono (la línea no queda dibujada). */
+  splitByDrawing() {
+    const polys = this.geomState().polys;
+    if (!polys.length) return this.message('Selecciona un polígono para dividir');
+    this.editor.beginCut('split', polys.map((p) => p.id));
+  }
+
+  /** Hole: al polígono de más abajo se le resta lo que cubren los demás. */
+  async holeSelected(keep) {
+    const { holePolygons, loadJsts } = await import('./geomOps.js');
+    const r = holePolygons(await loadJsts(), this.history.doc, this.editor.selection, { keepCutters: keep, tol: this.geomTol() });
+    this.applyGeom(r, 'Hueco hecho');
+  }
+
+  /** Hole dibujando el contorno del hueco. */
+  holeByDrawing() {
+    const polys = this.geomState().polys;
+    if (!polys.length) return this.message('Selecciona un polígono para hacerle un hueco');
+    this.editor.beginCut('hole', polys.map((p) => p.id));
+  }
+
+  /** La forma dibujada para Split / Hole llegó: se aplica y se descarta. */
+  async runCut(mode, pts) {
+    const { splitPolygons, holeWithPoints, loadJsts } = await import('./geomOps.js');
+    const J = await loadJsts();
+    const tol = this.geomTol();
+    const doc = this.history.doc;
+    const ids = new Set(mode.ids);
+    const r = mode.kind === 'split' ? splitPolygons(J, doc, ids, [pts], { tol }) : holeWithPoints(J, doc, ids, pts, { tol });
+    this.applyGeom(r, mode.kind === 'split' ? 'Polígono dividido' : 'Hueco hecho');
+  }
+
+  /** Menú «Geometría»: lo que no aplica a la selección se ve apagado, con la razón en el tooltip. */
+  geomMenuItems() {
+    const g = this.geomState();
+    const item = (label, f, enabled, why, key = '') =>
+      h('button', {
+        disabled: !enabled,
+        title: enabled ? '' : why,
+        onclick: () => {
+          document.getElementById('menu-geom').hidden = true;
+          Promise.resolve(f()).catch((err) => this.message(`Error: ${err.message}`, 6000));
+        },
+      }, h('span', {}, label), key ? h('kbd', {}, key) : null);
+    return [
+      h('div', { class: 'mh' }, 'Líneas'),
+      item(g.lines.length === 1 ? 'Cerrar trazo (Join)' : 'Unir líneas (Join)', () => this.joinSelected(), g.canJoin, 'Selecciona dos o más líneas (o una para cerrarla)', 'Ctrl+J'),
+      item('Invertir dirección', () => this.editor.reverseSelected(), g.lines.length + g.polys.length > 0, 'Selecciona un trazo'),
+      h('div', { class: 'mh' }, 'Polígonos'),
+      item('Fusionar polígonos (Merge)', () => this.mergeSelected(), g.canMerge, 'Selecciona dos o más polígonos', 'Ctrl+J'),
+      item('Dividir con la línea seleccionada (Split)', () => this.splitSelected(), g.canSplitSel, 'Selecciona el polígono y, con Mayús, la línea que lo cruza'),
+      item('Dividir dibujando una línea (Split)…', () => this.splitByDrawing(), g.canSplitDraw, 'Selecciona un polígono'),
+      item('Hueco con la forma de arriba (Hole)', () => this.holeSelected(false), g.canHole, 'Selecciona el polígono y, encima, la forma que lo abre'),
+      item('Hueco conservando la forma (Hole)', () => this.holeSelected(true), g.canHole, 'Selecciona el polígono y, encima, la forma que lo abre'),
+      item('Hueco dibujando una forma (Hole)…', () => this.holeByDrawing(), g.canHoleDraw, 'Selecciona un polígono'),
+    ];
   }
 
   lockSelection() {
@@ -1241,7 +1385,7 @@ class App {
     if (k === 's') return run(() => this.saveProject());
     if (k === 'o') return run(() => this.openProject().catch((err) => this.message(`Error: ${err.message}`, 6000)));
     if (k === 'p') return run(() => this.showPanel('layout'));
-    if (k === 'j') return run(() => this.joinSelected());
+    if (k === 'j') return run(() => this.joinOrMerge());
     if (k === 'l')
       return run(() => {
         const l = makeVectorLayer(`Capa ${doc.layers.filter((x) => x.kind === 'vector').length + 1}`);
@@ -1911,11 +2055,11 @@ const SHORTCUTS = [
   ['Edición', [
     ['Ctrl+Z / Ctrl+Mayús+Z', 'Deshacer / rehacer'], ['Ctrl+C / X / V', 'Copiar / cortar / pegar (también desde y hacia Illustrator)'], ['Ctrl+F / Ctrl+B', 'Pegar en el lugar delante / detrás'],
     ['Ctrl+D', 'Duplicar'], ['Alt+arrastrar', 'Duplicar al mover'], ['Supr', 'Eliminar'], ['Flechas', 'Mover 1 px (Mayús: 10)'],
-    ['Ctrl+A / Ctrl+Mayús+A', 'Seleccionar todo / nada'], ['Ctrl+G / Ctrl+Mayús+G', 'Agrupar / desagrupar'], ['Ctrl+J', 'Unir o cerrar trazos'],
+    ['Ctrl+A / Ctrl+Mayús+A', 'Seleccionar todo / nada'], ['Ctrl+G / Ctrl+Mayús+G', 'Agrupar / desagrupar'], ['Ctrl+J', 'Unir líneas (Join) / fusionar polígonos (Merge)'],
     ['Ctrl+7 / Ctrl+Alt+7', 'Máscara de recorte / liberar'], ['Ctrl+] / Ctrl+[', 'Adelante / atrás (Mayús: al frente / al fondo)'],
     ['Ctrl+2 / Ctrl+Alt+2', 'Bloquear / desbloquear todo'], ['Ctrl+3 / Ctrl+Alt+3', 'Ocultar / mostrar todo'], ['Mayús+C', 'Nodo esquina ↔ curva'],
   ]],
-  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Mayús', 'Restringir ángulo o proporción']]],
+  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón 🔗)'], ['Mayús', 'Restringir ángulo o proporción']]],
   ['Vista y archivo', [
     ['Ctrl+0', 'Zoom a todo'], ['Ctrl+1', 'Escala de referencia'], ['Ctrl++ / Ctrl+−', 'Acercar / alejar'], ['Rueda del mouse', 'Zoom (Archivo → Vista: cambiar a desplazar)'], ['Trackpad', 'Dos dedos desplazan, pellizco = zoom'],
     ['Tab', 'Mostrar / ocultar panel'], ['F7 / Ctrl+F10', 'Capas / Estilo'], ['Ctrl+L', 'Capa nueva'], ['Ctrl+S / Ctrl+O', 'Guardar / abrir proyecto'], ['Ctrl+P', 'Layout de impresión'], ['? o F1', 'Esta ayuda'],

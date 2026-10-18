@@ -317,10 +317,13 @@ export function reverseNodes(nodes) {
 }
 
 /**
- * Unir (Ctrl+J, como en Illustrator). Un trazo abierto: se cierra. Dos trazos
- * abiertos: se unen por los extremos más cercanos; si están a menos de `tol`
- * metros se funden en un solo vértice, si no se agrega un tramo recto. El
- * resultado conserva el estilo y los atributos del primero (el de más abajo).
+ * Unir (Ctrl+J, como en Illustrator). Un trazo abierto: se cierra. Dos o más
+ * trazos abiertos: se encadenan en UNO por los extremos más cercanos (el
+ * siguiente en unirse es siempre el que queda más cerca de alguno de los dos
+ * extremos de la cadena, invirtiéndolo si hace falta); si los extremos están a
+ * menos de `tol` metros se funden en un solo vértice, si no se agrega un
+ * tramo recto. El resultado conserva el estilo y los atributos del primero (el
+ * de más abajo).
  */
 export function joinPaths(doc, ids, tol = 0) {
   const paths = [];
@@ -332,36 +335,48 @@ export function joinPaths(doc, ids, tol = 0) {
     if (open[0].nodes.length < 3) return { error: 'Hacen falta al menos 3 vértices para cerrar el trazo' };
     return { doc: replaceShapes(doc, new Map([[open[0].id, { ...open[0], closed: true }]])), id: open[0].id };
   }
-  if (open.length !== 2) return { error: 'Selecciona uno o dos trazos abiertos para unir' };
-  const [a, b] = open;
-  const A = a.nodes;
-  const B = b.nodes;
+  if (!paths.length) return { error: 'Selecciona dos o más trazos abiertos para unir (o uno para cerrarlo)' };
+  if (open.length !== paths.length) return { error: 'Para unir, selecciona solo líneas (trazos abiertos); los polígonos se fusionan con «Fusionar»' };
   const d = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
-  // las cuatro combinaciones de extremos: [distancia, invertir a, invertir b]
-  const combos = [
-    [d(A[A.length - 1], B[0]), false, false],
-    [d(A[A.length - 1], B[B.length - 1]), false, true],
-    [d(A[0], B[0]), true, false],
-    [d(A[0], B[B.length - 1]), true, true],
-  ].sort((x, y) => x[0] - y[0]);
-  const [dist, revA, revB] = combos[0];
-  const na = revA ? reverseNodes(A) : A.map(cloneNode);
-  const nb = revB ? reverseNodes(B) : B.map(cloneNode);
-  let nodes;
-  if (dist <= tol) {
-    const last = na[na.length - 1];
-    const merged = { ...last, hOut: nb[0].hOut, smooth: false };
-    nodes = [...na.slice(0, -1), merged, ...nb.slice(1)];
-  } else {
-    na[na.length - 1].hOut = null;
-    nb[0].hIn = null;
-    nodes = [...na, ...nb];
+  const [first, ...rest] = open;
+  let chain = first.nodes.map(cloneNode);
+  const left = rest.slice();
+  while (left.length) {
+    // el trazo restante y el extremo de la cadena (cola o cabeza) más cercanos entre sí
+    let best = null;
+    left.forEach((r, ri) => {
+      const A = chain[0];
+      const Z = chain[chain.length - 1];
+      const B = r.nodes[0];
+      const E = r.nodes[r.nodes.length - 1];
+      for (const [dist, atTail, rev] of [
+        [d(Z, B), true, false],
+        [d(Z, E), true, true],
+        [d(A, E), false, false],
+        [d(A, B), false, true],
+      ]) {
+        if (!best || dist < best.dist) best = { dist, atTail, rev, ri };
+      }
+    });
+    const [r] = left.splice(best.ri, 1);
+    const piece = best.rev ? reverseNodes(r.nodes) : r.nodes.map(cloneNode);
+    // `near` hacia la cola: cadena + pieza; hacia la cabeza: pieza + cadena
+    let a = best.atTail ? chain : piece;
+    let b = best.atTail ? piece : chain;
+    if (best.dist <= tol) {
+      const merged = { ...a[a.length - 1], hOut: b[0].hOut, smooth: false };
+      chain = [...a.slice(0, -1), merged, ...b.slice(1)];
+    } else {
+      a = a.map(cloneNode);
+      b = b.map(cloneNode);
+      a[a.length - 1].hOut = null;
+      b[0].hIn = null;
+      chain = [...a, ...b];
+    }
   }
-  const map = new Map([
-    [a.id, { ...a, nodes }],
-    [b.id, null],
-  ]);
-  return { doc: replaceShapes(doc, map), id: a.id };
+  const map = new Map([[first.id, { ...first, nodes: chain }]]);
+  for (const r of rest) map.set(r.id, null);
+  return { doc: replaceShapes(doc, map), id: first.id };
 }
 
 /**

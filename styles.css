@@ -210,6 +210,15 @@ body {
   background: var(--panel2);
 }
 
+.menu button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.menu button:disabled:hover {
+  background: none;
+}
+
 .menu .mh {
   font-size: 11px;
   text-transform: uppercase;
@@ -1484,4 +1493,25 @@ body {
 #app.mode-canvas #btn-redraw,
 #app.mode-canvas #attribution {
   display: none !important;
+}
+
+/* barra superior en pantallas medianas: sin el nombre junto al logo y con botones más compactos */
+@media (max-width: 1280px) {
+  #topbar .brand span {
+    display: none;
+  }
+
+  #topbar .tb:not(.icon) {
+    padding: 0 8px;
+  }
+
+  #topbar .mode-switch button {
+    padding: 0 8px;
+  }
+}
+
+@media (max-width: 1100px) {
+  #topbar .scale-box {
+    display: none;
+  }
 }
