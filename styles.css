@@ -1454,6 +1454,20 @@ body {
   color: #082f49;
 }
 
+/* hoja del lienzo: blanca, sobre una mesa de trabajo gris claro */
+#app.mode-canvas #viewport {
+  background: #d9dee5;
+}
+
+#page {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.35), 0 8px 24px rgba(15, 23, 42, 0.18);
+  pointer-events: none;
+}
+
 #app.mode-canvas #coords,
 #app.mode-canvas #btn-redraw,
 #app.mode-canvas #attribution {

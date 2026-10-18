@@ -542,7 +542,7 @@ const DEFAULT_NAMES = { path: 'Trazado', rect: 'Rectángulo', circle: 'Círculo'
  *   centrado en `center`. `layers`: lo mismo repartido por capa de primer
  *   nivel. `gisdrawer`: si el SVG lo copió GISDrawer, sus formas originales.
  */
-export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = null, extraBox = null } = {}) {
+export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = null, extraBox = null, anchor = null } = {}) {
   const raw = String(text);
   const at = raw.search(/<svg[\s>]/i);
   if (at < 0) throw new Error('No es SVG');
@@ -699,6 +699,8 @@ export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = nu
   const mPerMm = refScale / 1000;
   const cx = box ? (box.minX + box.maxX) / 2 : 0;
   const cy = box ? (box.minY + box.maxY) / 2 : 0;
+  // anchor { svg: [x, y], world: [X, Y] }: ese punto del SVG cae justo en ese punto del mundo (en vez de centrar las formas)
+  if (anchor) center = [anchor.world[0] - (anchor.svg[0] - cx) * k * mPerMm, anchor.world[1] + (anchor.svg[1] - cy) * k * mPerMm];
   const toWorld = (x, y) => [center[0] + (x - cx) * k * mPerMm, center[1] - (y - cy) * k * mPerMm];
   const place = (s) => mapShapePoints(s, toWorld);
   const clean = (s) => {

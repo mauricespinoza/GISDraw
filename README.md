@@ -52,6 +52,7 @@ node test/georef.test.mjs    # transformaciones, residuos y remuestreo
 node test/ornaments.test.mjs # ornamentos, onda, tramas, halos
 node test/richtext.test.mjs # texto con formato por tramos (color/tamaño/negrita/cursiva)
 node test/pdf.test.mjs       # Illustrator (.ai) / PDF vectorial: capas, colores, textos
+node test/mode.test.mjs      # modos Canvas/GIS, hoja del lienzo y valores por defecto
 node test/sw.test.mjs        # todo módulo está en el precache offline
 ```
 
@@ -67,6 +68,18 @@ recuerda en el navegador y **la app abre en Canvas**.
   el dibujo, el estilo, la geología, las etiquetas, el layout, las imágenes
   (PNG/JPG, `.ai`), SVG, PDF e Illustrator.
 - **GIS**: todo lo anterior, como era antes de los modos.
+
+**Pestaña Lienzo** (solo Canvas): tamaño de la hoja —Letter, A4, A3, A2, A1,
+A0 o personalizado— y orientación. Por defecto **A4 vertical**. La hoja se ve
+blanca sobre una mesa de trabajo gris; el dibujo puede salir de ella. Abrir un
+`.ai` en Canvas toma el tamaño de su mesa de trabajo y deja el dibujo sobre la
+hoja. El zoom se muestra en % (100 % = la hoja a su tamaño real).
+
+Los valores por defecto son los de una **figura de media hoja**: en A4, trazo
+de 0,35 mm (1 pt) y letra de 9 pt. En otras hojas crecen con la raíz del área
+(A3: 0,5 mm y 12,5 pt; A0: 1,5 mm y 38 pt) y se recalculan al cambiar de hoja;
+se pueden ajustar en la misma pestaña. El layout de impresión sigue la hoja
+(si es una de las suyas).
 
 El modo no toca el proyecto: las capas de mapa base y relieve de un proyecto se
 ocultan en Canvas (y en la lámina) y reaparecen al volver a GIS.

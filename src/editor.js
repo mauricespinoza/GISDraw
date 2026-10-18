@@ -1244,6 +1244,8 @@ export class Editor {
   /** Tamaño de un texto nuevo: el de dibujo, pero nunca menor que lo legible a la escala de la vista. */
   newTextSize() {
     const base = this.getCurrentStyle().fontSize || 10;
+    // en Canvas el tamaño por defecto manda (la hoja se ve entera, con letra chica en pantalla)
+    if (this.settings.mode !== 'gis') return base;
     const minPt = MIN_TEXT_PX / this.units().ptToPx;
     return base >= minPt ? base : niceFontSize(minPt);
   }

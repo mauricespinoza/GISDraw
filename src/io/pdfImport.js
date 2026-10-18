@@ -1909,7 +1909,7 @@ export function pdfToSvg(bytes, { name = 'PDF', page = 0 } = {}) {
   }
   const layers = conv.order.filter(Boolean);
   for (const im of conv.images) if (im.layer && !layers.includes(im.layer)) layers.push(im.layer);
-  return { svg: conv.svg(name), warnings: [...warnings], hiddenLayers: [...hidden], pages: pages.length, layers, images: conv.images };
+  return { svg: conv.svg(name), warnings: [...warnings], hiddenLayers: [...hidden], pages: pages.length, layers, images: conv.images, pagePt: [conv.W, conv.H] };
 }
 
 /**
@@ -1920,14 +1920,17 @@ export function importPdf(bytes, opts = {}) {
   const r = pdfToSvg(bytes, { name: opts.name || 'PDF' });
   let extraBox = null;
   for (const im of r.images) extraBox = extraBox ? [Math.min(extraBox[0], im.box[0]), Math.min(extraBox[1], im.box[1]), Math.max(extraBox[2], im.box[2]), Math.max(extraBox[3], im.box[3])] : im.box.slice();
-  const res = importSvg(r.svg, { ...opts, unitMm: PT_MM, extraBox });
+  // opts.placePage(pageMm) → centro del mundo donde cae el centro de la mesa de trabajo (si no, se centran las formas)
+  const pageMm = r.pagePt.map((v) => v * PT_MM);
+  const at = opts.placePage?.(pageMm);
+  const res = importSvg(r.svg, { ...opts, unitMm: PT_MM, extraBox, anchor: at ? { svg: [r.pagePt[0] / 2, r.pagePt[1] / 2], world: at } : null });
   // imágenes en el terreno: [x0, y0, x1, y1] (y hacia arriba), en el mismo lugar que las formas
   const images = r.images.map((im) => {
     const a = res.toWorld(im.box[0], im.box[3]);
     const b = res.toWorld(im.box[2], im.box[1]);
     return { ...im, bounds: [a[0], a[1], b[0], b[1]] };
   });
-  return { ...res, images, warnings: [...new Set([...r.warnings, ...res.warnings])], hiddenLayers: r.hiddenLayers };
+  return { ...res, images, pageMm, warnings: [...new Set([...r.warnings, ...res.warnings])], hiddenLayers: r.hiddenLayers };
 }
 
 /** ¿Los bytes son un PDF (o un .ai moderno, que lo es)? */

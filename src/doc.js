@@ -17,6 +17,7 @@
 
 import { cloneShape, newId, walkShapes } from './vector.js';
 import { normalizeRuns } from './richText.js';
+import { defaultCanvas, normalizeCanvas } from './mode.js';
 
 export const BLEND_MODES = {
   normal: 'Normal',
@@ -96,6 +97,7 @@ export function newDocument() {
     version: 1,
     crs: 'EPSG:32719',
     refScale: 25000,
+    canvas: defaultCanvas(),
     title: 'Sin título',
     layers: [base, dibujo],
     activeLayerId: dibujo.id,
@@ -126,7 +128,7 @@ export function normalizeDoc(doc) {
   };
   const layers = doc.layers.map((l) => (l.kind === 'vector' && l.items ? { ...l, items: l.items.map(fixShape) } : l));
   const layout = doc.layout ? { ...doc.layout, texts: (doc.layout.texts || []).map(fixText), offsets: doc.layout.offsets || {}, scales: doc.layout.scales || {} } : doc.layout;
-  return { ...doc, layers, layout };
+  return { ...doc, layers, layout, canvas: normalizeCanvas(doc.canvas) };
 }
 
 /* ------------------------------------------------------------- consultas */

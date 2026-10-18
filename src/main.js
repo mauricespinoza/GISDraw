@@ -24,7 +24,7 @@ import { parseAsciiGrid } from './raster/dem.js';
 import { lonLatToTransform } from './io/crs.js';
 import { selectionSvg } from './io/illustrator.js';
 import { APP_VERSION } from './version.js';
-import { GIS_TABS, MODES, modeOf } from './mode.js';
+import { CANVAS_TABS, GIS_TABS, MODES, canvasDefaults, canvasFromMm, canvasRect, modeOf, normalizeCanvas } from './mode.js';
 
 const SETTINGS_KEY = 'gd.settings';
 
@@ -159,7 +159,7 @@ class App {
     writeJSON('gd.style', this.currentStyle);
     this.updateSwatch();
     if (!render) return;
-    if (['style', 'geology'].includes(this.panels.tab)) this.panels.render();
+    if (['style', 'geology', 'canvas'].includes(this.panels.tab)) this.panels.render();
     this.renderPropbar();
   }
 
@@ -172,6 +172,7 @@ class App {
     this.editor.snapDirty = true;
     this.renderer.request();
     this.updateRedraw();
+    this.updatePage();
     if (!meta.preview) {
       if (!this.layout.el.hidden) this.layout.schedule();
       this.panels.render();
@@ -209,9 +210,64 @@ class App {
   onViewChange() {
     this.renderer.request();
     this.updateRedraw();
-    if (document.activeElement !== this.scaleInput) this.scaleInput.value = Math.round(this.view.scale).toLocaleString('es-CL');
+    this.updateScaleBox();
+    this.updatePage();
     clearTimeout(this.viewSaveT);
     this.viewSaveT = setTimeout(() => writeJSON('gd.view', { cx: this.view.cx, cy: this.view.cy, mpp: this.view.mpp }), 400);
+  }
+
+  /** Escala 1:N en GIS; zoom en % en Canvas (100 % = la hoja a su tamaño real en pantalla). */
+  updateScaleBox() {
+    if (!this.scaleInput || document.activeElement === this.scaleInput) return;
+    const canvas = this.mode !== 'gis';
+    const n = this.history.doc.refScale;
+    this.scaleInput.value = canvas ? String(Math.round((n / this.view.scale) * 100)) : Math.round(this.view.scale).toLocaleString('es-CL');
+    const label = document.getElementById('scale-label');
+    if (label) label.textContent = canvas ? 'Zoom' : '1:';
+    const unit = document.getElementById('scale-unit');
+    if (unit) unit.textContent = canvas ? '%' : '';
+  }
+
+  /** Hoja del lienzo (solo en Canvas): un rectángulo blanco que sigue a la vista. */
+  updatePage() {
+    const el = document.getElementById('page');
+    if (!el) return;
+    el.hidden = this.mode === 'gis';
+    if (el.hidden) return;
+    const r = canvasRect(this.history.doc);
+    const [x0, y0] = this.view.toScreen(r.x, r.y + r.h);
+    const [x1, y1] = this.view.toScreen(r.x + r.w, r.y);
+    Object.assign(el.style, { left: `${x0}px`, top: `${y0}px`, width: `${x1 - x0}px`, height: `${y1 - y0}px` });
+  }
+
+  /** Encuadra la hoja entera en la vista. */
+  fitCanvas() {
+    const r = canvasRect(this.history.doc);
+    this.view.fit({ x: r.x, y: r.y, w: r.w, h: r.h }, 64); // deja libre la barra de propiedades de arriba
+  }
+
+  /**
+   * Cambia la hoja del lienzo (tamaño, orientación) y ajusta el grosor de
+   * trazo y la letra por defecto a una figura de media hoja.
+   */
+  setCanvas(patch, { fit = true, defaults = true } = {}) {
+    const doc = this.history.doc;
+    const canvas = normalizeCanvas({ ...doc.canvas, ...patch });
+    this.history.commit({ ...doc, canvas });
+    // el layout de impresión sigue a la hoja (si es una de sus hojas)
+    if (doc.layout && ['A4', 'A3', 'A2', 'A1', 'A0', 'Carta'].includes(canvas.size)) {
+      this.history.silent({ ...this.history.doc, layout: { ...doc.layout, page: canvas.size, orientation: canvas.orientation } });
+    }
+    if (defaults) this.applyCanvasDefaults();
+    if (fit) this.fitCanvas();
+    this.updatePage();
+  }
+
+  /** Grosor de trazo y letra por defecto de esta hoja (media página). */
+  applyCanvasDefaults() {
+    const d = canvasDefaults(this.history.doc.canvas);
+    this.setCurrentStyle({ ...this.currentStyle, strokeWidth: d.strokeWidth, fontSize: d.fontSize });
+    this.saveSettings({ canvasStyleInit: true });
   }
 
   scheduleSave() {
@@ -258,6 +314,13 @@ class App {
       }
     } else {
       this.history.reset(this.history.doc);
+    }
+    if (this.mode !== 'gis') {
+      // la vista guardada puede ser de otro lugar (GIS): si no cae sobre la hoja, se encuadra la hoja
+      const r = canvasRect(this.history.doc);
+      const inside = Math.abs(this.view.cx - (r.x + r.w / 2)) < r.w && Math.abs(this.view.cy - (r.y + r.h / 2)) < r.h && this.view.mpp < r.h / 20;
+      if (!v?.mpp || !inside) this.fitCanvas();
+      if (!this.settings.canvasStyleInit) this.applyCanvasDefaults();
     }
     this.view.emit();
     this.editor.setTool('select');
@@ -453,7 +516,9 @@ class App {
     this.scaleInput = $('in-scale');
     this.scaleInput.addEventListener('change', () => {
       const v = Number(this.scaleInput.value.replace(/[.\s]/g, '').replace(',', '.'));
-      if (v > 0) this.view.setScale(v);
+      if (!(v > 0)) return;
+      if (this.mode === 'gis') this.view.setScale(v);
+      else this.view.setScale(this.history.doc.refScale / (v / 100));
     });
     const menu = $('menu-file');
     $('btn-file').onclick = (e) => {
@@ -491,7 +556,12 @@ class App {
     return [
       h('div', { class: 'mh' }, 'Proyecto'),
       item('Nuevo', () => {
-        if (confirm('¿Empezar un dibujo nuevo? (El actual se puede deshacer con Ctrl+Z)')) this.history.commit(newDocument());
+        if (!confirm('¿Empezar un dibujo nuevo? (El actual se puede deshacer con Ctrl+Z)')) return;
+        this.history.commit(newDocument());
+        if (this.mode !== 'gis') {
+          this.applyCanvasDefaults();
+          this.fitCanvas();
+        }
       }),
       item('Abrir proyecto (.gisdrawer)…', () => this.openProject()),
       item('Guardar proyecto (.gisdrawer)', () => this.saveProject()),
@@ -539,8 +609,18 @@ class App {
    */
   setMode(mode, { silent = false } = {}) {
     mode = mode === 'gis' ? 'gis' : 'canvas';
-    if (mode !== this.settings.mode) this.saveSettings({ mode });
+    const before = this.mode;
+    if (mode !== before) {
+      // cada modo recuerda su vista: GIS donde se estaba trabajando, Canvas la hoja
+      this.modeViews = { ...this.modeViews, [before]: { cx: this.view.cx, cy: this.view.cy, mpp: this.view.mpp } };
+      this.saveSettings({ mode });
+    }
     this.applyMode();
+    if (mode !== before) {
+      const v = this.modeViews?.[mode];
+      if (v) Object.assign(this.view, v), this.view.emit();
+      else if (mode === 'canvas') this.fitCanvas();
+    }
     if (!silent) this.message(mode === 'gis' ? 'Modo GIS: mapa base, relieve, coordenadas y formatos GIS' : 'Modo Canvas: solo dibujo', 3500);
   }
 
@@ -550,12 +630,14 @@ class App {
     document.getElementById('app').classList.toggle('mode-canvas', !gis);
     document.getElementById('btn-mode-canvas')?.classList.toggle('on', !gis);
     document.getElementById('btn-mode-gis')?.classList.toggle('on', gis);
-    if (!gis && GIS_TABS.includes(this.panels.tab)) this.panels.tab = 'layers';
+    if ((!gis && GIS_TABS.includes(this.panels.tab)) || (gis && CANVAS_TABS.includes(this.panels.tab))) this.panels.tab = 'layers';
     this.panels.renderTabs();
     this.panels.render();
     this.panels.onShow?.(this.panels.tab);
     this.updateRedraw();
     this.updateAttribution();
+    this.updateScaleBox();
+    this.updatePage();
     if (this.layout) this.layout.schedule?.();
     for (const st of this.raster.state.values()) st.key = '';
     this.renderer.request({ settled: true });
@@ -1254,7 +1336,8 @@ class App {
     const doc = normalizeDoc(raw);
     this.history.commit(doc);
     for (const l of doc.layers) if (l.settings?.fileId) this.reloadFile(l.settings.fileId).catch(() => null);
-    this.zoomToShapes(allTopShapes(doc).map((x) => x.shape));
+    if (this.mode !== 'gis') this.fitCanvas();
+    else this.zoomToShapes(allTopShapes(doc).map((x) => x.shape));
   }
 
   async importGpkg(files = null) {
@@ -1347,7 +1430,16 @@ class App {
     const { importPdf } = await import('./io/pdfImport.js');
     const title = fileName.replace(/\.\w+$/, '');
     const fresh = { ...newDocument(), title };
-    const r = importPdf(buf, { refScale: fresh.refScale, center: [this.view.cx, this.view.cy], name: title });
+    const canvasMode = this.mode !== 'gis';
+    // en Canvas la hoja toma el tamaño de la mesa de trabajo del .ai y el dibujo cae sobre ella
+    const placePage = canvasMode
+      ? (pageMm) => {
+          fresh.canvas = canvasFromMm(pageMm[0], pageMm[1]);
+          const rect = canvasRect(fresh);
+          return [rect.x + rect.w / 2, rect.y + rect.h / 2];
+        }
+      : null;
+    const r = importPdf(buf, { refScale: fresh.refScale, center: [this.view.cx, this.view.cy], name: title, placePage });
     if (!r.layers.some((L) => L.shapes.length) && !r.images.length) return this.message(`${fileName} no trae formas ni imágenes${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, 6000);
     const placeholder = fresh.activeLayerId; // la capa «Dibujo» vacía del proyecto nuevo
     let doc = { ...fresh, layers: fresh.layers.map((l) => (l.kind === 'basemap' ? { ...l, visible: false } : l)) };
@@ -1394,8 +1486,13 @@ class App {
       }
     }
     this.history.commit(doc);
-    const box = unionBBox([...all.map((s) => shapeBBox(s, this.editor.est())), ...boxes]);
-    if (box) this.view.fit(box);
+    if (canvasMode) {
+      this.applyCanvasDefaults();
+      this.fitCanvas();
+    } else {
+      const box = unionBBox([...all.map((s) => shapeBBox(s, this.editor.est())), ...boxes]);
+      if (box) this.view.fit(box);
+    }
     const nVec = doc.layers.filter((l) => l.kind === 'vector').length;
     this.message(`Proyecto nuevo «${title}»: ${all.length} objeto(s) en ${nVec} capa(s)${r.images.length ? ` y ${r.images.length} imagen(es)` : ''} · Ctrl+Z vuelve al proyecto anterior${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, 9000);
   }
