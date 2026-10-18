@@ -56,6 +56,7 @@ node test/mode.test.mjs      # modos Canvas/GIS, hoja del lienzo y valores por d
 node test/freehand.test.mjs  # lápiz: suavizado 0–100 % y re-suavizado del trazo
 node test/trace.test.mjs     # Trace: grafo nodado, alterno, tolerancia
 node test/geomops.test.mjs  # Join, Merge, Split y Hole
+node test/smooth.test.mjs   # pincel de Suavizar: solo el sector bajo el pincel
 node test/sw.test.mjs        # todo módulo está en el precache offline
 ```
 
@@ -116,6 +117,29 @@ Lo que **no se puede** desde una web: el doble toque del Apple Pencil 2 y el
 apretón del Pencil Pro no llegan a Safari. Los reemplazan los botones de la
 barra contextual.
 
+### Tablet: gestos de toque
+
+Un toque corto de **dos dedos, dos veces seguidas, deshace**; de **tres dedos,
+dos veces, rehace** (si los dedos se mueven es desplazar o hacer zoom). Mantener
+el dedo abre el menú contextual (Join, Merge, Split, Hole…). Archivo → Vista
+cambia entre dos toques seguidos y un solo toque.
+
+### Cuenta de Google y Drive
+
+El botón **G** de la barra (o Archivo → «Cuenta de Google y Drive…») abre el
+cuadro con el botón clásico **Iniciar sesión con Google** (ventana de Google):
+muestra la cuenta, permite cambiar de cuenta o cerrar sesión, y guarda el ID de
+cliente y la clave de API (ver abajo). Con la sesión iniciada:
+
+- **Archivo → Guardar en Google Drive** guarda el proyecto `.gisdrawer` en «Mi
+  unidad» (la primera vez crea el archivo y recuerda su id dentro del
+  proyecto; las siguientes lo **actualiza**). **Guardar en Google Drive en otra
+  carpeta…** deja elegir la carpeta (selector de Google) y el nombre.
+- Un proyecto abierto desde Drive (Archivo → Importar → Desde Google Drive)
+  se guarda de vuelta en el mismo archivo.
+- El permiso es `drive.file` (más el correo y el nombre para mostrar la
+  cuenta): la app solo ve los archivos que ella crea o que eliges.
+
 ### Join, Merge, Split y Hole (menú «Geometría ▾» y clic secundario / mantener el dedo)
 
 - **Join (Ctrl+J)**: dos o más líneas seleccionadas se encadenan en **una sola**
@@ -159,12 +183,14 @@ re-suavizarse (el control solo cambia el valor por defecto).
 | P | Pluma / línea (clic = vértice, arrastre = curva) |
 | Y | Polígono |
 | B | Lápiz (trazo libre simplificado y suavizado; cerrar cerca del inicio = polígono) |
+| N | **Suavizar (pincel local)**, como en Illustrator: se pasa sobre un trazo (seleccionado o el que está bajo el puntero) y solo el sector bajo el pincel se promedia, se simplifica y se rehace con curvas, con transición suave en el borde del pincel; pasar de nuevo suaviza más. Intensidad y radio en la barra de propiedades; los extremos del trazo no se mueven; un solo paso de deshacer por pasada |
 | \\ | Segmento · W Flecha · M Rectángulo · E Elipse (Mayús = proporcional, Alt = desde el centro) |
 | T | Texto (el cuadro se abre al soltar; Enter termina, Mayús+Enter salto de línea) · O Punto (símbolo) · I Cuentagotas · H Mano |
 | C | **Tijera**: corta una línea en dos o abre un polígono en el punto tocado |
 | Z | **Zoom**: clic acerca, Alt+clic aleja, arrastre = zoom a un recuadro |
-| K | **Trace**: al poner un vértice sobre una línea existente, la nueva sigue la geometría hasta ese punto (camino más corto, como en QGIS). El grafo está **nodado**: se conecta donde los elementos comparten un vértice, donde un vértice cae sobre el borde de otro (un contacto que termina en el borde de un polígono) y donde se cruzan, y funde vértices que distan menos de ~0,4 px. **Alt** al poner el vértice toma el recorrido alterno (por el otro lado de un polígono); si no hay conexión avisa en vez de unir en recta; ⌫ quita de una vez todo un recorrido |
+| K | **Trace**: al poner un vértice sobre una línea existente, la nueva sigue la geometría hasta ese punto (camino más corto, como en QGIS). **Inteligente**: reconoce el lado hacia el que se traza (sigue el sentido que llevaba desde el último vértice y solo cambia de lado si el otro cuesta menos de la tercera parte), no vuelve a pasar por un vértice ya puesto (salvo para cerrar el anillo) y recorre todos los nodos del camino. El grafo está **nodado**: se conecta donde los elementos comparten un vértice, donde un vértice cae sobre el borde de otro (un contacto que termina en el borde de un polígono) y donde se cruzan, y funde vértices que distan menos de ~0,4 px. **Alt** al poner el vértice toma el recorrido alterno (por el otro lado de un polígono); si no hay conexión avisa en vez de unir en recta; ⌫ quita de una vez todo un recorrido |
 | S | Snapping a vértices y segmentos |
+| 📐 | **Guías** (botón de la barra; activo por defecto): snap ligero de alineación, como las guías inteligentes de Illustrator. Al dibujar (pluma, polígono, segmento, rectángulo, elipse) o mover un nodo, el punto se alinea con el **nivel (y)** o la **vertical (x)** de cualquier otro vértice del dibujo —también los lejanos y los del borrador— si queda a menos de 6 px, y se dibuja la guía en magenta. No engancha al vértice: solo al eje; el snap duro a vértices y segmentos manda sobre la guía |
 | 🔗 | **Move Joined** (botón de la barra, como Snap y Trace; activo por defecto): con la herramienta Nodos, al mover un vértice se mueven también los vértices coincidentes de otras líneas y polígonos (huecos incluidos) y no se engancha a ellos |
 
 Atajos al estilo de **Illustrator** (la lista completa sale con **?** o F1, o

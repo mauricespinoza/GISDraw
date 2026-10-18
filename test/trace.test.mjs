@@ -7,7 +7,7 @@
  *   node test/trace.test.mjs
  */
 
-import { SnapIndex, buildGraph, tracePath } from '../src/snapping.js';
+import { SnapIndex, buildGraph, tracePath, smartTrace, pathLength, pointKey } from '../src/snapping.js';
 
 let pass = 0;
 let fail = 0;
@@ -83,6 +83,36 @@ const square = { id: 'sq', closed: true, pts: [[0, 0], [100, 0], [100, 100], [0,
   const a1 = trace(open, [10, 0], [90, 0]);
   const a2 = trace(open, [10, 0], [90, 0], 1, { alt: true });
   ok(a1 && a2 && length(a1) === length(a2), 'sin alternativa, el recorrido es el mismo');
+}
+
+// ---- Trace inteligente: sentido, sin repetir puntos
+{
+  const b = build([square]);
+  const A = b.idx.query([0, 40], 1); // punto de partida en el borde izquierdo
+  const at = (x, y) => b.idx.query([x, y], 1);
+  const free = smartTrace(b.idx, b.graph, A, at(100, 40));
+  ok(free && free.length === 4 && pathLength(free) === 180, `libre: el más corto (${pathLength(free)})`);
+  // se sale hacia ARRIBA (primer vértice (0,100)); el cursor sigue por el borde derecho: casi toda la vuelta
+  const up = smartTrace(b.idx, b.graph, A, at(100, 10));
+  ok(up && same(up[1], 0, 0) || up && same(up[1], 0, 100), 'primer destino cerca: sale por el lado corto');
+  const first = smartTrace(b.idx, b.graph, A, at(100, 90)); // el más corto sale hacia arriba
+  ok(first && same(first[1], 0, 100), `parte hacia arriba: ${JSON.stringify(first)}`);
+  // con el sentido recordado, un destino más lejano sigue hacia arriba aunque ya convenga (poco) el otro lado
+  const keep = smartTrace(b.idx, b.graph, A, at(100, 20), { prefer: first.first });
+  ok(keep && same(keep[1], 0, 100), `mantiene el sentido: ${JSON.stringify(keep)}`);
+  ok(pathLength(keep) > pathLength(smartTrace(b.idx, b.graph, A, at(100, 20))), 'aunque sea más largo que el otro lado');
+  // cuando el otro lado es MUCHO más corto, cambia
+  const flip = smartTrace(b.idx, b.graph, A, at(0, 20), { prefer: first.first });
+  ok(flip && same(flip[flip.length - 1], 0, 20) && pathLength(flip) <= 20.01, `cambia de lado si el otro cuesta mucho menos: ${pathLength(flip)}`);
+  // no vuelve a pasar por lo ya trazado
+  const used = new Set([pointKey([0, 100]), pointKey([100, 100])]);
+  const avoid = smartTrace(b.idx, b.graph, A, at(100, 40), { avoid: used });
+  ok(avoid && !avoid.slice(1, -1).some((p) => same(p, 0, 100) || same(p, 100, 100)), `evita lo ya trazado: ${JSON.stringify(avoid)}`);
+  const seen = new Set();
+  ok(avoid && avoid.every((p) => !seen.has(pointKey(p)) && seen.add(pointKey(p))), 'ningún punto dos veces');
+  // sí puede terminar en un punto ya trazado (cerrar el anillo)
+  const close = smartTrace(b.idx, b.graph, at(0, 100), at(0, 0), { avoid: new Set([pointKey([0, 0])]) });
+  ok(close && same(close[close.length - 1], 0, 0), 'termina en un punto ya trazado');
 }
 
 // ---- sin conexión: no hay camino

@@ -32,15 +32,17 @@
         <button id="btn-undo" class="tb icon" data-tip="Deshacer  Ctrl+Z" aria-label="Deshacer">↶</button>
         <button id="btn-redo" class="tb icon" data-tip="Rehacer  Ctrl+Mayús+Z" aria-label="Rehacer">↷</button>
         <span class="sep"></span>
-        <button id="btn-snap" class="tb toggle" data-tip="Snapping a vértices y bordes  S">🧲 Snap</button>
-        <button id="btn-trace" class="tb toggle" data-tip="Trace: seguir la geometría existente  K">〰 Trace</button>
-        <button id="btn-joined" class="tb toggle" data-tip="Move Joined: al mover un nodo (herramienta Nodos) se mueven también los nodos de otras líneas y polígonos que lo comparten">🔗 Move Joined</button>
-        <button id="btn-finger" class="tb toggle" data-tip="El dedo dibuja (pantallas sin lápiz)">✍︎ Dedo</button>
+        <button id="btn-snap" class="tb toggle" data-tip="Snapping a vértices y bordes  S">🧲<span class="lbl"> Snap</span></button>
+        <button id="btn-trace" class="tb toggle" data-tip="Trace: seguir la geometría existente  K">〰<span class="lbl"> Trace</span></button>
+        <button id="btn-guides" class="tb toggle" data-tip="Guías: al dibujar o mover, el punto se alinea (snap ligero) con el nivel (y) o la vertical (x) de otros vértices del dibujo, aunque estén lejos">📐<span class="lbl"> Guías</span></button>
+        <button id="btn-joined" class="tb toggle" data-tip="Move Joined: al mover un nodo (herramienta Nodos) se mueven también los nodos de otras líneas y polígonos que lo comparten">🔗<span class="lbl"> Move Joined</span></button>
+        <button id="btn-finger" class="tb toggle" data-tip="El dedo dibuja (pantallas sin lápiz)">✍︎<span class="lbl"> Dedo</span></button>
         <span class="sep"></span>
         <label class="scale-box" data-tip="Escala de la vista (Ctrl+1: escala de referencia)"><span id="scale-label">1:</span><input id="in-scale" inputmode="numeric" /><span id="scale-unit"></span></label>
         <button id="btn-redraw" class="tb" data-tip="Recalcula el relieve para la vista actual (el relieve solo se redibuja con este botón o al cambiar sus ajustes)" hidden>↻ Redraw</button>
         <span class="grow"></span>
         <div id="coords" class="coords"></div>
+        <button id="btn-google" class="tb icon" data-tip="Cuenta de Google / Drive" aria-label="Cuenta de Google">G</button>
         <button id="btn-help" class="tb icon" data-tip="Atajos de teclado  ?" aria-label="Atajos de teclado">⌨</button>
         <button id="btn-panel" class="tb icon" data-tip="Mostrar / ocultar panel  Tab" aria-label="Panel">☰</button>
       </header>

@@ -394,7 +394,7 @@ function overlayFor(index, graph, snaps) {
  * @returns {Array<[number,number]>|null} puntos en pantalla, incluidos ambos
  *   extremos, o null si no hay camino (features desconectadas).
  */
-export function tracePath(index, graph, snapA, snapB, { maxVisited = 200000, alt = false } = {}) {
+export function tracePath(index, graph, snapA, snapB, { maxVisited = 200000, alt = false, avoid = null, first = null } = {}) {
   if (!snapA || !snapB) return null;
   // Mismo punto: no hay nada que trazar, y sin este corte Dijkstra devolvería
   // un ida y vuelta hasta el extremo más cercano.
@@ -420,7 +420,10 @@ export function tracePath(index, graph, snapA, snapB, { maxVisited = 200000, alt
   };
   if (!pointOf(startKey) || !pointOf(endKey)) return null;
 
-  const search = (blocked, blockedNodes) => {
+  // `avoid`: puntos por los que el recorrido no debe volver a pasar (lo ya trazado); el final sí puede ser uno de ellos (cerrar el anillo).
+  // `first`: único vecino del punto de partida por el que se puede salir (el sentido que ya se venía siguiendo).
+  const isAvoided = (k) => avoid && avoid.size && k !== endKey && avoid.has(pointKey(pointOf(k)));
+  const search = (blocked, blockedNodes, forceFirst = first) => {
     const dist = new Map([[startKey, 0]]);
     const prev = new Map();
     const done = new Set();
@@ -434,7 +437,8 @@ export function tracePath(index, graph, snapA, snapB, { maxVisited = 200000, alt
       if (key === endKey) break;
       if (++visited > maxVisited) return null;
       for (const e of edgesOf(key)) {
-        if (done.has(e.to) || blockedNodes?.has(e.to)) continue;
+        if (done.has(e.to) || blockedNodes?.has(e.to) || isAvoided(e.to)) continue;
+        if (forceFirst && key === startKey && pointKey(pointOf(e.to)) !== forceFirst) continue;
         if (blocked && blocked.has(key < e.to ? `${key}|${e.to}` : `${e.to}|${key}`)) continue;
         const nd = priority + e.w;
         if (nd < (dist.get(e.to) ?? Infinity)) {
@@ -459,8 +463,39 @@ export function tracePath(index, graph, snapA, snapB, { maxVisited = 200000, alt
     const blocked = new Set();
     for (let i = 0; i + 1 < route.length; i++) blocked.add(route[i] < route[i + 1] ? `${route[i]}|${route[i + 1]}` : `${route[i + 1]}|${route[i]}`);
     // sin pasar de nuevo por los vértices del principal (si no, «el otro camino» daría media vuelta sobre el mismo borde)
-    route = search(blocked, new Set(route.slice(1, -1))) || route;
+    route = search(blocked, new Set(route.slice(1, -1)), null) || route;
   }
   const path = route.map(pointOf).filter(Boolean).map((p) => p.slice());
-  return path.length >= 2 ? path : null;
+  if (path.length < 2) return null;
+  path.first = pointKey(path[1]); // por dónde sale: sirve para seguir el mismo sentido en el siguiente cálculo
+  return path;
+}
+
+/** Clave de un punto de mundo (a 1 mm) para reconocerlo entre grafos reconstruidos. */
+export const pointKey = (p) => (p ? `${Math.round(p[0] * 1000)}|${Math.round(p[1] * 1000)}` : '');
+
+/** Largo de un recorrido. */
+export const pathLength = (path) => path.reduce((a, p, i) => (i ? a + Math.hypot(p[0] - path[i - 1][0], p[1] - path[i - 1][1]) : 0), 0);
+
+/**
+ * Trace inteligente. Parte del camino más corto, pero:
+ * - sigue el SENTIDO que ya llevaba (`prefer`, el punto por el que salió el
+ *   cálculo anterior desde el mismo origen) mientras no cueste más de
+ *   `stick` veces el camino libre: en un anillo no cambia de lado de golpe
+ *   cuando el cursor pasa la mitad, solo cuando el otro lado es mucho más corto;
+ * - no vuelve a pasar por los puntos de `avoid` (lo ya trazado), salvo para
+ *   terminar en uno de ellos.
+ * @returns el camino (con `.first`) o null
+ */
+export function smartTrace(index, graph, snapA, snapB, { prefer = null, avoid = null, alt = false, stick = 3, maxVisited } = {}) {
+  const base = { avoid, maxVisited };
+  let free = tracePath(index, graph, snapA, snapB, base);
+  if (!free) return null;
+  if (prefer && free.first !== prefer) {
+    const forced = tracePath(index, graph, snapA, snapB, { ...base, first: prefer });
+    if (forced && pathLength(forced) <= stick * pathLength(free)) free = forced;
+  }
+  if (!alt) return free;
+  // el otro lado: el más corto que no pasa por los vértices intermedios del elegido
+  return tracePath(index, graph, snapA, snapB, { ...base, first: free.first, alt: true }) || free;
 }

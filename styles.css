@@ -1515,3 +1515,124 @@ body {
     display: none;
   }
 }
+
+/* ---- cuenta de Google ---- */
+.gdlg {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.gdlg-card {
+  position: relative;
+  width: min(480px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  background: #fff;
+  color: #0f172a;
+  border-radius: 14px;
+  padding: 18px 20px 20px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.35);
+}
+
+.gdlg-card h2 {
+  margin: 0 0 10px;
+  font-size: 17px;
+}
+
+.gdlg-x {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  border: 0;
+  background: none;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  color: #64748b;
+}
+
+.gdlg-body {
+  display: grid;
+  gap: 10px;
+}
+
+.gbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  justify-self: start;
+  height: 40px;
+  padding: 0 14px 0 10px;
+  background: #fff;
+  color: #3c4043;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  font: 500 14px/1 Roboto, 'Segoe UI', Arial, sans-serif;
+  cursor: pointer;
+}
+
+.gbtn:hover {
+  background: #f8f9fa;
+  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.3);
+}
+
+.gbtn-logo {
+  display: inline-flex;
+}
+
+.gacct {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.gacct img,
+.gacct-ini {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+}
+
+.grow-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gcfg summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.gfield {
+  display: grid;
+  gap: 3px;
+  margin: 6px 0;
+  font-size: 12px;
+  color: #475569;
+}
+
+.gfield input {
+  height: 32px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 0 8px;
+  font: inherit;
+  color: #0f172a;
+}
+
+/* con poco ancho los interruptores de la barra quedan solo con su ícono (el nombre sale al pasar el cursor) */
+@media (max-width: 1200px) {
+  #topbar .tb .lbl {
+    display: none;
+  }
+}

@@ -17,11 +17,14 @@
 
 import { loadScript } from './loader.js';
 
-const SCOPE = 'https://www.googleapis.com/auth/drive.file';
+// drive.file: solo los archivos que la app crea o que se eligen en el selector; el resto, para saber quién inició sesión
+const SCOPE = 'https://www.googleapis.com/auth/drive.file openid email profile';
+const USER_KEY = 'gd.googleUser';
 const API = 'https://www.googleapis.com/drive/v3/files';
 const GOOGLE_DOCS = 'application/vnd.google-apps.';
 
 let token = null; // { value, expires }
+let user = null; // { name, email, picture }
 
 /** Id de archivo a partir de un enlace de Drive (o el id tal cual). */
 export function parseDriveId(link) {
@@ -34,7 +37,7 @@ export function parseDriveId(link) {
 /** Número de proyecto de Google Cloud (el prefijo numérico del ID de cliente). */
 export const appIdOf = (clientId) => /^(\d+)-/.exec(clientId || '')?.[1] || null;
 
-async function accessToken(clientId, { prompt = '' } = {}) {
+async function accessToken(clientId, { prompt = '', hint = '' } = {}) {
   if (token && token.expires > Date.now() + 60_000) return token.value;
   await loadScript('https://accounts.google.com/gsi/client');
   const oauth = globalThis.google?.accounts?.oauth2;
@@ -43,6 +46,7 @@ async function accessToken(clientId, { prompt = '' } = {}) {
     const client = oauth.initTokenClient({
       client_id: clientId,
       scope: SCOPE,
+      hint: hint || undefined,
       callback: (r) => {
         if (r.error) return reject(new Error(`Google no dio acceso: ${r.error_description || r.error}`));
         token = { value: r.access_token, expires: Date.now() + (Number(r.expires_in) || 3600) * 1000 };
@@ -52,6 +56,59 @@ async function accessToken(clientId, { prompt = '' } = {}) {
     });
     client.requestAccessToken({ prompt });
   });
+}
+
+/** Usuario que inició sesión (o el último que lo hizo en este navegador, aunque el permiso haya vencido). */
+export function googleUser() {
+  if (user) return user;
+  try {
+    return JSON.parse(localStorage.getItem(USER_KEY) || 'null');
+  } catch {
+    return null;
+  }
+}
+
+/** ¿Hay un permiso vigente para usar Drive? */
+export const isSignedIn = () => !!(token && token.expires > Date.now() + 60_000);
+
+/**
+ * Inicio de sesión de Google (ventana emergente de Google): pide el permiso
+ * para Drive y trae el nombre, correo y foto de la cuenta.
+ * @returns {Promise<{name: string, email: string, picture: string}>}
+ */
+export async function signIn(clientId, { account = false } = {}) {
+  if (!clientId) throw new Error('Falta el ID de cliente de Google (Cuenta de Google → Configuración)');
+  const last = googleUser();
+  // «account»: dejar elegir otra cuenta; si no, se reutiliza la última sin volver a preguntar
+  const tok = await accessToken(clientId, account ? { prompt: 'select_account' } : { hint: last?.email || '' });
+  const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${tok}` } });
+  const info = res.ok ? await res.json() : {};
+  user = { name: info.name || info.email || 'Cuenta de Google', email: info.email || '', picture: info.picture || '' };
+  try {
+    localStorage.setItem(USER_KEY, JSON.stringify(user));
+  } catch {
+    /* sin almacenamiento */
+  }
+  return user;
+}
+
+/** Cierra la sesión: revoca el permiso de esta sesión y olvida la cuenta. */
+export function signOut() {
+  const t = token?.value;
+  token = null;
+  user = null;
+  try {
+    localStorage.removeItem(USER_KEY);
+  } catch {
+    /* sin almacenamiento */
+  }
+  if (t) globalThis.google?.accounts?.oauth2?.revoke?.(t, () => null);
+}
+
+/** Token vigente, iniciando sesión si hace falta (hay que llamarlo desde un gesto del usuario). */
+export async function ensureSignedIn(clientId) {
+  if (!isSignedIn()) await signIn(clientId);
+  return token.value;
 }
 
 async function loadPicker() {
@@ -140,5 +197,70 @@ export async function downloadDriveFile({ id, name = null, mimeType = null }, { 
     }
     blob = new Blob(chunks, { type: mimeType || '' });
   } else blob = await res.blob();
-  return new File([blob], name || id, { type: mimeType || '' });
+  const file = new File([blob], name || id, { type: mimeType || '' });
+  file.driveId = id; // para guardar de vuelta en el mismo archivo
+  return file;
+}
+
+/**
+ * Sube un archivo a Drive (crea uno nuevo o, con `fileId`, reemplaza el contenido de ese).
+ * @returns {Promise<{id: string, name: string, webViewLink: string}>}
+ */
+export async function uploadDriveFile({ name, mimeType = 'application/octet-stream', data, fileId = null, parentId = null }) {
+  if (!isSignedIn()) throw new Error('Inicia sesión con Google primero');
+  const boundary = `gd${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  const meta = { name, mimeType };
+  if (parentId && !fileId) meta.parents = [parentId];
+  const body = new Blob([
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n`,
+    `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`,
+    data,
+    `\r\n--${boundary}--`,
+  ]);
+  const base = 'https://www.googleapis.com/upload/drive/v3/files';
+  const q = 'uploadType=multipart&supportsAllDrives=true&fields=id,name,webViewLink';
+  const res = await fetch(fileId ? `${base}/${encodeURIComponent(fileId)}?${q}` : `${base}?${q}`, {
+    method: fileId ? 'PATCH' : 'POST',
+    headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  if (!res.ok) {
+    let msg = '';
+    try {
+      msg = (await res.json())?.error?.message || '';
+    } catch {
+      /* sin detalle */
+    }
+    const err = new Error(res.status === 404 ? 'Google Drive: el archivo ya no existe o esta app no tiene acceso a él' : `Google Drive: error ${res.status}${msg ? ` (${msg})` : ''}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+/** Selector de Google para elegir una carpeta de Drive. @returns {Promise<{id: string, name: string}|null>} */
+export async function pickDriveFolder({ clientId, apiKey }) {
+  if (!clientId) throw new Error('Falta el ID de cliente de Google (Cuenta de Google → Configuración)');
+  const tok = await ensureSignedIn(clientId);
+  await loadPicker();
+  const P = globalThis.google.picker;
+  return new Promise((resolve) => {
+    const view = new P.DocsView(P.ViewId.FOLDERS).setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes('application/vnd.google-apps.folder');
+    let b = new P.PickerBuilder()
+      .addView(view)
+      .setOAuthToken(tok)
+      .setLocale('es')
+      .setTitle('Elige la carpeta de Drive donde guardar')
+      .setCallback((data) => {
+        const action = data[P.Response.ACTION];
+        if (action === P.Action.PICKED) {
+          const d = (data[P.Response.DOCUMENTS] || [])[0];
+          resolve(d ? { id: d[P.Document.ID], name: d[P.Document.NAME] } : null);
+        } else if (action === P.Action.CANCEL) resolve(null);
+      });
+    if (apiKey) b = b.setDeveloperKey(apiKey);
+    const appId = appIdOf(clientId);
+    if (appId) b = b.setAppId(appId);
+    b.build().setVisible(true);
+  });
 }

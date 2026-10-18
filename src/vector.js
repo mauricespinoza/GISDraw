@@ -410,7 +410,7 @@ export function freehandParams(level) {
 }
 
 /** Promedio móvil 1-2-1 (los extremos de un trazo abierto no se mueven). */
-function relax(pts, passes, closed) {
+export function relaxPoints(pts, passes, closed) {
   let cur = pts;
   for (let k = 0; k < passes && cur.length > 2; k++) {
     const n = cur.length;
@@ -431,7 +431,7 @@ function relax(pts, passes, closed) {
  */
 export function freehandToNodes(raw, level, mpp, closed = false) {
   const { passes, tolerance, tension } = freehandParams(level);
-  const pts = simplify(relax(raw, passes, closed), tolerance * mpp);
+  const pts = simplify(relaxPoints(raw, passes, closed), tolerance * mpp);
   return curveThrough(pts, tension, closed);
 }
 
@@ -441,7 +441,7 @@ export function freehandToNodes(raw, level, mpp, closed = false) {
  * redondea sin los lazos y sobrepasos de un Catmull-Rom con muy pocos puntos.
  * `tension` 0–0,5; satura en 0,45 del segmento (0 = poligonal).
  */
-function curveThrough(points, tension, closed) {
+export function curveThrough(points, tension, closed) {
   const n = points.length;
   if (n < 3 || tension <= 0) return points.map((p) => makeNode(p.x, p.y));
   const t = tension * 2; // 0–1
