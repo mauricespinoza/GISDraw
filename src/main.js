@@ -36,6 +36,8 @@ class App {
       smoothing: 0.25,
       pencilTolerance: 1.5,
       opentopoKey: '',
+      googleClientId: '',
+      googleApiKey: '',
       wheelMode: 'zoom',
       ...readJSON(SETTINGS_KEY),
     };
@@ -451,7 +453,9 @@ class App {
       item('Georreferenciar imagen (JPG/PNG/TIFF)…', () => this.startGeoref()),
       item('Estilo QGIS (.qml / .qlr) a la capa activa…', () => this.applyQmlToLayer(this.history.doc.activeLayerId)),
       item('Proyecto FieldDraw (.fdproj.json / .zip / GeoJSON)…', () => this.importFieldDraw()),
-      item('SVG / Illustrator (.svg), una capa por capa…', () => this.importSvgFile()),
+      item('Illustrator (.ai, .svg) / PDF vectorial, una capa por capa…', () => this.importSvgFile()),
+      item('Desde Google Drive…', () => this.importFromDrive()),
+      item('Configurar Google Drive…', () => this.configureDrive()),
       h('div', { class: 'mh' }, 'Exportar'),
       item('GeoPackage (todas las capas, con estilo QGIS)', () => this.exportGpkg()),
       item('Simbología QGIS (.qlr) + GeoPackage', () => this.exportQLR()),
@@ -1156,8 +1160,8 @@ class App {
     download(JSON.stringify({ app: 'GISDrawer', ...doc }), `${fileBase(doc.title)}.gisdrawer`, 'application/json');
   }
 
-  async openProject() {
-    const [f] = await pickFiles('.gisdrawer,.json');
+  async openProject(file = null) {
+    const [f] = file ? [file] : await pickFiles('.gisdrawer,.json');
     if (!f) return;
     const raw = JSON.parse(await f.text());
     if (!raw.layers) throw new Error('No es un proyecto de GISDrawer');
@@ -1168,8 +1172,8 @@ class App {
     this.zoomToShapes(allTopShapes(doc).map((x) => x.shape));
   }
 
-  async importGpkg() {
-    const files = await pickFiles('.gpkg', true);
+  async importGpkg(files = null) {
+    files ??= await pickFiles('.gpkg', true);
     if (!files.length) return;
     this.message('Leyendo GeoPackage…', 0);
     const { importGeoPackage } = await import('./io/gpkg.js');
@@ -1192,8 +1196,8 @@ class App {
   }
 
   /** Proyecto de FieldDraw: una capa por tipo (unidades, trazas, medidas, puntos de control), con su simbología. */
-  async importFieldDraw() {
-    const [f] = await pickFiles('.json,.fdproj,.zip,.geojson');
+  async importFieldDraw(file = null) {
+    const [f] = file ? [file] : await pickFiles('.json,.fdproj,.zip,.geojson');
     if (!f) return;
     this.message('Leyendo proyecto de FieldDraw…', 0);
     const { readFieldDrawFile, importFieldDraw } = await import('./io/fielddraw.js');
@@ -1212,13 +1216,27 @@ class App {
     this.message(`FieldDraw «${r.name}»: ${r.count} elemento(s) en ${r.layers.length} capa(s)${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, r.warnings.length ? 9000 : 4000);
   }
 
-  /** Archivo SVG (Illustrator, Inkscape…): una capa de GISDrawer por cada capa de primer nivel. */
-  async importSvgFile() {
-    const [f] = await pickFiles('.svg');
+  /**
+   * Archivo SVG (Illustrator, Inkscape…), .ai nativo de Illustrator o PDF
+   * vectorial: una capa de GISDrawer por cada capa de primer nivel (en el .ai,
+   * por cada capa de Illustrator; las ocultas llegan ocultas).
+   */
+  async importSvgFile(file = null) {
+    const [f] = file ? [file] : await pickFiles('.svg,.ai,.pdf,image/svg+xml,application/pdf,application/illustrator,application/postscript');
     if (!f) return;
-    const { importSvg } = await import('./io/svgImport.js');
     const doc0 = this.history.doc;
-    const r = importSvg(await f.text(), { refScale: doc0.refScale, center: [this.view.cx, this.view.cy] });
+    const opts = { refScale: doc0.refScale, center: [this.view.cx, this.view.cy] };
+    const buf = new Uint8Array(await f.arrayBuffer());
+    const head = new TextDecoder('latin1').decode(buf.subarray(0, 1024));
+    let r;
+    if (/%PDF-|%!PS-Adobe/.test(head) || /\.(ai|pdf)$/i.test(f.name)) {
+      this.message(`Leyendo ${f.name}…`, 0);
+      const { importPdf } = await import('./io/pdfImport.js');
+      r = importPdf(buf, { ...opts, name: f.name.replace(/\.\w+$/, '') });
+    } else {
+      const { importSvg } = await import('./io/svgImport.js');
+      r = importSvg(new TextDecoder().decode(buf), opts);
+    }
     if (r.gisdrawer) {
       this.clipboard = r.gisdrawer.shapes;
       return this.pasteInternal(true);
@@ -1227,18 +1245,108 @@ class App {
     const all = [];
     for (const L of r.layers) {
       if (!L.shapes.length) continue;
-      const layer = makeVectorLayer(L.name || f.name.replace(/\.svg$/i, ''), { items: L.shapes });
+      const layer = makeVectorLayer(L.name || f.name.replace(/\.\w+$/, ''), { items: L.shapes });
+      if (r.hiddenLayers?.includes(L.name)) layer.visible = false;
       doc = addLayer(doc, layer, doc.activeLayerId);
       all.push(...L.shapes);
     }
-    if (!all.length) return this.message('El SVG no trae formas');
+    if (!all.length) return this.message(`${f.name} no trae formas vectoriales${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, 6000);
     this.history.commit(doc);
     this.zoomToShapes(all);
     this.message(`${all.length} objeto(s) en ${r.layers.length} capa(s) desde ${f.name}${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, 6000);
   }
 
-  async importGeoJSON() {
-    const files = await pickFiles('.geojson,.json', true);
+  /** Importa un archivo según su extensión (lo usa Google Drive, que entrega un archivo cualquiera). */
+  async importFile(f) {
+    const ext = (/\.(\w+)$/.exec(f.name)?.[1] || '').toLowerCase();
+    switch (ext) {
+      case 'gisdrawer':
+        return this.openProject(f);
+      case 'gpkg':
+        return this.importGpkg([f]);
+      case 'geojson':
+        return this.importGeoJSON([f]);
+      case 'json': {
+        const raw = JSON.parse(await f.text());
+        if (raw?.layers && raw.app === 'GISDrawer') return this.openProject(f);
+        if (raw?.type === 'FeatureCollection' || raw?.type === 'Feature') return this.importGeoJSON([f]);
+        return this.importFieldDraw(f);
+      }
+      case 'fdproj':
+      case 'zip':
+        return this.importFieldDraw(f);
+      case 'svg':
+      case 'ai':
+      case 'pdf':
+        return this.importSvgFile(f);
+      case 'asc':
+        return this.importDemForLayer(null, f);
+      case 'tif':
+      case 'tiff': {
+        // GeoTIFF de una banda: elevación; en color: imagen; sin georreferencia: a georreferenciar
+        const { readGeoTIFF } = await import('./io/geotiff.js');
+        const info = await readGeoTIFF(await f.arrayBuffer()).catch(() => null);
+        if (!info) return this.startGeoref(f);
+        return info.isRGB ? this.importImage(f) : this.importDemForLayer(null, f);
+      }
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+        return this.startGeoref(f);
+      case 'qml':
+      case 'qlr':
+        return this.applyQmlToLayer(this.history.doc.activeLayerId, f);
+      default:
+        throw new Error(`No sé importar archivos .${ext || '(sin extensión)'}`);
+    }
+  }
+
+  /** Google Drive: selector de Google con sesión iniciada, o enlace compartido con la clave de API. */
+  async importFromDrive() {
+    const { googleClientId: clientId, googleApiKey: apiKey } = this.settings;
+    if (!clientId && !apiKey) {
+      this.message('Primero configura Google Drive (ID de cliente y/o clave de API de Google Cloud)', 6000);
+      return this.configureDrive();
+    }
+    const gd = await import('./io/gdrive.js');
+    let picked;
+    if (clientId) picked = await gd.pickDriveFiles({ clientId, apiKey });
+    else {
+      const link = prompt('Enlace de Google Drive del archivo (compartido con «cualquier persona con el enlace»):', '');
+      if (!link) return;
+      const id = gd.parseDriveId(link);
+      if (!id) throw new Error('No reconozco el enlace de Google Drive');
+      picked = [{ id }];
+    }
+    for (const p of picked) {
+      this.message(`Bajando ${p.name || 'archivo'} de Google Drive…`, 0);
+      const file = await gd.downloadDriveFile(p, {
+        apiKey,
+        onProgress: (q) => this.message(`Bajando ${p.name || 'archivo'} de Google Drive… ${Math.round(q * 100)} %`, 0),
+      });
+      this.message('');
+      await this.importFile(file);
+    }
+  }
+
+  configureDrive() {
+    const s = this.settings;
+    const clientId = prompt(
+      'Google Drive — ID de cliente OAuth (opcional; habilita el selector de archivos con tu cuenta).\n' +
+        'Google Cloud Console → APIs y servicios → Credenciales → ID de cliente de OAuth, tipo «Aplicación web», ' +
+        `con ${location.origin} en «Orígenes de JavaScript autorizados». Activa «Google Drive API» y «Google Picker API».`,
+      s.googleClientId || '',
+    );
+    if (clientId === null) return;
+    const apiKey = prompt('Google Drive — Clave de API del mismo proyecto (Credenciales → Crear credenciales → Clave de API).\nSin ID de cliente, sirve para abrir archivos compartidos por enlace.', s.googleApiKey || '');
+    if (apiKey === null) return;
+    this.saveSettings({ googleClientId: clientId.trim(), googleApiKey: apiKey.trim() });
+    this.message(clientId.trim() || apiKey.trim() ? 'Google Drive configurado: Archivo → Importar → Desde Google Drive' : 'Google Drive sin configurar', 5000);
+  }
+
+  async importGeoJSON(files = null) {
+    files ??= await pickFiles('.geojson,.json', true);
+    if (!files.length) return;
     const { importGeoJSON } = await import('./io/geojson.js');
     let doc = this.history.doc;
     const all = [];
@@ -1252,11 +1360,11 @@ class App {
     if (all.length) this.zoomToShapes(all);
   }
 
-  async applyQmlToLayer(layerId) {
+  async applyQmlToLayer(layerId, file = null) {
     const layer = findLayer(this.history.doc, layerId);
     if (!layer || layer.kind !== 'vector') return this.message('Elige una capa vectorial');
     if (layer.locked) return this.message(`La capa «${layer.name}» está bloqueada: no se puede cambiar su estilo`);
-    const [f] = await pickFiles('.qml,.qlr,.xml');
+    const [f] = file ? [file] : await pickFiles('.qml,.qlr,.xml');
     if (!f) return;
     const parsed = parseQML(await f.text(), { refScale: this.history.doc.refScale, layerName: layer.name });
     const items = layer.items.map((s) => {
@@ -1291,8 +1399,8 @@ class App {
     return geotiffToUtmImage(info);
   }
 
-  async importDemForLayer(layerId) {
-    const [f] = await pickFiles('.tif,.tiff,.asc');
+  async importDemForLayer(layerId, file = null) {
+    const [f] = file ? [file] : await pickFiles('.tif,.tiff,.asc');
     if (!f) return;
     this.message('Leyendo modelo de elevación…', 0);
     const buffer = await f.arrayBuffer();
@@ -1331,8 +1439,8 @@ class App {
     this.showPanel('relief');
   }
 
-  async importImage() {
-    const [f] = await pickFiles('.tif,.tiff');
+  async importImage(file = null) {
+    const [f] = file ? [file] : await pickFiles('.tif,.tiff');
     if (!f) return;
     this.message('Leyendo GeoTIFF…', 0);
     const buffer = await f.arrayBuffer();
