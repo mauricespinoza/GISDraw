@@ -17,6 +17,10 @@
     <div id="app">
       <header id="topbar">
         <div class="brand"><img src="icons/logo.svg" alt="" width="30" height="30" /><span>GIS<b>Drawer</b></span></div>
+        <div class="mode-switch" role="group" aria-label="Modo">
+          <button id="btn-mode-canvas" data-tip="Modo Canvas: solo dibujo, sin mapa ni coordenadas">Canvas</button>
+          <button id="btn-mode-gis" data-tip="Modo GIS: mapa base, relieve, coordenadas, georreferenciación y formatos GIS">GIS</button>
+        </div>
         <div class="menu-wrap">
           <button id="btn-file" class="tb" aria-haspopup="true">Archivo ▾</button>
           <div id="menu-file" class="menu" hidden></div>
@@ -28,7 +32,7 @@
         <button id="btn-trace" class="tb toggle" data-tip="Trace: seguir la geometría existente  K">〰 Trace</button>
         <button id="btn-finger" class="tb toggle" data-tip="El dedo dibuja (pantallas sin lápiz)">✍︎ Dedo</button>
         <span class="sep"></span>
-        <label class="scale-box" data-tip="Escala de la vista (Ctrl+1: escala de referencia)">1:<input id="in-scale" inputmode="numeric" /></label>
+        <label class="scale-box" data-tip="Escala de la vista (Ctrl+1: escala de referencia)"><span id="scale-label">1:</span><input id="in-scale" inputmode="numeric" /><span id="scale-unit"></span></label>
         <button id="btn-redraw" class="tb" data-tip="Recalcula el relieve para la vista actual (el relieve solo se redibuja con este botón o al cambiar sus ajustes)" hidden>↻ Redraw</button>
         <span class="grow"></span>
         <div id="coords" class="coords"></div>
@@ -37,6 +41,7 @@
       </header>
       <nav id="toolbar"></nav>
       <main id="viewport">
+        <div id="page" hidden></div>
         <div id="stage"></div>
         <div id="propbar" role="toolbar" aria-label="Propiedades"></div>
         <div id="input-host"></div>

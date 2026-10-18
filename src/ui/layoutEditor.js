@@ -25,6 +25,7 @@ import { View } from '../view.js';
 import { h, sec, row, select, num, text, check, btn, color } from './dom.js';
 import { download } from '../io/store.js';
 import { loadScript } from '../io/loader.js';
+import { isGisLayer } from '../mode.js';
 
 /** Codifica un canvas a data URL sin bloquear: toBlob (PNG, o JPEG si es opaco) y lectura asíncrona. */
 function encodeCanvas(canvas, opaque) {
@@ -716,7 +717,8 @@ export class LayoutEditor {
     const doc = this.app.history.doc;
     const g = pageGeometry(L);
     const ext = frameExtent(L, g);
-    const key = JSON.stringify([dpi, ext, doc.layers.filter((l) => l.kind !== 'vector').map((l) => [l.id, l.kind, l.visible, l.opacity, l.blend, l.settings])]);
+    const gisOn = this.app.mode === 'gis';
+    const key = JSON.stringify([gisOn, dpi, ext, doc.layers.filter((l) => l.kind !== 'vector').map((l) => [l.id, l.kind, l.visible, l.opacity, l.blend, l.settings])]);
     const hit = this.rasterCache.get(key);
     if (hit) return hit;
     // hasta 9 000 px por lado (A0 a 200 dpi, A3 a 600 dpi)
@@ -738,7 +740,7 @@ export class LayoutEditor {
     };
     for (let i = 0; i < doc.layers.length; i++) {
       const l = doc.layers[i];
-      if (!l.visible) continue;
+      if (!l.visible || (!gisOn && isGisLayer(l))) continue;
       if (l.kind === 'vector') {
         flush();
         continue;
@@ -814,7 +816,7 @@ export class LayoutEditor {
   attribution() {
     const src = new Set();
     for (const l of this.app.history.doc.layers) {
-      if (!l.visible) continue;
+      if (!l.visible || (this.app.mode !== 'gis' && isGisLayer(l))) continue;
       if (l.kind === 'basemap') src.add(BASEMAPS[l.settings.source]?.attribution);
       if (l.kind === 'hillshade') src.add(l.settings.source === 'terrarium' ? 'DEM Terrarium/AWS (SRTM, GMTED, ETOPO1)' : l.settings.source === 'opentopo' ? `DEM ${l.settings.demtype} (OpenTopography)` : `DEM ${l.settings.fileName || 'propio'}`);
     }
@@ -824,7 +826,8 @@ export class LayoutEditor {
   async build(dpi, signal) {
     const L = this.L;
     const rasters = await this.rasters(L, dpi, { signal });
-    return composeLayout(this.app.history.doc, L, rasters, this.attribution());
+    // en Canvas no hay coordenadas: la lámina sale sin grilla
+    return composeLayout(this.app.history.doc, this.app.mode === 'gis' ? L : { ...L, grid: 'none' }, rasters, this.attribution());
   }
 
   async preview() {
@@ -1213,6 +1216,7 @@ export class LayoutEditor {
       this.symbolSection(L),
       sec(
         'Grilla y coordenadas',
+        ...(this.app.mode !== 'gis' ? [h('p', { class: 'hint' }, 'La grilla de coordenadas es del modo GIS: cambia a GIS (botón arriba) para usarla.')] : [
         row('Grilla', select({ none: 'Sin grilla', utm: 'UTM (m)', geo: 'Geográfica (° \' ")', both: 'UTM + geográfica' }, L.grid, set('grid'))),
         row('Estilo', select({ crosses: 'Cruces', lines: 'Líneas', ticks: 'Solo marcas en el borde' }, L.gridStyle, set('gridStyle'))),
         row('Intervalo UTM (m)', num(L.gridInterval || '', set('gridInterval'), { step: 500, min: 0 })),
@@ -1221,6 +1225,7 @@ export class LayoutEditor {
         row('Color', color(L.gridColor, null, set('gridColor'))),
         row('Rótulos (pt)', num(L.gridLabelSize, set('gridLabelSize'), { step: 0.5, min: 3 })),
         check('Borde de cebra', L.zebra, set('zebra')),
+        ]),
       ),
       sec(
         'Elementos',

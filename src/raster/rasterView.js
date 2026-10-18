@@ -13,6 +13,8 @@ import { compose, elevationRange, hillshade, defaultHillshadeSettings } from './
 import { fetchOpenTopography, gridSampler, lonLatBBox, sampleGrid, terrariumSampler, zoomForMpp } from './dem.js';
 import { toLonLat } from '../proj.js';
 
+import { isGisLayer, modeOf } from '../mode.js';
+
 export const demFiles = new Map(); // fileId -> grid (GeoTIFF/ASCII importados)
 export const imageFiles = new Map(); // fileId -> { bitmap, x0, y0, x1, y1 } (imagen alineada a UTM)
 /** Imagen de una capa con su posición efectiva: `settings.bounds` (movida/escalada en el layout) manda sobre la original. */
@@ -66,8 +68,9 @@ export class RasterView {
     const canvas = st.canvas;
     canvas.style.opacity = layer.opacity;
     canvas.style.mixBlendMode = layer.blend || 'normal';
-    canvas.style.display = layer.visible ? '' : 'none';
-    if (!layer.visible) return;
+    const off = !layer.visible || (isGisLayer(layer) && modeOf(this.getSettings()) !== 'gis');
+    canvas.style.display = off ? 'none' : '';
+    if (off) return;
     if (layer.kind === 'basemap') {
       this.sizeCanvas(canvas);
       canvas.style.transform = '';
@@ -159,7 +162,7 @@ export class RasterView {
   redrawHillshades(layers) {
     let n = 0;
     for (const l of layers) {
-      if (l.kind !== 'hillshade' || !l.visible) continue;
+      if (l.kind !== 'hillshade' || !l.visible || modeOf(this.getSettings()) !== 'gis') continue;
       const st = this.state.get(l.id);
       if (!st) continue;
       st.force = true;
@@ -178,6 +181,7 @@ export class RasterView {
     let any = false;
     let stale = false;
     const v = this.view;
+    if (modeOf(this.getSettings()) !== 'gis') return null;
     for (const l of layers) {
       if (l.kind !== 'hillshade' || !l.visible) continue;
       any = true;

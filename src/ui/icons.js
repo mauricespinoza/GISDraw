@@ -24,6 +24,7 @@ export const ICONS = {
 /** Iconos de las pestañas del panel. */
 export const TAB_ICONS = {
   layers: s('<path d="M12 3 3 8l9 5 9-5z"/><path d="m3 12.5 9 5 9-5"/><path d="m3 17 9 5 9-5"/>'),
+  canvas: s('<rect x="6" y="3" width="12" height="18" rx="1"/><path d="M3 9V6M3 6h3M21 15v3M21 18h-3"/>'),
   style: s('<path d="M19.5 3.5c-3 1.2-7.5 5.8-9 8.6l1.9 1.9c2.8-1.5 7.4-6 8.6-9z"/><path d="M10 13.5c-2.2 0-4 1.6-4 4 0 1.2-.8 2.2-2 2.5 3.8 1.2 8-.2 8-4.5"/>'),
   geology: s('<path d="M2.5 9.5c3-1.5 5.5 1 9 0s6-2.5 10-1"/><path d="M2.5 14.5c3-1.5 5.5 1 9 0s6-2.5 10-1"/><path d="M14 3 9 21"/><path d="M2.5 19.5h19M2.5 4.5h19"/>'),
   labels: s('<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.4" fill="currentColor"/>'),

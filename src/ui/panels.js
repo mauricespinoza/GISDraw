@@ -23,9 +23,11 @@ import { RAMPS, applyRenderer, buildRenderer, clearRenderer, countClasses, defau
 import { h, sec, row, select, slider, num, text, color, check, btn } from './dom.js';
 import { TAB_ICONS } from './icons.js';
 import { alignOf, layoutText } from '../textLayout.js';
+import { CANVAS_SIZES, CANVAS_TABS, GIS_TABS, canvasDefaults, canvasMm, isGisLayer, normalizeCanvas } from '../mode.js';
 
 export const TABS = {
   layers: 'Capas',
+  canvas: 'Lienzo',
   style: 'Estilo',
   geology: 'Geología',
   labels: 'Etiquetas',
@@ -76,6 +78,7 @@ export class Panels {
   constructor(app) {
     this.app = app;
     this.tab = localStorage.getItem('gd.tab') || 'layers';
+    if (!this.tabAllowed(this.tab)) this.tab = 'layers';
     this.tabsEl = document.getElementById('tabs');
     this.body = document.getElementById('panel-body');
     this.expanded = new Set();
@@ -84,10 +87,15 @@ export class Panels {
 
   renderTabs() {
     this.tabsEl.replaceChildren(
-      ...Object.entries(TABS).map(([k, label]) =>
+      ...Object.entries(TABS).filter(([k]) => this.tabAllowed(k)).map(([k, label]) =>
         h('button', { class: k === this.tab ? 'on' : '', onclick: () => this.show(k), 'aria-label': label }, h('span', { class: 'tab-ico', html: TAB_ICONS[k] || '' }), h('span', {}, label)),
       ),
     );
+  }
+
+  /** Relieve, Georref. y Atributos solo en GIS; Lienzo solo en Canvas. */
+  tabAllowed(k) {
+    return this.app.mode === 'gis' ? !CANVAS_TABS.includes(k) : !GIS_TABS.includes(k);
   }
 
   show(tab) {
@@ -104,8 +112,10 @@ export class Panels {
 
   render() {
     const scroll = this.body.scrollTop;
+    if (!this.tabAllowed(this.tab)) this.tab = 'layers';
     const fn = {
       layers: () => this.layersPanel(),
+      canvas: () => this.canvasPanel(),
       style: () => this.stylePanel(),
       geology: () => this.geologyPanel(),
       labels: () => this.labelsPanel(),
@@ -131,6 +141,41 @@ export class Panels {
     );
   }
 
+  /* ================================================================ LIENZO */
+
+  canvasPanel() {
+    const app = this.app;
+    const c = normalizeCanvas(this.doc.canvas);
+    const [w, hh] = canvasMm(c);
+    const d = canvasDefaults(c);
+    const sizes = { ...Object.fromEntries(Object.entries(CANVAS_SIZES).map(([k, v]) => [k, `${v.label} (${v.mm[0]} × ${v.mm[1]} mm)`])), custom: 'Personalizado…' };
+    const orient = (o, label) => btn(label, () => app.setCanvas({ orientation: o }), c.orientation === o ? 'primary' : '');
+    const custom =
+      c.size === 'custom'
+        ? [
+            row('Ancho (mm)', num(c.w, (v) => v >= 10 && app.setCanvas({ size: 'custom', w: v }), { step: 1, min: 10 })),
+            row('Alto (mm)', num(c.h, (v) => v >= 10 && app.setCanvas({ size: 'custom', h: v }), { step: 1, min: 10 })),
+          ]
+        : [];
+    return [
+      sec(
+        'Hoja',
+        row('Tamaño', select(sizes, c.size, (v) => app.setCanvas(v === 'custom' ? { size: 'custom', w: w, h: hh } : { size: v }))),
+        ...custom,
+        h('div', { class: 'grid-btns two' }, orient('portrait', 'Vertical'), orient('landscape', 'Horizontal')),
+        h('p', { class: 'hint' }, `Hoja de ${Math.round(w)} × ${Math.round(hh)} mm. El dibujo puede salir de la hoja; la hoja marca el área de la lámina.`),
+        btn('⛶ Encuadrar la hoja', () => app.fitCanvas()),
+      ),
+      sec(
+        'Valores por defecto',
+        h('p', { class: 'hint' }, `Para una figura de media hoja: trazo de ${d.strokeWidth} mm y letra de ${d.fontSize} pt${c.size === 'A4' ? ' (A4)' : ` (a escala de ${Math.round(d.factor * 100)} % respecto de A4)`}. Al cambiar el tamaño de la hoja se vuelven a calcular.`),
+        row('Grosor de trazo (mm)', num(app.currentStyle.strokeWidth, (v) => v > 0 && app.setCurrentStyle({ ...app.currentStyle, strokeWidth: v }), { step: 0.05, min: 0.05 })),
+        row('Letra (pt)', num(app.currentStyle.fontSize || 10, (v) => v > 0 && app.setCurrentStyle({ ...app.currentStyle, fontSize: v }), { step: 0.5, min: 1 })),
+        btn('Usar los de media hoja', () => app.applyCanvasDefaults()),
+      ),
+    ];
+  }
+
   /* ================================================================ CAPAS */
 
   layersPanel() {
@@ -138,7 +183,7 @@ export class Panels {
     const doc = this.doc;
     const list = h('div', {});
     // de arriba hacia abajo, como en cualquier programa de dibujo
-    for (const l of [...doc.layers].reverse()) list.append(this.layerRow(l));
+    for (const l of [...doc.layers].reverse()) if (app.mode === 'gis' || !isGisLayer(l)) list.append(this.layerRow(l));
     const add = h(
       'div',
       { class: 'grid-btns' },
@@ -146,11 +191,11 @@ export class Panels {
         const l = makeVectorLayer(`Capa ${doc.layers.filter((x) => x.kind === 'vector').length + 1}`);
         app.history.commit(addLayer(this.doc, l, this.doc.activeLayerId));
       }),
-      btn('+ Mapa base', () => {
+      app.mode === 'gis' && btn('+ Mapa base', () => {
         const l = makeRasterLayer('basemap', 'Mapa base: Esri satélite', { source: 'esri_imagery' });
         app.history.commit({ ...addLayer(this.doc, l), layers: [l, ...this.doc.layers] });
       }),
-      btn('+ Relieve', () => {
+      app.mode === 'gis' && btn('+ Relieve', () => {
         const l = makeRasterLayer('hillshade', 'Relieve sombreado', defaultHillshadeSettings());
         const layers = this.doc.layers.slice();
         // por defecto sobre los mapas base y bajo el dibujo
@@ -164,8 +209,8 @@ export class Panels {
       sec('Capas', list, add),
       sec(
         'Documento',
-        row('Escala ref. 1:', num(doc.refScale, (v) => v > 0 && app.history.commit({ ...this.doc, refScale: v }), { step: 500 })),
-        h('p', { class: 'hint' }, 'Grosores (mm) y textos (pt) se miden en el papel a esta escala. Sistema: WGS84 / UTM 19S (EPSG:32719).'),
+        app.mode === 'gis' && row('Escala ref. 1:', num(doc.refScale, (v) => v > 0 && app.history.commit({ ...this.doc, refScale: v }), { step: 500 })),
+        h('p', { class: 'hint' }, `Grosores (mm) y textos (pt) se miden en el papel a esta escala.${app.mode === 'gis' ? ' Sistema: WGS84 / UTM 19S (EPSG:32719).' : ''}`),
       ),
     ];
   }
@@ -239,7 +284,7 @@ export class Panels {
       if (l.kind === 'vector') {
         actions.append(
           btn('Zoom a capa', () => app.zoomToShapes(l.items)),
-          btn('Aplicar QML/QLR', () => app.applyQmlToLayer(l.id)),
+          app.mode === 'gis' && btn('Aplicar QML/QLR', () => app.applyQmlToLayer(l.id)),
           btn('Seleccionar todo', () => {
             app.history.silent({ ...this.doc, activeLayerId: l.id });
             app.editor.setSelection(l.items.filter((s) => !s.locked && s.visible !== false).map((s) => s.id));
