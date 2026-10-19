@@ -19,7 +19,7 @@ import { DASHES, defaultStyle } from './style.js';
 import { copyShapes, pasteShapes, arrange, group, ungroup, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
 import { coordPreview, formatDMS, parseCoordText, toLonLat } from './proj.js';
 import { shapeBBox, unionBBox, walkShapes, newId, DEFAULT_SMOOTH, canResmooth, canSmooth, adoptFreehand, resmooth } from './vector.js';
-import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles } from './io/store.js';
+import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles, getDocKey, putDocKey } from './io/store.js';
 import { parseQML, styleFor } from './io/qml.js';
 import { parseAsciiGrid } from './raster/dem.js';
 import { lonLatToTransform, proj4Def } from './io/crs.js';
@@ -149,6 +149,11 @@ class App {
     });
     this.editor.onCommandKey = (e) => this.commandKey(e);
     this.editor.onPlainKey = (e) => this.plainKey(e);
+    this.editor.onRadius = (key, v) => {
+      this.saveSettings({ [key]: v });
+      this.renderPropbar();
+      this.message(`Radio: ${v} px`, 900);
+    };
     this.editor.onContextMenu = (sp, info) => this.showContextMenu(sp, info);
     this.editor.onPointerStart = () => this.hideContextMenu();
     this.editor.onCut = (mode, pts) => this.runCut(mode, pts);
@@ -366,6 +371,7 @@ class App {
       throw new Error('Ese proyecto ya no está guardado en este navegador');
     }
     this.loadDocument(normalizeDoc(doc));
+    await this.restoreFileHandle();
     this.message(`Abierto: ${list.find((x) => x.id === id)?.name || 'proyecto'}`, 3000);
   }
 
@@ -456,6 +462,7 @@ class App {
       if (!this.settings.canvasStyleInit) this.applyCanvasDefaults();
     }
     this.view.emit();
+    await this.restoreFileHandle();
     this.editor.setTool('select');
     this.panels.render();
     this.panels.onShow?.(this.panels.tab);
@@ -743,6 +750,7 @@ class App {
       item('Nuevo', async () => {
         if (!(await askConfirm('Se empieza un dibujo vacío. El actual queda en Archivo → Abrir reciente (y se puede recuperar con Ctrl+Z).', { title: 'Dibujo nuevo', ok: 'Empezar' }))) return;
         await this.flushSave();
+        this.fileHandle = null;
         this.history.commit(newDocument());
         if (this.mode !== 'gis') {
           this.applyCanvasDefaults();
@@ -751,8 +759,9 @@ class App {
       }),
       item('Abrir proyecto (.gisdrawer)…', () => this.openProject()),
       item('Abrir reciente…', () => this.openRecent()),
-      item('Guardar proyecto (.gisdrawer, con imágenes incrustadas)', () => this.saveProject()),
-      item(this.history.doc.driveFileId ? `Guardar en Google Drive (actualiza ${this.history.doc.fileName || 'el archivo'})` : 'Guardar en Google Drive (elegir carpeta)…', () => this.saveToDrive()),
+      item(`Guardar proyecto${this.fileHandle ? ` en ${this.fileHandle.name}` : ' (.gisdrawer, con imágenes incrustadas)'}   Ctrl+S`, () => this.saveProject()),
+      item('Guardar proyecto como…   Ctrl+Mayús+S', () => this.saveProject({ as: true })),
+      item(this.history.doc.driveFileId ? `Guardar en Google Drive (actualiza ${this.history.doc.fileName || 'el archivo'})   Ctrl+S+D` : 'Guardar en Google Drive (elegir carpeta)…   Ctrl+S+D', () => this.saveToDrive()),
       item('Guardar en Google Drive en otra carpeta…', () => this.saveToDrive({ choose: true })),
       h('div', { class: 'mh' }, 'Importar'),
       gis && item('GeoPackage (.gpkg)…', () => this.importGpkg()),
@@ -1746,11 +1755,27 @@ class App {
     // Ctrl+F / Ctrl+B: pegar en el lugar, delante o detrás (Illustrator)
     if (k === 'f') return run(() => this.paste(true));
     if (k === 'b') return run(() => this.paste(true, 'back'));
+    // Ctrl+S+D (S y luego D, sin soltar Ctrl): guardar en Google Drive, en el mismo archivo
+    if (k === 'd' && this.sChordT) {
+      clearTimeout(this.sChordT);
+      this.sChordT = null;
+      return run(() => this.saveToDrive().catch((err) => this.message(`Error: ${err.message}`, 6000)));
+    }
     if (k === 'd') return run(() => ed.duplicate());
     if (k === 'm' && e.shiftKey) return run(() => this.transformDialog());
     if (k === 'a' && e.shiftKey) return run(() => ed.setSelection([]));
     if (k === 'a') return run(() => ed.selectAll());
-    if (k === 's') return run(() => this.saveProject().catch((err) => this.message(`Error: ${err.message}`, 6000)));
+    if (k === 's' && e.shiftKey) return run(() => this.saveProject({ as: true }).catch((err) => this.message(`Error: ${err.message}`, 6000)));
+    if (k === 's') {
+      // Ctrl+S: guardado rápido en el mismo archivo. Se espera un instante por si sigue la D (Ctrl+S+D = Drive)
+      return run(() => {
+        clearTimeout(this.sChordT);
+        this.sChordT = setTimeout(() => {
+          this.sChordT = null;
+          this.saveProject().catch((err) => this.message(`Error: ${err.message}`, 6000));
+        }, 450);
+      });
+    }
     if (k === 'o') return run(() => this.openProject().catch((err) => this.message(`Error: ${err.message}`, 6000)));
     if (k === 'p') return run(() => this.showPanel('layout'));
     if (k === 'j') return run(() => this.joinOrMerge());
@@ -1977,18 +2002,80 @@ class App {
     return r;
   }
 
-  async saveProject() {
+  /** ¿El navegador deja escribir de nuevo en el mismo archivo? (Chrome / Edge de escritorio) */
+  get canWriteFiles() {
+    return typeof window.showSaveFilePicker === 'function';
+  }
+
+  /** Archivo del disco ligado al proyecto (para Ctrl+S); se recuerda por proyecto en el navegador. */
+  async setFileHandle(handle) {
+    this.fileHandle = handle || null;
+    const id = this.history.doc.projectId;
+    if (id) await putDocKey(`handle:${id}`, this.fileHandle).catch(() => null);
+  }
+
+  async restoreFileHandle() {
+    this.fileHandle = null;
+    const id = this.history.doc.projectId;
+    if (!id || !this.canWriteFiles) return;
+    const h = await getDocKey(`handle:${id}`).catch(() => null);
+    if (h && typeof h.createWritable === 'function') this.fileHandle = h;
+  }
+
+  /**
+   * Guardar proyecto. Ctrl+S: en el MISMO archivo de la última vez (abierto o
+   * guardado), sin preguntar; la primera vez, o con «Guardar como…»
+   * (Ctrl+Mayús+S), se elige dónde. Donde el navegador no deja escribir en
+   * un archivo (Safari, Firefox, iPad) se descarga una copia.
+   */
+  async saveProject({ as = false } = {}) {
     const doc = this.history.doc;
     const r = await this.projectBlob();
-    const name = `${fileBase(doc.title)}.gisdrawer`;
-    download(r.blob, name, 'application/json');
-    this.history.silent({ ...this.history.doc, fileName: name });
-    rememberProject(this.history.doc, { name, source: 'archivo' }).catch(() => null);
-    if (!r.missing.length && r.count) this.message(`Proyecto guardado con ${r.count} archivo(s) raster incrustado(s) (${(r.bytes / 1048576).toFixed(1)} MB)`, 5000);
+    const suggested = /\.gisdrawer$/i.test(doc.fileName || '') ? doc.fileName : `${fileBase(doc.title)}.gisdrawer`;
+    const size = r.count ? ` con ${r.count} archivo(s) raster (${(r.blob.size / 1048576).toFixed(1)} MB)` : '';
+    if (this.canWriteFiles) {
+      let handle = as ? null : this.fileHandle;
+      if (handle) {
+        // el permiso de escritura puede haber vencido (otra sesión): se vuelve a pedir
+        const ok = (await handle.queryPermission?.({ mode: 'readwrite' })) === 'granted' || (await handle.requestPermission?.({ mode: 'readwrite' })) === 'granted';
+        if (!ok) handle = null;
+      }
+      if (!handle) {
+        try {
+          handle = await window.showSaveFilePicker({ suggestedName: suggested, types: [{ description: 'Proyecto GISDrawer', accept: { 'application/json': ['.gisdrawer'] } }] });
+        } catch (err) {
+          if (err?.name === 'AbortError') return;
+          throw err;
+        }
+      }
+      const w = await handle.createWritable();
+      await w.write(r.blob);
+      await w.close();
+      await this.setFileHandle(handle);
+      this.history.silent({ ...this.history.doc, fileName: handle.name });
+      rememberProject(this.history.doc, { name: handle.name, source: 'archivo' }).catch(() => null);
+      if (!r.missing.length) this.message(`Guardado en ${handle.name}${size}`, 3000);
+      return;
+    }
+    download(r.blob, suggested, 'application/json');
+    this.history.silent({ ...this.history.doc, fileName: suggested });
+    rememberProject(this.history.doc, { name: suggested, source: 'archivo' }).catch(() => null);
+    if (!r.missing.length) this.message(`Proyecto descargado${size}. Este navegador no deja escribir en el mismo archivo: guarda una copia nueva (el trabajo además queda guardado solo en el navegador).`, 6000);
   }
 
   async openProject(file = null) {
-    const [f] = file ? [file] : await pickFiles('.gisdrawer,.json');
+    let handle = null;
+    let f = file;
+    if (!f && typeof window.showOpenFilePicker === 'function') {
+      // con el selector del sistema queda el archivo ligado: Ctrl+S guarda ahí mismo
+      try {
+        [handle] = await window.showOpenFilePicker({ types: [{ description: 'Proyecto GISDrawer', accept: { 'application/json': ['.gisdrawer', '.json'] } }] });
+      } catch (err) {
+        if (err?.name === 'AbortError') return;
+        throw err;
+      }
+      f = await handle.getFile();
+    } else if (!f) [f] = await pickFiles('.gisdrawer,.json');
     if (!f) return;
     const raw = JSON.parse(await f.text());
     if (!raw.layers) throw new Error('No es un proyecto de GISDrawer');
@@ -2002,6 +2089,7 @@ class App {
     doc.fileName = f.name;
     await this.flushSave();
     await this.loadDocument(doc, embedded, { name: f.name, source: f.driveId ? 'drive' : 'archivo' });
+    await this.setFileHandle(handle);
     if (embedded.size) this.message(`Proyecto abierto con ${embedded.size} archivo(s) raster incrustado(s)`, 3500);
     await this.fetchDriveAssets(doc);
   }
@@ -2591,7 +2679,7 @@ const SHORTCUTS = [
   ['Tablet (táctil)', [['Dos dedos, dos toques', 'Deshacer'], ['Tres dedos, dos toques', 'Rehacer'], ['Mantener el dedo', 'Menú contextual (Join, Merge, Split, Hole…)'], ['Dos dedos arrastrar / pellizcar', 'Desplazar / zoom']]],
   ['Vista y archivo', [
     ['Ctrl+0', 'Zoom a todo'], ['Ctrl+1', 'Escala de referencia'], ['Ctrl++ / Ctrl+−', 'Acercar / alejar'], ['Rueda del mouse', 'Zoom (Archivo → Vista: cambiar a desplazar)'], ['Trackpad', 'Dos dedos desplazan, pellizco = zoom'],
-    ['Tab', 'Mostrar / ocultar panel'], ['F7 / Ctrl+F10', 'Capas / Estilo'], ['Ctrl+L', 'Capa nueva'], ['Ctrl+S / Ctrl+O', 'Guardar / abrir proyecto'], ['Ctrl+P', 'Layout de impresión'], ['? o F1', 'Esta ayuda'],
+    ['Tab', 'Mostrar / ocultar panel'], ['F7 / Ctrl+F10', 'Capas / Estilo'], ['Ctrl+L', 'Capa nueva'], ['Ctrl+S', 'Guardar en el mismo archivo'], ['Ctrl+Mayús+S', 'Guardar como…'], ['Ctrl+S+D', 'Guardar en el mismo archivo de Google Drive'], ['Ctrl+O', 'Abrir proyecto'], ['Ctrl+P', 'Layout de impresión'], ['? o F1', 'Esta ayuda'],
   ]],
   ['Ratón y tablet', [['Botón derecho', 'Menú contextual (o terminar línea)'], ['Mantener el dedo', 'Menú contextual'], ['Un dedo / dos dedos', 'Desplazar / zoom'], ['Toque corto con el dedo', 'Seleccionar']]],
 ];

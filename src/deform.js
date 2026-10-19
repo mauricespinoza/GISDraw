@@ -16,6 +16,7 @@
 
 import { allTopShapes, replaceShapes } from './doc.js';
 import { flattenNodes, splitNodes } from './vector.js';
+import { nodeInto } from './tidy.js';
 
 /** Peso del arrastre a la distancia `d` del punto tomado, con radio `r`: 1 en el centro, 0 en el borde, sin escalón. */
 export function deformWeight(d, r) {
@@ -88,17 +89,31 @@ function subdivideRing(nodes, closed, center, radius, step, only = null) {
  * con ellas (Move Joined); `tol`: distancia bajo la cual dos nodos son el mismo.
  * @returns {{ base: object, moves: object[], count: number }} `count`: nodos que se mueven.
  */
-export function prepareDeform(doc, ids, center, radius, { joined = true, tol = 0.01 } = {}) {
+export function prepareDeform(doc, ids, center, radius, { joined = true, tol = 0.01, nodeTol = tol } = {}) {
   const sel = ids instanceof Set ? ids : new Set(ids);
   const step = radius / 5;
-  const all = allTopShapes(doc, { visibleOnly: false }).filter(({ layer, shape }) => shape.type === 'path' && !shape.locked && !layer.locked && shape.nodes?.length >= 2);
+  const ringsOf = (s) => [{ ring: -1, nodes: s.nodes, closed: !!s.closed }, ...(s.holes || []).map((h, i) => ({ ring: i, nodes: h, closed: true }))];
+  const withRings = (s, rings) => ({ ...s, nodes: rings[0], holes: s.holes ? rings.slice(1) : s.holes });
+  const usable = (d) => allTopShapes(d, { visibleOnly: false }).filter(({ layer, shape }) => shape.type === 'path' && !shape.locked && !layer.locked && shape.nodes?.length >= 2);
+
+  // Move Joined: las líneas que terminan SOBRE un tramo dentro del área (contactos en T de dibujos
+  // anteriores, sin nodo común) pasan a compartir ahí un nodo, para que se muevan juntas
+  if (joined) {
+    const inArea = (n) => Math.hypot(n.x - center.x, n.y - center.y) < radius;
+    const ends = (pred) =>
+      usable(doc)
+        .filter(({ shape }) => pred(shape.id) && !shape.closed)
+        .flatMap(({ shape }) => [shape.nodes[0], shape.nodes[shape.nodes.length - 1]])
+        .filter(inArea)
+        .map((n) => ({ x: n.x, y: n.y }));
+    doc = nodeInto(doc, ends((id) => !sel.has(id)), { tol: nodeTol, only: sel }).doc;
+    doc = nodeInto(doc, ends((id) => sel.has(id)), { tol: nodeTol, skip: sel }).doc;
+  }
+  const all = usable(doc);
   const targets = all.filter(({ shape }) => sel.has(shape.id)).map(({ shape }) => shape);
   if (!targets.length) return { base: doc, moves: [], count: 0 };
 
-  const ringsOf = (s) => [{ ring: -1, nodes: s.nodes, closed: !!s.closed }, ...(s.holes || []).map((h, i) => ({ ring: i, nodes: h, closed: true }))];
-  const withRings = (s, rings) => ({ ...s, nodes: rings[0], holes: s.holes ? rings.slice(1) : s.holes });
-
-  // nodos originales de la selección, para reconocer los bordes compartidos de las vecinas
+  // nodos originales de la selección, para reconocer los nodos que comparten las vecinas
   const origTarget = pointSet(targets.flatMap((s) => ringsOf(s).flatMap((r) => r.nodes)), tol);
   const map = new Map();
   for (const s of targets) map.set(s.id, withRings(s, ringsOf(s).map((r) => subdivideRing(r.nodes, r.closed, center, radius, step))));
@@ -108,15 +123,15 @@ export function prepareDeform(doc, ids, center, radius, { joined = true, tol = 0
       if (sel.has(s.id)) continue;
       const rings = ringsOf(s);
       if (!rings.some((r) => r.nodes.some((n) => origTarget(n)))) continue;
-      // solo se subdividen sus tramos que son también de la selección (ambos extremos compartidos)
-      const sub = rings.map((r) => subdivideRing(r.nodes, r.closed, center, radius, step, (i) => origTarget(r.nodes[i]) && origTarget(r.nodes[(i + 1) % r.nodes.length])));
+      // se subdividen sus tramos que salen de un nodo compartido (el borde común y el arranque de una línea en T)
+      const sub = rings.map((r) => subdivideRing(r.nodes, r.closed, center, radius, step, (i) => origTarget(r.nodes[i]) || origTarget(r.nodes[(i + 1) % r.nodes.length])));
       map.set(s.id, withRings(s, sub));
       neighbors.push(s.id);
     }
   }
   const base = replaceShapes(doc, map);
 
-  // pesos: los nodos de la selección por su distancia; los de las vecinas, solo si coinciden con uno de la selección
+  // pesos: los nodos de la selección por su distancia al punto tomado
   const moves = [];
   const selNodes = [];
   for (const s of targets) {
@@ -129,16 +144,42 @@ export function prepareDeform(doc, ids, center, radius, { joined = true, tol = 0
       }),
     );
   }
+  // vecinas: sus nodos compartidos con el mismo peso y, desde ellos, los que siguen a lo largo de su
+  // trazo mientras estén dentro del área (así no queda una punta: la vecina se curva con la selección)
   const onSel = pointSet(selNodes, tol);
   for (const id of neighbors) {
-    ringsOf(map.get(id)).forEach(({ ring, nodes }) =>
-      nodes.forEach((n, index) => {
-        const p = onSel(n);
+    ringsOf(map.get(id)).forEach(({ ring, nodes, closed }) => {
+      const n = nodes.length;
+      const done = new Set();
+      const weightOf = (j) => deformWeight(Math.hypot(nodes[j].x - center.x, nodes[j].y - center.y), radius);
+      const add = (j, w) => {
+        done.add(j);
+        moves.push({ id, ring, index: j, w, x: nodes[j].x, y: nodes[j].y, joined: true });
+      };
+      const seeds = [];
+      nodes.forEach((q, j) => {
+        const p = onSel(q);
         if (!p) return;
         const w = deformWeight(Math.hypot(p.x - center.x, p.y - center.y), radius);
-        if (w > 1e-4) moves.push({ id, ring, index, w, x: n.x, y: n.y, joined: true });
-      }),
-    );
+        if (w > 1e-4) {
+          add(j, w);
+          seeds.push(j);
+        }
+      });
+      for (const j0 of seeds) {
+        for (const dir of [1, -1]) {
+          for (let k = 1; k < n; k++) {
+            let j = j0 + dir * k;
+            if (closed) j = ((j % n) + n) % n;
+            else if (j < 0 || j >= n) break;
+            if (done.has(j)) break;
+            const w = weightOf(j);
+            if (w <= 1e-4) break;
+            add(j, w);
+          }
+        }
+      }
+    });
   }
   return { base, moves, count: moves.length };
 }

@@ -278,9 +278,9 @@ tramo con Supr, Supr, Supr. Elegir otro nodo reinicia la dirección.
 | P | Pluma / línea (clic = vértice, arrastre = curva; **las manijas Bézier se ven mientras se dibuja** —las del último nodo más vivas— y el tramo elástico ya sale curvo) |
 | Y | Polígono |
 | B | Lápiz (trazo libre simplificado y suavizado; cerrar cerca del inicio = polígono) |
-| N | **Suavizar (pincel local)**, como en Illustrator: se pasa sobre un trazo (seleccionado o el que está bajo el puntero) y solo el sector bajo el pincel se promedia, se simplifica y se rehace con curvas, con transición suave en el borde del pincel; pasar de nuevo suaviza más. Intensidad y radio en la barra de propiedades; los extremos del trazo no se mueven; un solo paso de deshacer por pasada |
+| N | **Suavizar (pincel local)**, como en Illustrator: se pasa sobre un trazo (seleccionado o el que está bajo el puntero) y solo el sector bajo el pincel se promedia, se simplifica y se rehace con curvas, con transición suave en el borde del pincel; pasar de nuevo suaviza más. Intensidad y radio en la barra de propiedades (o **la rueda del ratón** sobre el lienzo; Ctrl/Alt + rueda sigue haciendo zoom); los extremos del trazo no se mueven; un solo paso de deshacer por pasada |
 | J | **Drag**: como Nodos, pero se toma **un nodo** de una línea o polígono seleccionado y, al arrastrarlo, sus vecinos lo siguen **cada vez menos a lo largo del trazo**. Por defecto (alcance 100 %) el gradiente llega hasta los extremos de la línea, que quedan fijos, o hasta el punto opuesto de un polígono; con menos **alcance** (barra de propiedades, **[** y **]**) el movimiento es más localizado. A diferencia de Deform, que actúa por cercanía en el plano sin elegir nodo, aquí se elige el nodo y la influencia sigue el recorrido. Los nodos que otras formas comparten se arrastran igual: los de las seleccionadas siempre (Mayús + clic suma formas) y, con **Move Joined**, también los de las vecinas, sin abrir el cierre topológico. Con **Snap** activado, el nodo arrastrado se engancha (a menos de 12 px) al vértice más cercano de otra forma o de otra parte del trazo (cuadro rosado). Un solo deshacer por arrastre |
-| G | **Deform**: en las líneas o polígonos seleccionados (o el que está bajo el puntero) se toma una zona con el ratón o el lápiz y se arrastra; los nodos se mueven **en gradiente** —todo el arrastre donde se tomó, cada vez menos hacia los vecinos, nada en el borde del círculo—. El **radio** del área de influencia se ajusta en la barra de propiedades o con **[** y **]**. Los tramos largos bajo el círculo se subdividen al empezar, así una línea de pocos nodos también se curva. Mientras se arrastra, flechas violeta muestran cuánto se movió cada nodo desde su posición original. Si varias formas seleccionadas comparten nodos se mueven juntas; con **Move Joined** también las vecinas no seleccionadas mueven (y subdividen) su borde común, sin abrir el cierre topológico. Un solo paso de deshacer por arrastre |
+| G | **Deform**: en las líneas o polígonos seleccionados (o el que está bajo el puntero) se toma una zona con el ratón o el lápiz y se arrastra; los nodos se mueven **en gradiente** —todo el arrastre donde se tomó, cada vez menos hacia los vecinos, nada en el borde del círculo—. El **radio** del área de influencia se ajusta en la barra de propiedades, con **[** y **]** o con **la rueda del ratón** (Ctrl/Alt + rueda sigue haciendo zoom). Los tramos largos bajo el círculo se subdividen al empezar, así una línea de pocos nodos también se curva. Mientras se arrastra, flechas violeta muestran cuánto se movió cada nodo desde su posición original. Si varias formas seleccionadas comparten nodos se mueven juntas; con **Move Joined** también las vecinas no seleccionadas —polígonos o **líneas**, incluso una línea que termina en medio del tramo (se noda al empezar)— mueven su nodo compartido y se curvan con la selección, sin abrir el cierre topológico. Un solo paso de deshacer por arrastre |
 | \\ | Segmento · W Flecha · M Rectángulo · E Elipse (Mayús = proporcional, Alt = desde el centro) |
 | T | Texto (el cuadro se abre al soltar; Enter termina, Mayús+Enter salto de línea) · O Punto (símbolo) · I Cuentagotas (toma el estilo completo del elemento tocado —color y **grosor de trazo**, tipo de línea, relleno, opacidad—, también dentro de un grupo, y lo aplica a la selección o, sin selección, a lo próximo que se dibuje) · H Mano |
 | C | **Tijera**: corta una línea en dos o abre un polígono en el punto tocado |
@@ -564,6 +564,17 @@ entiende `mix-blend-mode`).
 | ASCII grid | elevación | — |
 | Proyecto `.gisdrawer` | sí, con sus imágenes y modelos de elevación incrustados | sí, **autocontenido**: lleva incrustados (base64) los archivos raster de sus capas (imágenes pegadas, GeoTIFF, mapas georreferenciados, DEM); además se guarda solo en el navegador |
 | **Google Drive** | cualquiera de los anteriores, elegido en Drive (Archivo → Importar → Desde Google Drive) | — |
+
+**Atajos de guardado**: **Ctrl+S** guarda al instante **en el mismo archivo**
+de la última vez (el que se abrió con Archivo → Abrir o con el que se guardó
+antes), sin preguntar; la primera vez pide dónde. **Ctrl+Mayús+S** es «Guardar
+como…». **Ctrl+S+D** (S y luego D, sin soltar Ctrl) guarda en el **mismo
+archivo de Google Drive** (sube solo el dibujo; las imágenes ya están allí).
+El archivo ligado se recuerda por proyecto, también al reabrir desde «Abrir
+reciente». En Chrome y Edge de escritorio se escribe de verdad en el mismo
+archivo; Safari, Firefox y el iPad no permiten escribir en un archivo del disco
+desde una web, y ahí Ctrl+S descarga una copia (el trabajo además queda
+guardado solo en el navegador, y Ctrl+S+D sigue guardando en Drive).
 
 **Proyectos recientes**: la app guarda sola, en el navegador, la última
 versión de los **últimos 10 proyectos** (abiertos, guardados o en los que se

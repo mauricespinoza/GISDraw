@@ -603,6 +603,18 @@ export class Editor {
   onWheel(e) {
     e.preventDefault();
     const sp = this.screenPoint(e);
+    // herramientas con radio (Suavizar, Deform): la rueda del ratón agranda o achica el círculo;
+    // Ctrl/Alt + rueda (y el pellizco del trackpad) siguen haciendo zoom, y el trackpad desplaza
+    const radiusKey = this.tool === 'deform' ? 'deformRadius' : this.tool === 'smooth' ? 'smoothRadius' : null;
+    if (radiusKey && !e.ctrlKey && !e.metaKey && !e.altKey && !this.isTrackpadWheel(e) && e.deltaY) {
+      const [lo, hi] = radiusKey === 'deformRadius' ? [10, 300] : [6, 80];
+      const cur = this.settings[radiusKey] ?? (radiusKey === 'deformRadius' ? 60 : 18);
+      const v = Math.max(lo, Math.min(hi, Math.round(cur * (e.deltaY < 0 ? 1.12 : 1 / 1.12))));
+      this.hover = { sp, wp: this.view.toWorld(...sp), brush: true };
+      if (v !== cur) this.onRadius?.(radiusKey, v);
+      this.changed();
+      return;
+    }
     // Rueda del ratón = zoom (el ajuste «Rueda: desplazar» la deja para mover
     // el mapa, y entonces Ctrl/Alt hacen zoom). El trackpad desplaza con dos
     // dedos y hace zoom con el pellizco (llega con Ctrl).
@@ -1600,6 +1612,7 @@ export class Editor {
     const prep = prepareDeform(this.doc, ids, { x: wp[0], y: wp[1] }, radius, {
       joined: this.settings.moveJoined !== false,
       tol: Math.min(this.view.mpp * 0.35, 0.5),
+      nodeTol: Math.max(this.view.mpp * 0.6, 1e-6),
     });
     if (!prep.count) {
       this.onMessage('Deform: no hay trazo dentro del área; acércate a la línea o agranda el radio ([ ])');

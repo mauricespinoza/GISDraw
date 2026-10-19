@@ -107,6 +107,32 @@ const edgeOf = (s) => flattenNodes(s.nodes, true, 0.01).filter(([x]) => x > 90 &
   ok(prep.count === 0 && applyDeform(prep, 5, 5) === prep.base, 'sin nodos en el área no cambia nada');
 }
 
+/* ---- Deform en líneas que comparten nodos (Move Joined) ---- */
+{
+  const A = line([[0, 0], [50, 0], [100, 0]]);
+  const C = line([[50, 0], [50, -80]]); // en T, comparte el nodo (50, 0)
+  const doc = docWith([A, C]);
+  const prep = prepareDeform(doc, [A.id], { x: 50, y: 0 }, 30, { joined: true, tol: 1e-6 });
+  const next = applyDeform(prep, 0, 10);
+  const c2 = get(next, C.id);
+  ok(c2.nodes[0].x === 50 && Math.abs(c2.nodes[0].y - 10) < 1e-9, 'el extremo de la línea en T sigue al nodo compartido');
+  ok(c2.nodes.length > 2 && c2.nodes[1].y > -10 && c2.nodes[1].y < 10, 'la vecina se curva junto (sin punta): su tramo se subdivide y sigue el gradiente');
+  ok(get(applyDeform(prepareDeform(doc, [A.id], { x: 50, y: 0 }, 30, { joined: false, tol: 1e-6 }), 0, 10), C.id) === C, 'sin Move Joined la vecina no se mueve');
+  // seleccionada la de la T: arrastra a A
+  const a3 = get(applyDeform(prepareDeform(doc, [C.id], { x: 50, y: -5 }, 30, { joined: true, tol: 1e-6 }), 0, 10), A.id);
+  ok(a3.nodes.some((n) => n.x === 50 && n.y > 5) && a3.nodes.length > 3, 'tomando la línea en T, la línea A se deforma con ella');
+}
+{
+  // T de un dibujo anterior: la línea termina SOBRE el tramo, sin nodo común
+  const A = line([[0, 0], [100, 0]]);
+  const C = line([[40, 0], [40, -80]]);
+  const doc = docWith([A, C]);
+  const next = applyDeform(prepareDeform(doc, [A.id], { x: 40, y: 0 }, 30, { joined: true, tol: 1e-6, nodeTol: 0.01 }), 0, 12);
+  const c2 = get(next, C.id);
+  const a2 = get(next, A.id);
+  ok(Math.abs(c2.nodes[0].y - 12) < 1e-9 && a2.nodes.some((n) => n.x === 40 && Math.abs(n.y - 12) < 1e-9), 'una T sin nodo común se noda al empezar y se mueven juntas');
+}
+
 /* ================================================================= DRAG */
 ok(dragWeight(0) === 1 && dragWeight(1) === 0 && dragWeight(0.5) > 0.4 && dragWeight(0.5) < 0.6, 'peso de Drag: 1 en el nodo, 0 al final');
 {
