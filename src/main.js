@@ -120,6 +120,7 @@ class App {
       smoothLevel: 50, // intensidad del pincel de Suavizar (%)
       smoothRadius: 18, // radio del pincel de Suavizar (px)
       deformRadius: 60, // radio de influencia de Deform (px)
+      dragReach: 100, // alcance de Drag a lo largo del trazo (%: 100 = hasta los extremos)
       gestureTaps: 'double', // dos dedos = deshacer, tres = rehacer: 'double' (dos toques) o 'single'
       fingerDraws: false,
       pencilSmooth: DEFAULT_SMOOTH, // % de suavizado del lápiz (trazo libre)
@@ -481,7 +482,7 @@ class App {
 
   buildToolbar() {
     this.toolbarEl = document.getElementById('toolbar');
-    const groups = [['select', 'node', 'lasso'], ['pen', 'polygon', 'pencil', 'smooth', 'deform', 'line', 'arrow'], ['rect', 'ellipse', 'text', 'point'], ['scissors', 'eyedropper', 'pan', 'zoom']];
+    const groups = [['select', 'node', 'drag', 'lasso'], ['pen', 'polygon', 'pencil', 'smooth', 'deform', 'line', 'arrow'], ['rect', 'ellipse', 'text', 'point'], ['scissors', 'eyedropper', 'pan', 'zoom']];
     const els = [];
     groups.forEach((g, gi) => {
       if (gi) els.push(h('div', { class: 'tsep' }));
@@ -1420,6 +1421,18 @@ class App {
 
   /** Control de suavizado (lápiz activo o trazo libre seleccionado); null si no viene al caso. */
   smoothControl() {
+    if (this.editor.tool === 'drag') {
+      // Drag: alcance del gradiente a lo largo del trazo
+      const val = h('span', { class: 'pb-u pb-val' }, `${this.settings.dragReach} %`);
+      const r = h('input', { type: 'range', class: 'pb-range pb-wide', min: 5, max: 100, step: 1, value: this.settings.dragReach, 'data-tip': 'Alcance: 100 % = el gradiente llega hasta los extremos de la línea (que quedan fijos) o al punto opuesto del polígono; menos = movimiento más localizado alrededor del nodo ([ y ])' });
+      r.addEventListener('input', () => {
+        val.textContent = `${r.value} %`;
+        this.saveSettings({ dragReach: Number(r.value) });
+      });
+      const joined = this.settings.moveJoined !== false;
+      const mj = h('button', { class: `pb-btn${joined ? ' pb-on' : ''}`, 'data-tip': 'Move Joined: arrastrar también los nodos que otras líneas y polígonos comparten (mantiene el cierre topológico)', onclick: () => (this.saveSettings({ moveJoined: !joined }), this.renderPropbar()) }, joined ? '🔗 Move Joined ✓' : '🔗 Move Joined');
+      return [h('span', { class: 'pb-l' }, 'Alcance'), r, val, mj];
+    }
     if (this.editor.tool === 'deform') {
       // Deform: radio del área de influencia (también con [ y ]) y si arrastra lo compartido
       const val = h('span', { class: 'pb-u pb-val' }, `${this.settings.deformRadius} px`);
@@ -1689,6 +1702,14 @@ class App {
     if (k === 'x') return run(() => this.setSwatchFront(this.swatchFront === 'fill' ? 'stroke' : 'fill'));
     if (k === 'd' && !e.shiftKey) return run(() => this.defaultColors());
     // [ y ]: radio de Deform y del pincel de Suavizar
+    if ((e.key === '[' || e.key === ']') && this.editor.tool === 'drag') {
+      const v = Math.max(5, Math.min(100, this.settings.dragReach + (e.key === ']' ? 10 : -10)));
+      return run(() => {
+        this.saveSettings({ dragReach: v });
+        this.renderPropbar();
+        this.message(`Alcance: ${v} %`, 1200);
+      });
+    }
     if ((e.key === '[' || e.key === ']') && (this.editor.tool === 'deform' || this.editor.tool === 'smooth')) {
       const key = this.editor.tool === 'deform' ? 'deformRadius' : 'smoothRadius';
       const [lo, hi] = key === 'deformRadius' ? [10, 300] : [6, 80];

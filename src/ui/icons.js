@@ -5,6 +5,8 @@ const s = (body) => `<svg viewBox="0 0 24 24">${body}</svg>`;
 export const ICONS = {
   select: s('<path d="M5 3l14 8-6.5 1.5L9 19z" fill="currentColor" stroke="none"/>'),
   node: s('<path d="M5 3l14 8-6.5 1.5L9 19z"/><rect x="15" y="15" width="5" height="5" fill="currentColor"/>'),
+  // Drag: un nodo tomado y arrastrado; los vecinos lo siguen cada vez menos
+  drag: s('<path d="M2 20c4.2 0 6-9 10-9s5.8 9 10 9"/><rect x="10.2" y="9.2" width="3.6" height="3.6" fill="currentColor"/><path d="M12 7.2V2.8M10.4 4.4 12 2.8l1.6 1.6" stroke-width="1.5"/><circle cx="6.6" cy="16.2" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.4" cy="16.2" r="1.3" fill="currentColor" stroke="none"/><circle cx="3.6" cy="19.6" r=".9" fill="currentColor" stroke="none"/><circle cx="20.4" cy="19.6" r=".9" fill="currentColor" stroke="none"/>'),
   lasso: s('<path d="M7 17c-3-2-4-6-1-9s10-3 12 0 0 7-5 7c-2 0-4-1-4-2"/><path d="M9 13c-1 2-1 4 1 6"/>'),
   pen: s('<path d="M12 3l6 9-6 9-6-9z"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 3v7"/>'),
   polygon: s('<path d="M4 8l7-5 9 6-3 11H6z"/><circle cx="4" cy="8" r="1.6" fill="currentColor"/><circle cx="20" cy="9" r="1.6" fill="currentColor"/>'),

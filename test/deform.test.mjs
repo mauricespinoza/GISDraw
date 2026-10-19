@@ -5,7 +5,7 @@
  *   node test/deform.test.mjs
  */
 
-import { applyDeform, deformWeight, prepareDeform } from '../src/deform.js';
+import { applyDeform, deformWeight, dragWeight, prepareDeform, prepareDrag } from '../src/deform.js';
 import { buildTopology } from '../src/smoothTopo.js';
 import { flattenNodes, makeNode, makePath } from '../src/vector.js';
 import { addShapes, allTopShapes, newDocument } from '../src/doc.js';
@@ -58,6 +58,7 @@ ok(deformWeight(3, 10) > deformWeight(6, 10) && deformWeight(6, 10) > 0, 'el pes
 /* dos polígonos que comparten borde */
 const A = poly([[0, 0], [100, 0], [100, 100], [0, 100]]);
 const B = poly([[100, 0], [200, 0], [200, 100], [100, 100]]);
+const sharedOkWith = (doc, id) => [...buildTopology(doc, [id], 1e-6).arcs.values()].some((a) => a.members.length === 2);
 const sharedOk = (doc) => {
   const topo = buildTopology(doc, [A.id], 1e-6);
   return [...topo.arcs.values()].some((a) => a.members.length === 2);
@@ -104,6 +105,47 @@ const edgeOf = (s) => flattenNodes(s.nodes, true, 0.01).filter(([x]) => x > 90 &
   const doc = docWith([A]);
   const prep = prepareDeform(doc, [A.id], { x: 1000, y: 1000 }, 40, { joined: true });
   ok(prep.count === 0 && applyDeform(prep, 5, 5) === prep.base, 'sin nodos en el área no cambia nada');
+}
+
+/* ================================================================= DRAG */
+ok(dragWeight(0) === 1 && dragWeight(1) === 0 && dragWeight(0.5) > 0.4 && dragWeight(0.5) < 0.6, 'peso de Drag: 1 en el nodo, 0 al final');
+{
+  // línea abierta: por defecto llega a los extremos, que no se mueven
+  const L = line(Array.from({ length: 11 }, (_, i) => [i * 10, 0]));
+  const doc = docWith([L]);
+  const prep = prepareDrag(doc, { id: L.id, ring: -1, index: 3 }, { reach: 1 });
+  const out = get(applyDeform(prep, 0, 30), L.id);
+  const y = out.nodes.map((n) => n.y);
+  ok(y[3] === 30, 'el nodo tomado se mueve todo');
+  ok(y[0] === 0 && y[10] === 0, 'los extremos quedan fijos');
+  ok(y[2] < 30 && y[1] < y[2] && y[4] < 30 && y[5] < y[4] && y[9] > 0, 'los demás se mueven cada vez menos hacia cada extremo');
+  ok(out.nodes.every((n, i) => n.x === i * 10), 'solo se mueven en la dirección del arrastre');
+  // más localizado
+  const loc = get(applyDeform(prepareDrag(doc, { id: L.id, ring: -1, index: 3 }, { reach: 0.3 }), 0, 30), L.id).nodes.map((n) => n.y);
+  ok(loc[3] === 30 && loc[7] === 0 && loc[8] === 0 && loc[5] < y[5], 'con menos alcance el movimiento es más localizado');
+}
+{
+  // anillo cerrado: el punto opuesto queda fijo
+  const P = poly(Array.from({ length: 8 }, (_, i) => [Math.cos((i * Math.PI) / 4) * 50, Math.sin((i * Math.PI) / 4) * 50]));
+  const doc = docWith([P]);
+  const out = get(applyDeform(prepareDrag(doc, { id: P.id, ring: -1, index: 0 }, { reach: 1 }), 20, 0), P.id);
+  ok(Math.abs(out.nodes[0].x - (P.nodes[0].x + 20)) < 1e-9 && out.nodes[4].x === P.nodes[4].x, 'polígono: el nodo opuesto queda fijo');
+  ok(Math.abs(out.nodes[1].x - out.nodes[7].x) < 1e-9 && out.nodes[2].x !== P.nodes[2].x, 'simétrico hacia ambos lados');
+}
+{
+  // dos polígonos que comparten borde: Move Joined mantiene el cierre
+  const A2 = poly([[0, 0], [50, 0], [100, 0], [100, 50], [100, 100], [50, 100], [0, 100]]);
+  const B2 = poly([[100, 0], [200, 0], [200, 100], [100, 100], [100, 50]]);
+  const doc = docWith([A2, B2]);
+  const prep = prepareDrag(doc, { id: A2.id, ring: -1, index: 3 }, { reach: 1, ids: [A2.id], joined: true, tol: 1e-6 });
+  const next = applyDeform(prep, 30, 0);
+  const b2 = get(next, B2.id);
+  ok(b2.nodes[4].x === 130, 'el nodo compartido de B sigue al de A');
+  ok(sharedOkWith(next, A2.id), 'siguen compartiendo el borde (sin gap)');
+  const off = applyDeform(prepareDrag(doc, { id: A2.id, ring: -1, index: 3 }, { reach: 1, ids: [A2.id], joined: false, tol: 1e-6 }), 30, 0);
+  ok(get(off, B2.id) === B2, 'sin Move Joined y sin seleccionarla, B no se mueve');
+  const both = applyDeform(prepareDrag(doc, { id: A2.id, ring: -1, index: 3 }, { reach: 1, ids: [A2.id, B2.id], joined: false, tol: 1e-6 }), 30, 0);
+  ok(get(both, B2.id).nodes[4].x === 130, 'seleccionadas juntas se mueven juntas aunque Move Joined esté apagado');
 }
 
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLOS` : ''}`);
