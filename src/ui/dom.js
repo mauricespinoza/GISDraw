@@ -44,7 +44,11 @@ export function slider({ min, max, step = 1, value, fmt = (v) => v, oninput, onc
   return [r, val];
 }
 
-export function num(value, onchange, { step = 'any', min, max, width } = {}) {
+/**
+ * Campo numérico. Con `slide: [mín, máx]` (o `{ min, max, log }`) lleva un
+ * deslizador emergente: `oninput` en vivo (si se da) y `onchange` al soltar.
+ */
+export function num(value, onchange, { step = 'any', min, max, width, slide, log = false, oninput } = {}) {
   const i = h('input', { type: 'number', step, value: value ?? '', inputmode: 'decimal' });
   if (min != null) i.min = min;
   if (max != null) i.max = max;
@@ -53,6 +57,20 @@ export function num(value, onchange, { step = 'any', min, max, width } = {}) {
     const v = Number(i.value.replace(',', '.'));
     if (Number.isFinite(v)) onchange(v);
   });
+  if (slide) {
+    const [lo, hi] = Array.isArray(slide) ? slide : [slide.min, slide.max];
+    const d = String(step).includes('.') ? String(step).split('.')[1].length : 0;
+    popSlider(i, {
+      min: lo,
+      max: hi,
+      step: typeof step === 'number' ? step : 'any',
+      log: log || !!slide.log,
+      get: () => Number(String(i.value).replace(',', '.')) || lo,
+      fmt: (v) => (step === 'any' ? String(Number(v.toPrecision(4))) : v.toFixed(d)),
+      oninput,
+      onchange,
+    });
+  }
   return i;
 }
 
@@ -75,3 +93,73 @@ export function check(label, value, onchange) {
 }
 
 export const btn = (label, onclick, cls = '') => h('button', { class: `btn ${cls}`, onclick, type: 'button' }, label);
+
+/**
+ * Deslizador emergente bajo un campo numérico (barra de propiedades, zoom):
+ * aparece al tocar el campo y se cierra al tocar fuera o con Enter / Esc.
+ * `oninput` en vivo, `onchange` al soltar (un solo paso en el historial).
+ * `log`: para magnitudes que crecen por factores (grosor, letra, zoom).
+ */
+const openPops = new Set();
+
+/** Cierra los deslizadores emergentes abiertos (al reconstruir un panel). */
+export function closePopSliders() {
+  for (const close of [...openPops]) close();
+}
+
+export function popSlider(input, { min, max, step = 'any', log = false, get, fmt = (v) => String(v), oninput, onchange, onclose, cls = '' }) {
+  let pop = null;
+  // min / max pueden ser funciones (el zoom cambia de rango según el modo)
+  const lo = () => (typeof min === 'function' ? min() : min);
+  const hi = () => (typeof max === 'function' ? max() : max);
+  const clamp = (v) => Math.min(hi(), Math.max(lo(), Number.isFinite(v) ? v : lo()));
+  const toR = (v) => (log ? Math.log(clamp(v)) : clamp(v));
+  const fromR = (r) => {
+    let v = log ? Math.exp(r) : r;
+    if (typeof step === 'number') v = Math.round(v / step) * step;
+    return clamp(Number(v.toPrecision(6)));
+  };
+  const outside = (e) => {
+    if (pop && !pop.contains(e.target) && e.target !== input) close();
+  };
+  function close() {
+    if (!pop) return;
+    pop.remove();
+    pop = null;
+    openPops.delete(close);
+    document.removeEventListener('pointerdown', outside, true);
+    onclose?.();
+  }
+  function open() {
+    if (pop) return;
+    const r = h('input', { type: 'range', min: toR(lo()), max: toR(hi()), step: log ? 'any' : step, value: toR(get()), 'aria-label': input.getAttribute('data-tip') || '' });
+    pop = h('div', { class: `pop-slider ${cls}`.trim() }, h('span', {}, fmt(lo())), r, h('span', {}, fmt(hi())));
+    r.addEventListener('input', () => {
+      const v = fromR(Number(r.value));
+      input.value = fmt(v);
+      oninput?.(v);
+    });
+    r.addEventListener('change', () => onchange?.(fromR(Number(r.value))));
+    document.body.append(pop);
+    const b = input.getBoundingClientRect();
+    const w = pop.offsetWidth;
+    pop.style.left = `${Math.max(6, Math.min(b.left + b.width / 2 - w / 2, window.innerWidth - w - 6))}px`;
+    pop.style.top = `${b.bottom + 6}px`;
+    document.addEventListener('pointerdown', outside, true);
+    openPops.add(close);
+  }
+  input.addEventListener('focus', open);
+  input.addEventListener('pointerdown', open);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === 'Escape') close();
+  });
+  input.addEventListener('input', () => {
+    const v = Number(String(input.value).replace(',', '.'));
+    const r = pop?.querySelector('input');
+    if (r && Number.isFinite(v)) r.value = toR(v);
+  });
+  return { open, close, get isOpen() { return !!pop; } };
+}
+
+/** ¿Hay un deslizador emergente abierto (de la clase `cls`)? Mientras tanto no se reconstruye su barra. */
+export const popSliderOpen = (cls = '') => !!document.querySelector(`.pop-slider${cls ? `.${cls}` : ''}`);

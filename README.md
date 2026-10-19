@@ -57,6 +57,7 @@ node test/freehand.test.mjs  # lápiz: suavizado 0–100 % y re-suavizado del tr
 node test/trace.test.mjs     # Trace: grafo nodado, alterno, tolerancia
 node test/geomops.test.mjs  # Join, Merge, Split y Hole
 node test/smooth.test.mjs   # pincel de Suavizar: solo el sector bajo el pincel
+node test/transform.test.mjs # Transformar (mover/rotar/escalar exactos) y lectura de coordenadas
 node test/sw.test.mjs        # todo módulo está en el precache offline
 ```
 
@@ -161,6 +162,31 @@ cliente y la clave de API (ver abajo). Con la sesión iniciada:
 
 Las curvas Bézier se aplanan al operar (la geometría booleana es de
 polilíneas). Todo se deshace con Ctrl+Z.
+
+### Deslizadores y diálogos
+
+- **Deslizadores emergentes**: al tocar un número de la barra de propiedades
+  (grosor, opacidad, tamaño de letra) o el **zoom / escala** de la barra
+  superior aparece un deslizador debajo. El cambio se ve en vivo y al soltar
+  queda **un solo paso** de deshacer. Lo mismo en los paneles: grosor y letra
+  por defecto (Lienzo), halo, ornamentos, onda (Estilo / Geología), tamaño,
+  halo, desplazamiento y repetición de etiquetas, clases de la simbología,
+  tolerancias de Trace / topología y margen, escala, rótulos de grilla,
+  ancho de leyenda y factor de símbolos del Layout. Grosores, letras y
+  escalas usan un deslizador logarítmico (fino en lo chico, rápido en lo
+  grande); siempre se puede escribir el valor exacto.
+- **Transformar…** (menú Geometría, clic secundario o **Ctrl+Mayús+M**):
+  mover (mm de papel en Canvas, metros en GIS), rotar (°) y escalar (%, uniforme
+  o no, opcionalmente también los grosores), desde el centro de la selección o
+  de cada objeto. Vista previa en vivo con el cuadro a un costado; Aplicar es
+  un solo deshacer y Cancelar / Esc no deja rastro.
+- **Diálogos propios** en lugar de los del navegador: renombrar capas, campos
+  nuevos, borrar capas o estilos, estilo de layout, Ir a coordenadas (muestra
+  en vivo cómo entendió lo escrito: grados ↔ UTM), coordenadas de un punto de
+  control, enlace y nombre en Google Drive, y el sistema de un GeoTIFF / ASCII
+  grid que no lo declara (lista de EPSG habituales en Chile —WGS84, PSAD56,
+  SAD69, SIRGAS— o un código validado). Enter acepta, Esc cancela.
+- La ayuda (atajos, gestos y versión) también está en **Archivo → Vista**.
 
 ### Trazo libre (lápiz, B): suavizado
 

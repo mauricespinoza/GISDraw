@@ -313,6 +313,13 @@ export class History {
     this.emit(meta);
   }
 
+  /** Descarta lo previsualizado desde `begin` (p. ej. al cancelar un diálogo). */
+  cancel(meta = {}) {
+    if (this.anchor) this.doc = this.anchor;
+    this.anchor = null;
+    this.emit(meta);
+  }
+
   /** Cambio que no debe deshacerse (visibilidad de capa, capa activa…). */
   silent(next, meta = {}) {
     this.doc = next;

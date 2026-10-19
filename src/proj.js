@@ -152,5 +152,36 @@ export function parseDMS(text) {
   return neg ? -v : v;
 }
 
+/**
+ * Coordenadas escritas a mano -> [E, N] UTM 19S, o null si no se entienden.
+ * Acepta «E N» en metros (UTM 19S) o «lat, lon» en grados decimales o
+ * sexagesimales (33°27'12"S, 70°40'W).
+ */
+export function parseCoordText(text) {
+  const t = String(text ?? '').trim();
+  if (!t) return null;
+  const parts = t.split(/[,;]|\s{2,}/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length === 1) {
+    const m = t.split(/\s+/).map(Number);
+    if (m.length === 2 && m.every(Number.isFinite) && Math.abs(m[0]) > 1000) return m;
+  }
+  if (parts.length < 2) return null;
+  const a = parseDMS(parts[0]);
+  const b = parseDMS(parts[1]);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  if (Math.abs(a) > 1000) return [a, b];
+  if (Math.abs(a) > 90 || Math.abs(b) > 180) return null;
+  return fromLonLat(b, a);
+}
+
+/** Texto de lo que se entendió de unas coordenadas escritas (para los diálogos). */
+export function coordPreview(text) {
+  if (!String(text ?? '').trim()) return '';
+  const xy = parseCoordText(text);
+  if (!xy) return '…';
+  const [lon, lat] = toLonLat(xy[0], xy[1]);
+  return `→ ${formatDMS(lat, true)} ${formatDMS(lon, false)} · ${formatUTM(xy[0], xy[1])} (UTM 19S)`;
+}
+
 export const formatUTM = (x, y) =>
   `${Math.round(x).toLocaleString('es-CL')} E  ${Math.round(y).toLocaleString('es-CL')} N`;
