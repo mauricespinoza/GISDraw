@@ -1124,6 +1124,16 @@ export class Editor {
           const [nx, ny] = P(nodes[i].x, nodes[i].y);
           if (Math.hypot(sp[0] - nx, sp[1] - ny) < tol) {
             if (e.altKey) return this.toggleSmooth(shape.id, ring, i);
+            // doble clic (PC) o doble toque (lápiz, dedo): esquina ↔ curva. Se detecta aquí y no con
+            // `dblclick`, que Safari no envía con el lápiz ni con el dedo.
+            const now = performance.now();
+            const lt = this.lastNodeTap;
+            if (lt && lt.id === shape.id && lt.ring === ring && lt.index === i && now - lt.t < 420) {
+              this.lastNodeTap = null;
+              this.clearLongPress();
+              return this.toggleSmooth(shape.id, ring, i);
+            }
+            this.lastNodeTap = { id: shape.id, ring, index: i, t: now };
             this.activeNode = { id: shape.id, ring, index: i };
             this.history.begin();
             this.drag = { mode: 'node', id: shape.id, ring, index: i, joined: this.settings.moveJoined === false ? [] : this.findJoined(shape, ring, i) };
@@ -1193,6 +1203,7 @@ export class Editor {
 
   nodeDrag(e, wp) {
     const d = this.drag;
+    this.lastNodeTap = null; // arrastrar no es parte de un doble toque
     let p = wp;
     const joined = d.joined || [];
     if (this.settings.snap) {
@@ -1247,23 +1258,31 @@ export class Editor {
     this.history.preview(doc);
   }
 
+  /** Esquina ↔ curva del nodo (doble clic / doble toque, Alt+clic, Mayús+C). */
   toggleSmooth(id, ring, index) {
+    let toCurve = false;
     this.history.commit(
-      mapShapes(this.doc, [id], (shape) =>
-        this.updateRing(shape, ring, (nodes) =>
+      mapShapes(this.doc, [id], (shape) => {
+        const closed = ring < 0 ? !!shape.closed : true;
+        return this.updateRing(shape, ring, (nodes) =>
           nodes.map((n, i) => {
             if (i !== index) return n;
             if (n.hIn || n.hOut) return { ...n, hIn: null, hOut: null, smooth: false };
-            const prev = nodes[(i - 1 + nodes.length) % nodes.length];
-            const next = nodes[(i + 1) % nodes.length];
-            const dx = (next.x - prev.x) / 6;
-            const dy = (next.y - prev.y) / 6;
-            return { ...n, smooth: true, hIn: { x: n.x - dx, y: n.y - dy }, hOut: { x: n.x + dx, y: n.y + dy } };
+            toCurve = true;
+            const N = nodes.length;
+            // en el extremo de un trazo abierto solo hay un vecino: la manija va hacia ese lado
+            const prev = closed ? nodes[(i - 1 + N) % N] : nodes[i - 1] || null;
+            const next = closed ? nodes[(i + 1) % N] : nodes[i + 1] || null;
+            const k = prev && next ? 1 / 6 : 1 / 3;
+            const dx = ((next || n).x - (prev || n).x) * k;
+            const dy = ((next || n).y - (prev || n).y) * k;
+            return { ...n, smooth: true, hIn: prev ? { x: n.x - dx, y: n.y - dy } : null, hOut: next ? { x: n.x + dx, y: n.y + dy } : null };
           }),
-        ),
-      ),
+        );
+      }),
     );
     this.activeNode = { id, ring, index };
+    this.onMessage(toCurve ? 'Nodo de curva: arrastra sus manijas' : 'Nodo de esquina');
     this.changed();
   }
 
@@ -1635,6 +1654,11 @@ export class Editor {
       return;
     }
     if (this.tool === 'node' && hit.shape.type === 'path') {
+      // sobre un nodo el doble clic cambia esquina ↔ curva (ya lo hizo nodeDown): no insertar otro
+      const P = (x, y) => this.view.toScreen(x, y);
+      for (const ring of [-1, ...(hit.shape.holes || []).map((_, i) => i)]) {
+        if (this.ringNodes(hit.shape, ring).some((n) => Math.hypot(sp[0] - P(n.x, n.y)[0], sp[1] - P(n.x, n.y)[1]) < 12)) return;
+      }
       const wp = this.view.toWorld(...sp);
       const near = nearestOnPath(hit.shape.nodes, hit.shape.closed, { x: wp[0], y: wp[1] });
       if (near && near.dist / this.view.mpp < 10) this.insertNode(hit.shape.id, -1, near.segIndex, near.t);
@@ -1886,7 +1910,11 @@ export class Editor {
         const last = nodes[nodes.length - 1];
         const [lx, ly] = P(last.x, last.y);
         const [hx, hy] = P(this.hover.wp[0], this.hover.wp[1]);
-        out.push(`<line x1="${r2(lx)}" y1="${r2(ly)}" x2="${r2(hx)}" y2="${r2(hy)}" stroke="${color}" stroke-width="${r2(w)}" stroke-dasharray="5 4" opacity="0.7"/>`);
+        if (last.hOut && !this.drag) {
+          // el tramo que se está por poner ya sale curvo por la manija del último nodo
+          const [cx, cy] = P(last.hOut.x, last.hOut.y);
+          out.push(`<path d="M${r2(lx)} ${r2(ly)}C${r2(cx)} ${r2(cy)} ${r2(hx)} ${r2(hy)} ${r2(hx)} ${r2(hy)}" fill="none" stroke="${color}" stroke-width="${r2(w)}" stroke-dasharray="5 4" opacity="0.7"/>`);
+        } else out.push(`<line x1="${r2(lx)}" y1="${r2(ly)}" x2="${r2(hx)}" y2="${r2(hy)}" stroke="${color}" stroke-width="${r2(w)}" stroke-dasharray="5 4" opacity="0.7"/>`);
         if (this.tool === 'polygon' && nodes.length > 1) {
           const [fx, fy] = P(nodes[0].x, nodes[0].y);
           out.push(`<line x1="${r2(hx)}" y1="${r2(hy)}" x2="${r2(fx)}" y2="${r2(fy)}" stroke="${color}" stroke-width="1" stroke-dasharray="2 4" opacity="0.6"/>`);
@@ -1896,6 +1924,17 @@ export class Editor {
       nodes.forEach((n, i) => {
         const [x, y] = P(n.x, n.y);
         out.push(`<circle cx="${r2(x)}" cy="${r2(y)}" r="${i === 0 ? 6 : 4}" fill="${i === 0 ? '#22c55e' : '#fff'}" stroke="#0f172a"/>`);
+      });
+      // manijas de curvatura de los nodos puestos (las del último, más vivas): así se ve qué se arrastra
+      nodes.forEach((n, i) => {
+        const live = i === nodes.length - 1;
+        const [x, y] = P(n.x, n.y);
+        for (const hk of ['hIn', 'hOut']) {
+          if (!n[hk]) continue;
+          const [hx, hy] = P(n[hk].x, n[hk].y);
+          out.push(`<line x1="${r2(x)}" y1="${r2(y)}" x2="${r2(hx)}" y2="${r2(hy)}" stroke="#f59e0b" stroke-width="1.5" opacity="${live ? 1 : 0.55}"/>`);
+          out.push(`<circle cx="${r2(hx)}" cy="${r2(hy)}" r="${live ? 5 : 3.5}" fill="#f59e0b" stroke="#fff" stroke-width="1.5" opacity="${live ? 1 : 0.7}"/>`);
+        }
       });
     }
 
