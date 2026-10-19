@@ -1913,3 +1913,27 @@ body {
 #input-host[data-tool='reshape'] {
   cursor: crosshair;
 }
+
+.help-card .about {
+  margin-top: 14px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.help-card .about h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--accent-ink);
+  margin: 10px 0 4px;
+}
+
+.help-card .about p {
+  margin: 2px 0;
+}
+
+.help-card .changelog {
+  margin: 0;
+  padding-left: 18px;
+}

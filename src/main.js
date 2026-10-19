@@ -28,7 +28,7 @@ import { assetMeta, packProject, referencedFiles, unpackFiles } from './io/proje
 import { forgetRecent, hasContent, listRecent, loadRecent, rememberProject } from './io/recent.js';
 import { buildTopology, simplifyArc, smoothArcLevel, smoothTopology } from './smoothTopo.js';
 import { tidyShapes } from './tidy.js';
-import { APP_VERSION } from './version.js';
+import { APP_VERSION, APP_AUTHOR, CHANGELOG } from './version.js';
 import { CANVAS_TABS, GIS_TABS, MODES, canvasDefaults, canvasFromMm, canvasRect, modeOf, normalizeCanvas } from './mode.js';
 
 const SETTINGS_KEY = 'gd.settings';
@@ -801,6 +801,10 @@ class App {
       item('Layout de impresión (PDF / SVG / PNG)…', () => this.showPanel('layout')),
       item('Zoom a todo el dibujo', () => this.zoomToShapes(allTopShapes(this.history.doc).map((x) => x.shape))),
       item(`Atajos, gestos y versión (${APP_VERSION})…`, () => this.toggleHelp(true)),
+      item('Acerca de la app…', () => {
+        this.toggleHelp(true);
+        document.getElementById('about')?.scrollIntoView({ block: 'start' });
+      }),
     ].filter(Boolean);
   }
 
@@ -2733,6 +2737,13 @@ function helpContent(close) {
       h('div', { class: 'help-head' }, h('h2', {}, 'Atajos de teclado'), h('button', { class: 'help-x', onclick: close, 'aria-label': 'Cerrar' }, '✕')),
       h('p', { class: 'hint' }, `Inspirados en Illustrator. En Mac, Ctrl es ⌘ y Alt es ⌥. Versión de la app: ${APP_VERSION}.`),
       h('div', { class: 'help-grid' }, ...SHORTCUTS.map(([title, rows]) => h('section', {}, h('h3', {}, title), h('table', {}, ...rows.map(([k, d]) => h('tr', {}, h('td', {}, h('kbd', {}, k)), h('td', {}, d))))))),
+      h('section', { class: 'about', id: 'about' },
+        h('h3', {}, 'Acerca de la app'),
+        h('p', {}, h('b', {}, 'GISDrawer'), ` ${APP_VERSION} · dibujo vectorial georreferenciado`),
+        h('p', {}, APP_AUTHOR.name, ' · ', h('a', { href: `mailto:${APP_AUTHOR.email}` }, APP_AUTHOR.email)),
+        h('h3', {}, 'Últimos cambios'),
+        h('ul', { class: 'changelog' }, ...CHANGELOG.map(([v, d]) => h('li', {}, h('b', {}, v), ` ${d}`))),
+      ),
     ),
   ];
 }
