@@ -847,6 +847,17 @@ class App {
       }
     });
     window.addEventListener('blur', () => this.hideContextMenu());
+    // el clic secundario (y mantener apretado en pantallas táctiles) nunca abre el menú del navegador:
+    // solo el de la app, y solo sobre el lienzo. Se exceptúan los campos de texto, donde el menú del
+    // sistema (copiar / pegar) hace falta. Mayús + clic secundario en Firefox lo fuerza el navegador y no se puede impedir.
+    document.addEventListener(
+      'contextmenu',
+      (e) => {
+        if (e.target.closest?.('input:not([type=range]):not([type=checkbox]):not([type=color]):not([type=button]), textarea, [contenteditable=true], [contenteditable=""]')) return;
+        e.preventDefault();
+      },
+      true,
+    );
   }
 
   hideContextMenu() {

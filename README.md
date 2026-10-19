@@ -109,6 +109,13 @@ invertir dirección, bloquear, ocultar, seleccionar lo mismo, editar nodos o
 texto, abrir Estilo/Geología/Atributos, pegar, mostrar o desbloquear todo,
 zoom y copiar las coordenadas del punto.
 
+El clic secundario (y mantener apretado en pantallas táctiles) **solo abre el
+menú de la app**, y solo sobre el lienzo: en el resto de la interfaz no sale
+el menú del navegador. Se exceptúan los campos de texto y números, donde el
+menú del sistema (copiar, pegar) hace falta. Lo único que una página no puede
+impedir es Mayús + clic secundario en Firefox, que fuerza el menú del
+navegador.
+
 El dedo **nunca dibuja**, así la palma apoyada no deja trazos. En pantallas
 táctiles sin lápiz, el botón **Dedo ✍︎** hace que el dedo dibuje. Con el
 Pencil flotando (iPad compatibles) ya se ven el snapping y la línea elástica
@@ -234,9 +241,9 @@ tramo con Supr, Supr, Supr. Elegir otro nodo reinicia la dirección.
 | Tecla | Herramienta |
 |---|---|
 | V | Selección (mover, escalar con 8 manejadores, girar; Alt+arrastre duplica; Mayús restringe) |
-| A | Nodos (mover nodos y manejadores Bézier, Alt+clic esquina/curva, doble clic o Alt+clic inserta) |
+| A | Nodos (mover nodos y manejadores Bézier, **doble clic en un nodo (PC) o doble toque (lápiz, dedo) cambia esquina ↔ curva**, también Alt+clic; doble clic sobre el trazo inserta un nodo) |
 | Q | Lazo |
-| P | Pluma / línea (clic = vértice, arrastre = curva) |
+| P | Pluma / línea (clic = vértice, arrastre = curva; **las manijas Bézier se ven mientras se dibuja** —las del último nodo más vivas— y el tramo elástico ya sale curvo) |
 | Y | Polígono |
 | B | Lápiz (trazo libre simplificado y suavizado; cerrar cerca del inicio = polígono) |
 | N | **Suavizar (pincel local)**, como en Illustrator: se pasa sobre un trazo (seleccionado o el que está bajo el puntero) y solo el sector bajo el pincel se promedia, se simplifica y se rehace con curvas, con transición suave en el borde del pincel; pasar de nuevo suaviza más. Intensidad y radio en la barra de propiedades; los extremos del trazo no se mueven; un solo paso de deshacer por pasada |
