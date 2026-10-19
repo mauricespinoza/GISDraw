@@ -57,6 +57,7 @@ node test/freehand.test.mjs  # lápiz: suavizado 0–100 % y re-suavizado del tr
 node test/trace.test.mjs     # Trace: grafo nodado, alterno, tolerancia
 node test/geomops.test.mjs  # Join, Merge, Split y Hole
 node test/smooth.test.mjs   # pincel de Suavizar: solo el sector bajo el pincel
+node test/project.test.mjs   # proyecto .gisdrawer autocontenido (imágenes incrustadas)
 node test/transform.test.mjs # Transformar (mover/rotar/escalar exactos) y lectura de coordenadas
 node test/sw.test.mjs        # todo módulo está en el precache offline
 ```
@@ -502,8 +503,19 @@ entiende `mix-blend-mode`).
 | **SVG / Illustrator** | **archivo .ai nativo**, como proyecto nuevo (una capa por capa de Illustrator, imágenes incrustadas como capas de imagen, las ocultas llegan ocultas), **PDF vectorial**, archivo .svg (una capa por capa de primer nivel) y **pegar con Ctrl+V** lo copiado en Illustrator | **lámina con un grupo por capa** (.svg) y **script de Illustrator (.jsx) que crea una capa real por capa**; copiar (Ctrl+C) deja SVG en puntos para pegar en Illustrator |
 | **FieldDraw** | proyecto `.fdproj.json`, paquete `.fdproj.zip` o GeoJSON exportado, con simbología y georreferencia | — |
 | ASCII grid | elevación | — |
-| Proyecto `.gisdrawer` | sí | sí (además se guarda solo en el navegador) |
+| Proyecto `.gisdrawer` | sí, con sus imágenes y modelos de elevación incrustados | sí, **autocontenido**: lleva incrustados (base64) los archivos raster de sus capas (imágenes pegadas, GeoTIFF, mapas georreferenciados, DEM); además se guarda solo en el navegador |
 | **Google Drive** | cualquiera de los anteriores, elegido en Drive (Archivo → Importar → Desde Google Drive) | — |
+
+**Proyecto autocontenido**: las imágenes y los modelos de elevación viven en el
+almacenamiento del navegador donde se importaron, no en el dibujo. Por eso
+**Archivo → Guardar proyecto (.gisdrawer)** y **Guardar en Google Drive** los
+incrustan dentro del mismo archivo (el peso del archivo crece con ellos; un
+mensaje dice cuántos y cuánto pesan). Al abrirlo en otro navegador u otro
+computador las imágenes aparecen y quedan guardadas ahí para la próxima vez.
+Si algún archivo no se encuentra (p. ej. una capa cuya importación falló), se
+avisa al guardar: esa capa quedaría vacía en otro equipo. Los proyectos
+guardados antes de la v28 no llevan imágenes: ábrelos en el navegador donde
+se hicieron y guárdalos de nuevo.
 
 **Simbología en QGIS (.qlr)**: se descargan `dibujo.qlr` y `dibujo.gpkg`.
 Con los dos en la misma carpeta, arrastrar el `.qlr` a QGIS (o Capa → Añadir

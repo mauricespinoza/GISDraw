@@ -24,6 +24,7 @@ import { parseQML, styleFor } from './io/qml.js';
 import { parseAsciiGrid } from './raster/dem.js';
 import { lonLatToTransform, proj4Def } from './io/crs.js';
 import { selectionSvg } from './io/illustrator.js';
+import { packProject, unpackFiles } from './io/project.js';
 import { APP_VERSION } from './version.js';
 import { CANVAS_TABS, GIS_TABS, MODES, canvasDefaults, canvasFromMm, canvasRect, modeOf, normalizeCanvas } from './mode.js';
 
@@ -350,7 +351,7 @@ class App {
       // archivos pesados (DEM, imágenes) desde IndexedDB
       for (const l of saved.layers) {
         const fid = l.settings?.fileId;
-        if (fid && !demFiles.has(fid) && !imageFiles.has(fid)) this.reloadFile(fid, l).catch(() => null);
+        if (fid && !demFiles.has(fid) && !imageFiles.has(fid)) this.reloadFile(fid).catch(() => null);
       }
     } else {
       this.history.reset(this.history.doc);
@@ -368,8 +369,8 @@ class App {
     this.panels.onShow?.(this.panels.tab);
   }
 
-  async reloadFile(fileId) {
-    const rec = await loadFile(fileId);
+  async reloadFile(fileId, known = null) {
+    const rec = known || (await loadFile(fileId));
     if (!rec) return;
     if (rec.kind === 'dem') demFiles.set(fileId, await this.buildDem(rec));
     if (rec.kind === 'image') imageFiles.set(fileId, await this.buildImage(rec));
@@ -656,7 +657,7 @@ class App {
         }
       }),
       item('Abrir proyecto (.gisdrawer)…', () => this.openProject()),
-      item('Guardar proyecto (.gisdrawer)', () => this.saveProject()),
+      item('Guardar proyecto (.gisdrawer, con imágenes incrustadas)', () => this.saveProject()),
       item(this.history.doc.driveFileId ? 'Guardar en Google Drive (actualiza el archivo)' : 'Guardar en Google Drive', () => this.saveToDrive()),
       item('Guardar en Google Drive en otra carpeta…', () => this.saveToDrive({ choose: true })),
       h('div', { class: 'mh' }, 'Importar'),
@@ -1504,7 +1505,7 @@ class App {
     if (k === 'm' && e.shiftKey) return run(() => this.transformDialog());
     if (k === 'a' && e.shiftKey) return run(() => ed.setSelection([]));
     if (k === 'a') return run(() => ed.selectAll());
-    if (k === 's') return run(() => this.saveProject());
+    if (k === 's') return run(() => this.saveProject().catch((err) => this.message(`Error: ${err.message}`, 6000)));
     if (k === 'o') return run(() => this.openProject().catch((err) => this.message(`Error: ${err.message}`, 6000)));
     if (k === 'p') return run(() => this.showPanel('layout'));
     if (k === 'j') return run(() => this.joinOrMerge());
@@ -1687,10 +1688,35 @@ class App {
     this.layout?.closeEditor?.();
   }
 
-  saveProject() {
+  /**
+   * Registro de un archivo raster para incrustarlo en el proyecto: el de
+   * IndexedDB o, si aún no se escribió allí (recién pegado, importación de PDF
+   * en curso) o falló, la imagen que está en memoria codificada como PNG.
+   */
+  async fileRecord(id) {
+    const rec = await loadFile(id);
+    if (rec?.buffer) return rec;
+    const img = imageFiles.get(id);
+    if (!img?.bitmap) return null;
+    const c = new OffscreenCanvas(img.bitmap.width, img.bitmap.height);
+    c.getContext('2d').drawImage(img.bitmap, 0, 0);
+    const blob = await c.convertToBlob({ type: 'image/png' });
+    return { kind: 'image', name: 'imagen.png', format: 'bitmap', mime: 'image/png', buffer: await blob.arrayBuffer(), bounds: [img.x0, img.y0, img.x1, img.y1] };
+  }
+
+  /** Proyecto como Blob, con sus imágenes y modelos de elevación incrustados; avisa si alguno no pudo ir. */
+  async projectBlob() {
     this.flushEdits();
+    const r = await packProject(this.history.doc, (id) => this.fileRecord(id));
+    if (r.missing.length) this.message(`Atención: no se pudo incrustar el archivo de ${r.missing.length} capa(s) (${r.missing.slice(0, 3).join(', ')}); en otro equipo esas capas quedarán vacías. Vuelve a importarlas y guarda de nuevo.`, 12000);
+    return r;
+  }
+
+  async saveProject() {
     const doc = this.history.doc;
-    download(JSON.stringify({ app: 'GISDrawer', ...doc }), `${fileBase(doc.title)}.gisdrawer`, 'application/json');
+    const r = await this.projectBlob();
+    download(r.blob, `${fileBase(doc.title)}.gisdrawer`, 'application/json');
+    if (!r.missing.length && r.count) this.message(`Proyecto guardado con ${r.count} archivo(s) raster incrustado(s) (${(r.bytes / 1048576).toFixed(1)} MB)`, 5000);
   }
 
   async openProject(file = null) {
@@ -1699,11 +1725,15 @@ class App {
     const raw = JSON.parse(await f.text());
     if (!raw.layers) throw new Error('No es un proyecto de GISDrawer');
     delete raw.app;
+    // archivos raster incrustados: se pasan a IndexedDB (para la próxima vez) y se cargan ya
+    const embedded = unpackFiles(raw);
+    for (const [id, rec] of embedded) await saveFile(id, rec);
     const doc = normalizeDoc(raw);
     if (f.driveId) doc.driveFileId = f.driveId; // abierto desde Drive: «Guardar en Drive» lo actualiza
     else delete doc.driveFileId;
     this.history.commit(doc);
-    for (const l of doc.layers) if (l.settings?.fileId) this.reloadFile(l.settings.fileId).catch(() => null);
+    for (const l of doc.layers) if (l.settings?.fileId) this.reloadFile(l.settings.fileId, embedded.get(l.settings.fileId)).catch(() => null);
+    if (embedded.size) this.message(`Proyecto abierto con ${embedded.size} archivo(s) raster incrustado(s)`, 3500);
     if (this.mode !== 'gis') this.fitCanvas();
     else this.zoomToShapes(allTopShapes(doc).map((x) => x.shape));
   }
@@ -1996,7 +2026,7 @@ class App {
       if (!n) return;
       name = /\.gisdrawer$/i.test(n) ? n : `${n}.gisdrawer`;
     }
-    const json = JSON.stringify({ app: 'GISDrawer', ...doc, driveFileId: undefined });
+    const { blob: json } = await this.projectBlob();
     this.message('Guardando en Google Drive…', 0);
     let res;
     try {
