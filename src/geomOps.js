@@ -9,8 +9,9 @@
  * de `ops.js`, para que quien llama solo confirme el cambio.
  */
 
-import { flattenNodes, flattenShape, makeNode, newId } from './vector.js';
-import { allTopShapes } from './doc.js';
+import { cloneNode, flattenNodes, flattenShape, makeNode, nearestOnPath, newId, splitNodes } from './vector.js';
+import { reshapeLine, reshapeRing, crossings } from './reshape.js';
+import { allTopShapes, findTopShape, mapShapes } from './doc.js';
 import { loadScript } from './io/loader.js';
 
 export async function loadJsts() {
@@ -268,4 +269,171 @@ export function selectedLines(doc, ids, tol = 0.05) {
     if (ids.has(shape.id) && shape.type === 'path' && !shape.closed) out.push(linePoints(shape, tol));
   }
   return out;
+}
+
+/* ====================================================================== SPLIT */
+
+/** Trazos abiertos o cerrados, desbloqueados y en capas desbloqueadas, en el orden del dibujo. */
+function editablePaths(doc, ids = null, { visibleOnly = false } = {}) {
+  const out = [];
+  for (const { layer, shape } of allTopShapes(doc, { visibleOnly })) {
+    if (shape.type !== 'path' || shape.locked || layer.locked || (ids && !ids.has(shape.id))) continue;
+    out.push(shape);
+  }
+  return out;
+}
+
+/**
+ * Corta una LÍNEA (trazo abierto) en todos los puntos donde la cruza `cutPts`
+ * (lista de puntos [x, y]). Los nodos nuevos se insertan exactamente en el
+ * cruce (las curvas se conservan) y la línea queda en tantas líneas como
+ * tramos: la primera conserva el id, las demás son copias con el mismo estilo
+ * y atributos, justo después en la capa. Devuelve null si no hay cruces
+ * interiores.
+ */
+export function splitLineAt(doc, id, cutPts, { tol = 0.05 } = {}) {
+  const found = findTopShape(doc, id);
+  const shape = found?.shape;
+  if (!shape || shape.type !== 'path' || shape.closed || shape.nodes.length < 2) return null;
+  const flat = flattenNodes(shape.nodes, false, tol).map((p) => [p[0], p[1]]);
+  const cuts = crossings(flat, cutPts, false);
+  if (!cuts.length) return null;
+  // posición de cada cruce sobre los nodos originales (tramo + parámetro de la curva)
+  const n = shape.nodes.length;
+  const pos = [];
+  for (const c of cuts) {
+    const near = nearestOnPath(shape.nodes, false, { x: c.point[0], y: c.point[1] });
+    if (!near) continue;
+    const u = near.segIndex + near.t;
+    if (u <= 1e-6 || u >= n - 1 - 1e-6) continue; // en un extremo no corta nada
+    if (!pos.some((q) => Math.abs(q - u) < 1e-6)) pos.push(u);
+  }
+  if (!pos.length) return null;
+  pos.sort((a, b) => a - b);
+  let nodes = shape.nodes.map(cloneNode);
+  let shift = 0;
+  let lastSeg = -1;
+  let lastT = 0;
+  const idx = [];
+  for (const u of pos) {
+    const seg = Math.floor(u);
+    const t = u - seg;
+    const tt = seg === lastSeg ? (t - lastT) / (1 - lastT) : t;
+    nodes = splitNodes(nodes, false, seg + shift, tt);
+    idx.push(seg + shift + 1);
+    shift++;
+    lastSeg = seg;
+    lastT = t;
+  }
+  const cutsAt = idx;
+  const bounds = [0, ...cutsAt, nodes.length - 1];
+  const pieces = [];
+  for (let i = 0; i + 1 < bounds.length; i++) {
+    const part = nodes.slice(bounds[i], bounds[i + 1] + 1).map(cloneNode);
+    if (i > 0) part[0] = { ...part[0], hIn: null };
+    if (i + 1 < bounds.length - 1) part[part.length - 1] = { ...part[part.length - 1], hOut: null };
+    if (part.length >= 2) pieces.push(part);
+  }
+  if (pieces.length < 2) return null;
+  const shapes = pieces.map((nds, i) => (i === 0 ? { ...shape, nodes: nds } : { ...JSON.parse(JSON.stringify(shape)), id: newId('p'), nodes: nds, freehand: undefined }));
+  shapes[0] = { ...shapes[0], freehand: undefined };
+  const next = {
+    ...doc,
+    layers: doc.layers.map((l) => {
+      if (l.kind !== 'vector' || !l.items.some((x) => x.id === id)) return l;
+      const items = [];
+      for (const x of l.items) {
+        if (x.id === id) items.push(...shapes);
+        else items.push(x);
+      }
+      return { ...l, items };
+    }),
+  };
+  return { doc: next, ids: shapes.map((x) => x.id) };
+}
+
+/**
+ * Split: corta con `cutPts` las formas `ids` (o, sin `ids`, todas las visibles
+ * y desbloqueadas que la línea cruza): las líneas en cada cruce y los polígonos
+ * de borde a borde. Lo que la línea no cruza se deja como está.
+ * @returns {{ doc, ids, lines, polys }|{ error }}
+ */
+export function splitShapes(J, doc, ids, cutPts, { tol = 0.05 } = {}) {
+  if (!cutPts || cutPts.length < 2) return { error: 'Falta la línea de corte' };
+  let next = doc;
+  const out = [];
+  let lines = 0;
+  let polys = 0;
+  for (const shape of editablePaths(doc, ids, { visibleOnly: !ids })) {
+    // con selección se devuelve completa (lo que no se cortó sigue seleccionado); sin selección, solo las partes nuevas
+    const keep = () => ids && out.push(shape.id);
+    if (!shape.closed) {
+      const r = splitLineAt(next, shape.id, cutPts, { tol });
+      if (r) {
+        next = r.doc;
+        out.push(...r.ids);
+        lines++;
+      } else keep();
+    } else {
+      const r = splitPolygons(J, next, new Set([shape.id]), [cutPts], { tol });
+      if (!r.error) {
+        next = r.doc;
+        out.push(...r.ids);
+        polys++;
+      } else keep();
+    }
+  }
+  if (!lines && !polys) return { error: ids ? 'El corte no cruza lo seleccionado (una línea se corta donde la cruza; un polígono, de borde a borde)' : 'La línea de corte no cruza nada' };
+  return { doc: next, ids: out, lines, polys };
+}
+
+/** Contorno de una forma como línea de corte [x, y] (un polígono vuelve al primer punto). */
+export function cutterFromShape(shape, tol = 0.05) {
+  const pts = flattenNodes(shape.nodes, !!shape.closed, tol).map((p) => [p[0], p[1]]);
+  if (shape.closed && pts.length > 1) {
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) > 1e-9) pts.push([a[0], a[1]]);
+  }
+  return pts;
+}
+
+/* =================================================================== RESHAPE */
+
+/**
+ * Reshape: el contorno de los polígonos `ids` (o líneas) se redibuja con la
+ * línea trazada `linePts`, que debe cruzarlo al menos dos veces. En un
+ * polígono, entre el primer y el último cruce se queda el trozo MAYOR
+ * (`keep: 'larger'`): si la línea sale y vuelve a entrar el polígono CRECE, y
+ * si lo atraviesa se RECORTA el lado pequeño. `keep: 'smaller'` lo invierte.
+ * Los huecos no se tocan; las curvas del contorno se aplanan (tolerancia `tol`).
+ * Sin `ids`: el primer trazo (de arriba) que la línea cruza al menos dos veces.
+ * @returns {{ doc, ids, changed }|{ error }}
+ */
+export function reshapeShapes(doc, ids, linePts, { tol = 0.05, keep = 'larger' } = {}) {
+  if (!linePts || linePts.length < 2) return { error: 'Traza una línea que cruce el contorno al menos dos veces' };
+  const cands = editablePaths(doc, ids, { visibleOnly: !ids });
+  if (!ids) cands.reverse(); // el de arriba primero
+  let next = doc;
+  const out = [];
+  for (const shape of cands) {
+    const pts = flattenNodes(shape.nodes, !!shape.closed, tol).map((p) => [p[0], p[1]]);
+    let ring = pts;
+    if (shape.closed && ring.length > 1) {
+      const a = ring[0];
+      const b = ring[ring.length - 1];
+      if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-9) ring = ring.slice(0, -1);
+    }
+    const res = shape.closed ? reshapeRing(ring, linePts, { keep }) : reshapeLine(ring, linePts);
+    if (!res) continue;
+    const nodes = res.map(([x, y]) => makeNode(x, y));
+    next = mapShapes(next, [shape.id], (s) => {
+      const { freehand, ...rest } = s;
+      return { ...rest, nodes };
+    });
+    out.push(shape.id);
+    if (!ids) break;
+  }
+  if (!out.length) return { error: 'La línea no cruza el contorno al menos dos veces (sal del polígono y vuelve a entrar, o atraviésalo)' };
+  return { doc: next, ids: out, changed: out.length };
 }

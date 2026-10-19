@@ -56,6 +56,8 @@ export const TOOLS = {
   select: { label: 'Selección', key: 'v' },
   node: { label: 'Nodos', key: 'a' },
   drag: { label: 'Drag (nodo con arrastre proporcional)', key: 'j' },
+  split: { label: 'Dividir / Split (tocar una línea que cruza, o arrastrar un corte)', key: 'u' },
+  reshape: { label: 'Reshape (redibujar el contorno con una línea)', key: 'r' },
   lasso: { label: 'Lazo', key: 'q' },
   pen: { label: 'Pluma / línea', key: 'p' },
   polygon: { label: 'Polígono', key: 'y' },
@@ -165,6 +167,8 @@ export class Editor {
     this.guides = null;
     this.activeNode = null;
     this.host.dataset.tool = tool;
+    if (tool === 'split') this.onMessage('Dividir: con una línea o polígono seleccionado, toca otra línea que lo cruce, o arrastra el corte (se ve la línea auxiliar). Sin selección corta lo que cruces', 7000);
+    if (tool === 'reshape') this.onMessage('Reshape: con el polígono (o la línea) seleccionado, arrastra una línea que salga del contorno y vuelva a entrar (crece) o lo atraviese (se recorta el lado menor; con Alt, el mayor)', 8000);
     this.changed();
   }
 
@@ -684,6 +688,10 @@ export class Editor {
         return this.deformDown(e, sp, wp);
       case 'drag':
         return this.dragDown(e, sp, wp);
+      case 'split':
+      case 'reshape':
+        this.drag = { mode: 'cutline', kind: this.tool, pts: [wp], sp0: sp, moved: false };
+        return;
       case 'pencil': {
         if (!this.ensureDrawableLayer()) return;
         const ep = this.endpointAt(sp);
@@ -853,6 +861,16 @@ export class Editor {
         return this.smoothMove(sp, wp);
       case 'deform':
         return this.deformMove(sp, wp);
+      case 'cutline': {
+        // el trazo del corte (línea auxiliar): se empieza a ver al arrastrar más de 6 px
+        if (!d.moved && Math.hypot(sp[0] - d.sp0[0], sp[1] - d.sp0[1]) < 6) return;
+        d.moved = true;
+        const last = d.pts[d.pts.length - 1];
+        if (Math.hypot(wp[0] - last[0], wp[1] - last[1]) >= this.view.mpp * 1.5) d.pts.push(wp);
+        d.end = wp;
+        this.changed();
+        return;
+      }
       case 'pen-handle': {
         const n = this.draft.nodes[this.draft.nodes.length - 1];
         if (Math.hypot(sp[0] - d.sp0[0], sp[1] - d.sp0[1]) < 4) return;
@@ -948,6 +966,21 @@ export class Editor {
         if (d.pts.length < 3) return this.changed();
         const ids = shapesInLasso(this.doc, d.pts, this.est());
         this.setSelection(e.shiftKey || this.addMode ? [...this.selection, ...ids] : ids);
+        return;
+      }
+      case 'cutline': {
+        const pts = d.pts.slice();
+        if (d.moved && d.end) pts.push(d.end);
+        this.drag = null;
+        this.changed();
+        if (d.moved && pts.length >= 2) {
+          const line = simplify(pts.map((q) => ({ x: q[0], y: q[1] })), this.view.mpp * 1.2).map((q) => [q.x, q.y]);
+          this.onCutLine?.({ kind: d.kind, pts: line, alt: e.altKey });
+        } else {
+          // un toque: Split corta lo seleccionado con la línea tocada; Reshape solo elige
+          const hit = pickShape(this.doc, sp, this.view, this.units(), 10);
+          this.onCutTouch?.({ kind: d.kind, hit: hit?.shape || null, shift: e.shiftKey || this.addMode });
+        }
         return;
       }
       case 'pen-handle':
@@ -2327,6 +2360,18 @@ export class Editor {
           out.push(`<circle cx="${r2(hx)}" cy="${r2(hy)}" r="${live ? 5 : 3.5}" fill="#f59e0b" stroke="#fff" stroke-width="1.5" opacity="${live ? 1 : 0.7}"/>`);
         }
       });
+    }
+
+    // línea auxiliar del corte (Split) o del reshape mientras se arrastra
+    if (this.drag?.mode === 'cutline' && this.drag.moved) {
+      const pts = [...this.drag.pts, this.drag.end].filter(Boolean);
+      const color = this.drag.kind === 'split' ? '#e11d48' : '#a855f7';
+      out.push(`<path d="M${pts.map((q) => P(q[0], q[1]).map(r2).join(' ')).join('L')}" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" opacity=".85"/>`);
+      out.push(`<path d="M${pts.map((q) => P(q[0], q[1]).map(r2).join(' ')).join('L')}" fill="none" stroke="${color}" stroke-width="2" stroke-dasharray="6 4" stroke-linecap="round" stroke-linejoin="round"/>`);
+      const [sx, sy] = P(pts[0][0], pts[0][1]);
+      out.push(`<circle cx="${r2(sx)}" cy="${r2(sy)}" r="4.5" fill="${color}" stroke="#fff" stroke-width="1.5"/>`);
+      const [ex, ey] = P(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+      out.push(`<circle cx="${r2(ex)}" cy="${r2(ey)}" r="4.5" fill="#fff" stroke="${color}" stroke-width="2"/>`);
     }
 
     // vista previa de creación

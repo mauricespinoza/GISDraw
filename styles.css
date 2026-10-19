@@ -1908,3 +1908,8 @@ body {
   color: var(--danger);
   border-color: #fca5a5;
 }
+
+#input-host[data-tool='split'],
+#input-host[data-tool='reshape'] {
+  cursor: crosshair;
+}
