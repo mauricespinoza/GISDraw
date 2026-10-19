@@ -5,7 +5,8 @@
  *   node test/smoothtopo.test.mjs
  */
 
-import { buildTopology, smoothArcLevel, smoothTopology } from '../src/smoothTopo.js';
+import { buildTopology, simplifyArc, smoothArcLevel, smoothTopology } from '../src/smoothTopo.js';
+import { tidyShapes } from '../src/tidy.js';
 import { smoothAlong } from '../src/smoothTool.js';
 import { flattenNodes, makeNode, makePath } from '../src/vector.js';
 import { addShapes, allTopShapes, newDocument, updateLayer } from '../src/doc.js';
@@ -177,6 +178,57 @@ const onPolyline = (p, pl, e = 1e-6) => {
   const fi = flat(i2);
   const fh = flattenNodes(o2.holes[0], true, 0.01);
   ok(fi.every((p) => onPolyline(p, [...fh, fh[0]])), 'el hueco y la isla siguen coincidiendo');
+}
+
+/* ================================================================= SIMPLIFICAR */
+{
+  // línea casi recta con ruido: se reduce y no se aleja más que la tolerancia
+  const pts = Array.from({ length: 60 }, (_, i) => [i * 5, Math.sin(i / 6) * 20 + (i % 2 ? 0.3 : -0.3)]);
+  const L = line(pts);
+  const s2 = simplifyArc(L.nodes, false, 1);
+  ok(s2 && s2.length < L.nodes.length / 3, `reduce los nodos: ${L.nodes.length} → ${s2?.length}`);
+  ok(s2[0].x === 0 && s2.at(-1).x === pts.at(-1)[0], 'los extremos se conservan');
+  const maxDev = Math.max(...pts.map(([x, y]) => onPolyline([x, y], s2.map((n) => [n.x, n.y]), 1.0001) ? 0 : 1));
+  ok(maxDev === 0, 'ningún punto original queda a más de la tolerancia');
+  ok(simplifyArc(line([[0, 0], [10, 0]]).nodes, false, 1) === null, 'una línea de dos nodos no se toca');
+  ok(simplifyArc(L.nodes, false, 1, { curves: true }).slice(1, -1).every((n) => n.hIn && n.hOut), 'con curvas, los nodos que quedan son de curva');
+
+  // dos polígonos con borde común detallado: se simplifica igual en ambos
+  const wav = Array.from({ length: 21 }, (_, i) => [100 + (i % 2) * 0.4, i * 5]);
+  const P1 = poly([[0, 0], ...wav, [0, 100]]);
+  const P2 = poly([[200, 0], [200, 100], ...wav.slice().reverse()]);
+  const doc = docWith([P1, P2]);
+  const topo = buildTopology(doc, [P1.id], TOL);
+  const next = smoothTopology(topo, doc, (nodes, closed) => simplifyArc(nodes, closed, 1));
+  const a2 = get(next, P1.id);
+  const b2 = get(next, P2.id);
+  ok(a2.nodes.length < P1.nodes.length && b2.nodes.length < P2.nodes.length, 'el borde común se simplifica en los dos');
+  ok([...buildTopology(next, [P1.id], 1e-6).arcs.values()].some((a) => a.members.length === 2), 'y lo siguen compartiendo');
+}
+
+/* ================================================================= TIDY */
+{
+  // dos polígonos dibujados a ojo: casi comparten el borde
+  const P1 = poly([[0, 0], [100.3, 0.2], [99.8, 50], [100.2, 100], [0, 100]]);
+  const P2 = poly([[100, 0], [200, 0], [200, 100], [99.9, 100.1]]); // sin nodo en (100,50)
+  const doc = docWith([P1, P2]);
+  const r = tidyShapes(doc, [P1.id, P2.id], 1);
+  ok(r.merged >= 2, `fusiona los vértices cercanos: ${r.merged}`);
+  ok(r.inserted >= 1, `inserta en el vecino el nodo que cae sobre su borde: ${r.inserted}`);
+  const a2 = get(r.doc, P1.id);
+  const b2 = get(r.doc, P2.id);
+  const key = (n) => `${n.x.toFixed(9)},${n.y.toFixed(9)}`;
+  const ka = new Set(a2.nodes.map(key));
+  const shared = b2.nodes.filter((n) => ka.has(key(n)));
+  ok(shared.length === 3, `comparten los tres nodos del borde: ${shared.length}`);
+  ok([...buildTopology(r.doc, [P1.id], 1e-9).arcs.values()].some((a) => a.members.length === 2), 'el borde común es un arco compartido');
+  ok(a2.closed && b2.closed && a2.nodes.length === 5 && b2.nodes.length === 5, 'siguen cerrados, sin nodos repetidos');
+  // umbral chico: no hace nada
+  const none = tidyShapes(doc, [P1.id, P2.id], 0.05);
+  ok(none.merged === 0 && none.inserted === 0 && none.doc === doc, 'con un umbral más chico que la separación no cambia nada');
+  // nodos del mismo trazo no se fusionan entre sí
+  const Z = line([[0, 0], [0.2, 0], [50, 0]]);
+  ok(tidyShapes(docWith([Z]), [Z.id], 1).doc === docWith([Z]) || get(tidyShapes(docWith([Z]), [Z.id], 1).doc, Z.id).nodes.length === 3, 'no colapsa nodos del mismo trazo');
 }
 
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLOS` : ''}`);

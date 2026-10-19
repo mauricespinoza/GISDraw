@@ -26,7 +26,8 @@ import { lonLatToTransform, proj4Def } from './io/crs.js';
 import { selectionSvg } from './io/illustrator.js';
 import { assetMeta, packProject, referencedFiles, unpackFiles } from './io/project.js';
 import { forgetRecent, hasContent, listRecent, loadRecent, rememberProject } from './io/recent.js';
-import { buildTopology, smoothArcLevel, smoothTopology } from './smoothTopo.js';
+import { buildTopology, simplifyArc, smoothArcLevel, smoothTopology } from './smoothTopo.js';
+import { tidyShapes } from './tidy.js';
 import { APP_VERSION } from './version.js';
 import { CANVAS_TABS, GIS_TABS, MODES, canvasDefaults, canvasFromMm, canvasRect, modeOf, normalizeCanvas } from './mode.js';
 
@@ -1006,6 +1007,8 @@ class App {
         n === 1 && sel[0].type === 'text' ? it('Editar texto', 'Doble clic', () => this.editText(sel[0])) : null,
         n === 1 && sel[0].type === 'path' ? it('Editar nodos', 'A', () => ed.setTool('node')) : null,
         it('Transformar: mover, rotar, escalar…', 'Ctrl+Mayús+M', () => this.transformDialog()),
+        paths.length ? it('Simplificar (menos nodos)…', '', () => this.simplifyDialog()) : null,
+        paths.length > 1 ? it('Tidy: compartir nodos cercanos…', '', () => this.tidyDialog()) : null,
       ]);
       groups.push([
         it('Traer al frente', 'Ctrl+Mayús+]', () => this.history.commit(arrange(doc, ed.selection, 'front'))),
@@ -1194,7 +1197,113 @@ class App {
       item('Hueco dibujando una forma (Hole)…', () => this.holeByDrawing(), g.canHoleDraw, 'Selecciona un polígono'),
       h('div', { class: 'mh' }, 'Selección'),
       item('Transformar: mover, rotar, escalar…', () => this.transformDialog(), this.editor.selection.size > 0, 'Selecciona uno o más objetos', 'Ctrl+Mayús+M'),
+      h('div', { class: 'mh' }, 'Limpieza'),
+      item('Simplificar: menos nodos, misma forma…', () => this.simplifyDialog(), g.lines.length + g.polys.length > 0, 'Selecciona líneas o polígonos'),
+      item('Tidy: compartir nodos cercanos…', () => this.tidyDialog(), g.lines.length + g.polys.length > 0, 'Selecciona las líneas o polígonos que deben compartir nodos'),
     ];
+  }
+
+  /** Unidad de las distancias de los diálogos: mm de papel en Canvas, metros en GIS. */
+  lengthUnit() {
+    const gis = this.mode === 'gis';
+    return { gis, unit: gis ? 'm' : 'mm', k: gis ? 1 : this.history.doc.refScale / 1000 };
+  }
+
+  /** Cuenta los nodos de unas formas. */
+  nodeCount(doc, ids) {
+    let n = 0;
+    for (const { shape } of allTopShapes(doc, { visibleOnly: false })) if (ids.has(shape.id) && shape.type === 'path') n += shape.nodes.length + (shape.holes || []).reduce((a, h) => a + h.length, 0);
+    return n;
+  }
+
+  /**
+   * Simplificar: menos nodos sin perder la forma. Tolerancia con deslizador y
+   * vista previa en vivo; los bordes compartidos con otras formas se
+   * simplifican igual en todas (por arcos), así no se abre el cierre.
+   */
+  async simplifyDialog() {
+    const ids = new Set(this.editor.selectedShapes().filter((s) => s.type === 'path' && !s.locked).map((s) => s.id));
+    if (!ids.size) return this.message('Selecciona líneas o polígonos para simplificar');
+    const { gis, unit, k } = this.lengthUnit();
+    const mpp = this.view.mpp;
+    const round = (v) => Number(v.toPrecision(3));
+    this.history.begin();
+    const base = this.history.doc;
+    const topo = buildTopology(base, ids, Math.min(mpp * 0.35, 0.5));
+    const before = this.nodeCount(base, ids);
+    const curvy = this.editor.selectedShapes().some((s) => s.type === 'path' && s.nodes.some((n) => n.hIn || n.hOut));
+    const run = (v) => {
+      const tol = Math.max(1e-9, Number(v.tol) * k);
+      const next = smoothTopology(topo, base, (nodes, closed) => simplifyArc(nodes, closed, tol, { curves: v.curves, flat: Math.min(tol / 4, mpp * 0.5) }));
+      this.history.preview(next);
+      this.message(`Simplificar: ${before} → ${this.nodeCount(next, ids)} nodos`, 0);
+      return next;
+    };
+    const tol0 = round((1.5 * mpp) / k);
+    const asked = askForm({
+      title: 'Simplificar',
+      hint: `Quita los nodos que no hacen falta: ningún punto del trazo se aleja más que la tolerancia. ${ids.size} forma(s), ${before} nodos.`,
+      fields: [
+        { key: 'tol', label: `Tolerancia (${unit})`, type: 'number', value: tol0, min: round((0.1 * mpp) / k), max: round((40 * mpp) / k), step: gis ? 0.01 : 0.01, unit, log: true },
+        { key: 'curves', label: 'Rehacer con curvas suaves (para trazos curvos)', type: 'check', value: curvy },
+      ],
+      ok: 'Simplificar',
+      live: true,
+      validate: (v) => (Number(v.tol) > 0 ? '' : 'La tolerancia debe ser mayor que 0.'),
+      onchange: (v) => Number(v.tol) > 0 && run(v),
+    });
+    run({ tol: tol0, curves: curvy }); // vista previa desde que se abre
+    const r = await asked;
+    if (!r) {
+      this.message('');
+      return this.history.cancel();
+    }
+    run(r);
+    this.history.end();
+    this.editor.snapDirty = true;
+    this.message(`Simplificado: ${before} → ${this.nodeCount(this.history.doc, ids)} nodos`, 4000);
+  }
+
+  /**
+   * Tidy: las líneas y polígonos seleccionados pasan a compartir sus nodos
+   * donde están a menos del umbral (fusiona vértices cercanos e inserta en
+   * cada borde los vértices del vecino que caen sobre él). Vista previa en vivo.
+   */
+  async tidyDialog() {
+    const ids = new Set(this.editor.selectedShapes().filter((s) => s.type === 'path' && !s.locked).map((s) => s.id));
+    if (ids.size < 2) return this.message('Tidy: selecciona dos o más líneas o polígonos (Mayús + clic, o el lazo)');
+    const { unit, k } = this.lengthUnit();
+    const mpp = this.view.mpp;
+    const round = (v) => Number(v.toPrecision(3));
+    this.history.begin();
+    const base = this.history.doc;
+    const run = (v) => {
+      const res = tidyShapes(base, ids, Math.max(1e-9, Number(v.tol) * k));
+      this.history.preview(res.doc);
+      this.message(`Tidy: ${res.merged} grupo(s) de nodos fusionados, ${res.inserted} nodo(s) insertados en bordes vecinos`, 0);
+      return res;
+    };
+    const tol0 = round(((this.settings.tidyPx ?? 6) * mpp) / k);
+    const asked = askForm({
+      title: 'Tidy: compartir nodos cercanos',
+      hint: 'Los nodos de formas distintas a menos del umbral se juntan en uno, y los que caen sobre el borde de una vecina se agregan a ese borde. Las curvas se conservan.',
+      fields: [{ key: 'tol', label: `Umbral de cercanía (${unit})`, type: 'number', value: tol0, min: round((0.5 * mpp) / k), max: round((80 * mpp) / k), step: 0.01, unit, log: true }],
+      ok: 'Aplicar',
+      live: true,
+      validate: (v) => (Number(v.tol) > 0 ? '' : 'El umbral debe ser mayor que 0.'),
+      onchange: (v) => Number(v.tol) > 0 && run(v),
+    });
+    run({ tol: tol0 }); // vista previa desde que se abre
+    const r = await asked;
+    if (!r) {
+      this.message('');
+      return this.history.cancel();
+    }
+    const res = run(r);
+    this.saveSettings({ tidyPx: Math.round((Number(r.tol) * k) / mpp) });
+    this.history.end();
+    this.editor.snapDirty = true;
+    this.message(res.merged + res.inserted ? `Tidy: ${res.merged} grupo(s) de nodos fusionados, ${res.inserted} insertado(s)` : 'Tidy: no había nodos a menos del umbral', 4000);
   }
 
   /**

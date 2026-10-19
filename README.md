@@ -151,6 +151,29 @@ cliente y la clave de API (ver abajo). Con la sesión iniciada:
 - El permiso es `drive.file` (más el correo y el nombre para mostrar la
   cuenta): la app solo ve los archivos que ella crea o que eliges.
 
+### Simplificar y Tidy (menú «Geometría ▾» → Limpieza, o clic secundario)
+
+- **Simplificar**: quita los nodos que no hacen falta sin perder la forma
+  (Ramer–Douglas–Peucker: ningún punto del trazo se aleja más que la
+  **tolerancia**, en mm de papel en Canvas o metros en GIS, con deslizador y
+  vista previa en vivo que cuenta los nodos antes y después). La opción
+  «Rehacer con curvas suaves» deja nodos de curva para trazos curvos. Los
+  bordes que comparten varias formas se simplifican **igual en todas** (por
+  arcos), así no se abre el cierre topológico.
+- **Tidy**: hace que las líneas y polígonos seleccionados **compartan sus
+  nodos** donde están cerca: los nodos de formas distintas a menos del
+  **umbral de cercanía** (ajustable, con vista previa) se juntan en uno, y los
+  que caen sobre el borde de una vecina se insertan en ese borde. Las curvas
+  se conservan y dos nodos del mismo trazo nunca se fusionan entre sí. Deja
+  listo el dibujo para Move Joined, Trace, Drag, Deform y el suavizado.
+
+**Insertar nodo compartido**: con la herramienta Nodos y **varias** líneas o
+polígonos seleccionados que comparten un borde (Mayús + clic o lazo), Alt +
+clic (o «Insertar al tocar») sobre ese borde, o doble clic, agrega el nodo en
+todas las formas que tienen ese mismo tramo, en el mismo punto: el nuevo nodo
+queda compartido. Con una sola forma seleccionada pasa lo mismo con las
+vecinas si Move Joined está activado.
+
 ### Join, Merge, Split y Hole (menú «Geometría ▾» y clic secundario / mantener el dedo)
 
 - **Join (Ctrl+J)**: dos o más líneas seleccionadas se encadenan en **una sola**
@@ -248,7 +271,7 @@ tramo con Supr, Supr, Supr. Elegir otro nodo reinicia la dirección.
 | Y | Polígono |
 | B | Lápiz (trazo libre simplificado y suavizado; cerrar cerca del inicio = polígono) |
 | N | **Suavizar (pincel local)**, como en Illustrator: se pasa sobre un trazo (seleccionado o el que está bajo el puntero) y solo el sector bajo el pincel se promedia, se simplifica y se rehace con curvas, con transición suave en el borde del pincel; pasar de nuevo suaviza más. Intensidad y radio en la barra de propiedades; los extremos del trazo no se mueven; un solo paso de deshacer por pasada |
-| J | **Drag**: como Nodos, pero se toma **un nodo** de una línea o polígono seleccionado y, al arrastrarlo, sus vecinos lo siguen **cada vez menos a lo largo del trazo**. Por defecto (alcance 100 %) el gradiente llega hasta los extremos de la línea, que quedan fijos, o hasta el punto opuesto de un polígono; con menos **alcance** (barra de propiedades, **[** y **]**) el movimiento es más localizado. A diferencia de Deform, que actúa por cercanía en el plano sin elegir nodo, aquí se elige el nodo y la influencia sigue el recorrido. Los nodos que otras formas comparten se arrastran igual: los de las seleccionadas siempre (Mayús + clic suma formas) y, con **Move Joined**, también los de las vecinas, sin abrir el cierre topológico. Un solo deshacer por arrastre |
+| J | **Drag**: como Nodos, pero se toma **un nodo** de una línea o polígono seleccionado y, al arrastrarlo, sus vecinos lo siguen **cada vez menos a lo largo del trazo**. Por defecto (alcance 100 %) el gradiente llega hasta los extremos de la línea, que quedan fijos, o hasta el punto opuesto de un polígono; con menos **alcance** (barra de propiedades, **[** y **]**) el movimiento es más localizado. A diferencia de Deform, que actúa por cercanía en el plano sin elegir nodo, aquí se elige el nodo y la influencia sigue el recorrido. Los nodos que otras formas comparten se arrastran igual: los de las seleccionadas siempre (Mayús + clic suma formas) y, con **Move Joined**, también los de las vecinas, sin abrir el cierre topológico. Con **Snap** activado, el nodo arrastrado se engancha (a menos de 12 px) al vértice más cercano de otra forma o de otra parte del trazo (cuadro rosado). Un solo deshacer por arrastre |
 | G | **Deform**: en las líneas o polígonos seleccionados (o el que está bajo el puntero) se toma una zona con el ratón o el lápiz y se arrastra; los nodos se mueven **en gradiente** —todo el arrastre donde se tomó, cada vez menos hacia los vecinos, nada en el borde del círculo—. El **radio** del área de influencia se ajusta en la barra de propiedades o con **[** y **]**. Los tramos largos bajo el círculo se subdividen al empezar, así una línea de pocos nodos también se curva. Mientras se arrastra, flechas violeta muestran cuánto se movió cada nodo desde su posición original. Si varias formas seleccionadas comparten nodos se mueven juntas; con **Move Joined** también las vecinas no seleccionadas mueven (y subdividen) su borde común, sin abrir el cierre topológico. Un solo paso de deshacer por arrastre |
 | \\ | Segmento · W Flecha · M Rectángulo · E Elipse (Mayús = proporcional, Alt = desde el centro) |
 | T | Texto (el cuadro se abre al soltar; Enter termina, Mayús+Enter salto de línea) · O Punto (símbolo) · I Cuentagotas (toma el estilo completo del elemento tocado —color y **grosor de trazo**, tipo de línea, relleno, opacidad—, también dentro de un grupo, y lo aplica a la selección o, sin selección, a lo próximo que se dibuje) · H Mano |
