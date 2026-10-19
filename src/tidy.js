@@ -173,10 +173,11 @@ export function tidyShapes(doc, ids, tol) {
  * nodo, exactamente en ese lugar. Es lo que hace que una línea que termina en
  * medio de otra (un contacto en T, un trazo de lápiz enganchado a un borde)
  * quede COMPARTIENDO un nodo con ella, y Move Joined, Drag y Deform la
- * arrastren junto. `exclude`: la forma recién dibujada.
+ * arrastren junto. `exclude`: la forma recién dibujada; `only` / `skip`:
+ * conjuntos de ids donde insertar o no.
  * @returns {{ doc: object, inserted: number }}
  */
-export function nodeInto(doc, points, { exclude = null, tol = 0.01 } = {}) {
+export function nodeInto(doc, points, { exclude = null, tol = 0.01, only = null, skip = null } = {}) {
   if (!points.length) return { doc, inserted: 0 };
   let minX = Infinity;
   let minY = Infinity;
@@ -191,7 +192,7 @@ export function nodeInto(doc, points, { exclude = null, tol = 0.01 } = {}) {
   const out = new Map();
   let inserted = 0;
   for (const { layer, shape } of allTopShapes(doc, { visibleOnly: false })) {
-    if (shape.id === exclude || shape.type !== 'path' || shape.locked || layer.locked) continue;
+    if (shape.id === exclude || (only && !only.has(shape.id)) || skip?.has(shape.id) || shape.type !== 'path' || shape.locked || layer.locked) continue;
     let cur = shape;
     for (const r of ringsOf(shape)) {
       let nodes = r.ring < 0 ? cur.nodes : cur.holes[r.ring];
