@@ -686,6 +686,14 @@ export class Editor {
         return this.dragDown(e, sp, wp);
       case 'pencil': {
         if (!this.ensureDrawableLayer()) return;
+        const ep = this.endpointAt(sp);
+        if (ep) {
+          // sobre el último nodo de la línea seleccionada: el trazo la continúa
+          const n = ep.atStart ? ep.shape.nodes[0] : ep.shape.nodes[ep.shape.nodes.length - 1];
+          this.drag = { mode: 'pencil', pts: [{ x: n.x, y: n.y }], startSnap: null, continues: { id: ep.shape.id, atStart: ep.atStart } };
+          this.preview = { kind: 'pencil', pts: this.drag.pts };
+          return;
+        }
         const { point, snap } = this.snapPoint(wp);
         this.drag = { mode: 'pencil', pts: [{ x: point[0], y: point[1] }], startSnap: snap };
         this.preview = { kind: 'pencil', pts: this.drag.pts };
@@ -1460,6 +1468,18 @@ export class Editor {
       return;
     }
     this.lastTap = { t: now, sp };
+    if (!this.draft && !this.cutMode && this.tool === 'pen') {
+      // tocar el último nodo de la línea seleccionada y seguir dibujando: la continúa
+      const ep = this.endpointAt(sp);
+      if (ep) {
+        const nodes = this.continuationNodes(ep.shape, ep.atStart);
+        this.draft = { nodes, snaps: nodes.map(() => null), layerId: layer.id, continues: { id: ep.shape.id, atStart: ep.atStart } };
+        this.hover = { sp, wp, snap: null };
+        this.onMessage('Continuando la línea: clic para agregar nodos, Enter para terminar');
+        this.changed();
+        return;
+      }
+    }
     if (!this.draft) this.draft = { nodes: [], snaps: [], layerId: layer.id };
     const nodes = this.draft.nodes;
     if (snap?.type === 'first' && nodes.length >= 2) {
@@ -1515,6 +1535,51 @@ export class Editor {
     this.changed();
   }
 
+  /**
+   * Extremo de una línea SELECCIONADA (abierta, sin huecos, desbloqueada) bajo el
+   * puntero, a menos de 12 px: permite seguir dibujándola con la Pluma o el
+   * Lápiz. Una línea sin seleccionar no cuenta: tocar su extremo empieza una
+   * línea nueva que comparte ese vértice (el flujo de los contactos).
+   */
+  endpointAt(sp) {
+    let best = null;
+    for (const s of this.selectedShapes()) {
+      if (s.type !== 'path' || s.closed || s.locked || s.holes?.length || s.nodes.length < 2 || inLockedLayer(this.doc, s.id)) continue;
+      for (const atStart of [false, true]) {
+        const n = atStart ? s.nodes[0] : s.nodes[s.nodes.length - 1];
+        const [x, y] = this.view.toScreen(n.x, n.y);
+        const d = Math.hypot(sp[0] - x, sp[1] - y);
+        if (d < 12 && (!best || d < best.d)) best = { shape: s, atStart, d };
+      }
+    }
+    return best;
+  }
+
+  /** Nodos de la línea en el orden en que se sigue dibujando (si se sigue desde su inicio, invertidos). */
+  continuationNodes(shape, atStart) {
+    const nodes = shape.nodes.map(cloneNode);
+    return atStart ? nodes.reverse().map((n) => ({ ...n, hIn: n.hOut ? { ...n.hOut } : null, hOut: n.hIn ? { ...n.hIn } : null })) : nodes;
+  }
+
+  /** Reemplaza la línea continuada por la versión con los nodos nuevos (mismo id, estilo y atributos). */
+  commitContinued(id, atStart, nodes, closed) {
+    const found = findTopShape(this.doc, id);
+    if (!found) return false;
+    const final = atStart ? nodes.slice().reverse().map((n) => ({ ...n, hIn: n.hOut ? { ...n.hOut } : null, hOut: n.hIn ? { ...n.hIn } : null })) : nodes;
+    const added = atStart ? final.slice(0, final.length - found.shape.nodes.length) : final.slice(found.shape.nodes.length);
+    let doc = mapShapes(this.doc, [id], (s) => {
+      const { freehand, ...rest } = s; // ya no es el trazo libre original
+      return { ...rest, nodes: final, closed: closed || s.closed };
+    });
+    if (this.settings.moveJoined !== false && added.length) {
+      doc = nodeInto(doc, added.map((n) => ({ x: n.x, y: n.y })), { exclude: id, tol: Math.max(this.view.mpp * 0.6, 1e-6) }).doc;
+    }
+    this.history.commit(doc);
+    this.snapDirty = true;
+    this.setSelection([id]);
+    return true;
+  }
+
   finishDraft(close) {
     const d = this.draft;
     this.draft = null;
@@ -1535,6 +1600,10 @@ export class Editor {
       const pts = flattenNodes(nodes, closed, Math.max(1e-3, this.view.mpp * 0.2)).map((p) => [p[0], p[1]]);
       this.setTool('select');
       this.onCut?.(mode, pts);
+      return;
+    }
+    if (d.continues && this.commitContinued(d.continues.id, d.continues.atStart, nodes, closed)) {
+      this.onMessage('Línea continuada');
       return;
     }
     const st = this.getCurrentStyle();
@@ -1750,6 +1819,25 @@ export class Editor {
     const layer = this.ensureDrawableLayer();
     if (!layer || d.pts.length < 2) return this.changed();
     const mpp = this.view.mpp;
+    if (d.continues) {
+      const found = findTopShape(this.doc, d.continues.id);
+      if (found) {
+        const more = simplify(d.pts, mpp * 0.25);
+        if (this.settings.snap && more.length > 1) {
+          const { point } = this.snapPoint([more[more.length - 1].x, more[more.length - 1].y]);
+          more[more.length - 1] = { x: point[0], y: point[1] };
+        }
+        const fresh = freehandToNodes(more, this.settings.pencilSmooth ?? DEFAULT_SMOOTH, mpp, false);
+        const base = this.continuationNodes(found.shape, d.continues.atStart);
+        const last = base[base.length - 1];
+        // el trazo nuevo arranca en el último nodo: se funden (la manija de salida es la del trazo nuevo)
+        const joint = { ...last, hOut: fresh[0].hOut, smooth: !!(last.hIn && fresh[0].hOut) };
+        if (fresh.length >= 2 && this.commitContinued(d.continues.id, d.continues.atStart, [...base.slice(0, -1), joint, ...fresh.slice(1)], false)) {
+          this.onMessage('Línea continuada');
+          return;
+        }
+      }
+    }
     // puntos originales (casi sin simplificar): de ellos sale el trazo y, después, cualquier otro nivel de suavizado
     let pts = simplify(d.pts, mpp * 0.25).map((p) => ({ x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }));
     // terminar cerca del inicio = forma cerrada
