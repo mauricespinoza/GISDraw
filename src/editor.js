@@ -1275,6 +1275,11 @@ export class Editor {
     this.changed();
   }
 
+  /**
+   * Borra el nodo activo y elige solo el vecino (el siguiente; el anterior si no
+   * hay más allá). Si se borra otra vez sin elegir otro, sigue en la misma
+   * dirección: dos borrados seguidos dejan elegido el tercero.
+   */
   deleteActiveNode() {
     const a = this.activeNode;
     if (!a) return false;
@@ -1287,8 +1292,23 @@ export class Editor {
       this.onMessage('No quedan nodos suficientes; borra la forma completa con la herramienta de selección');
       return true;
     }
+    // ¿Segundo borrado seguido? (el nodo que se borra es el que se eligió solo tras el anterior): se sigue en la misma dirección
+    const prev = this.nodeRun;
+    const consecutive = prev && prev.id === a.id && prev.ring === a.ring && prev.index === a.index;
+    let dir = consecutive ? prev.dir : 1;
+    const n = nodes.length;
+    const closed = shape.closed || a.ring >= 0;
+    const left = n - 1;
+    // vecino en la dirección: adelante es el que ocupa el lugar del borrado; en un trazo abierto sin nada más allá, se invierte
+    const pick = (d) => (d > 0 ? (a.index < n - 1 || closed ? a.index % left : -1) : a.index > 0 || closed ? (a.index - 1 + left) % left : -1);
+    let next = pick(dir);
+    if (next < 0) {
+      dir = -dir;
+      next = pick(dir);
+    }
     this.history.commit(mapShapes(this.doc, [a.id], (s) => this.updateRing(s, a.ring, (ns) => ns.filter((_, i) => i !== a.index))));
-    this.activeNode = null;
+    this.activeNode = next >= 0 ? { id: a.id, ring: a.ring, index: next } : null;
+    this.nodeRun = this.activeNode ? { ...this.activeNode, dir } : null;
     this.snapDirty = true;
     this.changed();
     return true;

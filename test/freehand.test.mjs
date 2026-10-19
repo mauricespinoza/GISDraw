@@ -4,7 +4,7 @@
  *   node test/freehand.test.mjs
  */
 
-import { DEFAULT_SMOOTH, canResmooth, freehandParams, freehandToNodes, makePath, nodesSignature, resmooth } from '../src/vector.js';
+import { DEFAULT_SMOOTH, adoptFreehand, canResmooth, canSmooth, freehandParams, freehandToNodes, makePath, nodesSignature, resmooth } from '../src/vector.js';
 
 let pass = 0;
 let fail = 0;
@@ -80,6 +80,24 @@ ok(!canResmooth(moved), 'trazo movido: ya no se re-suaviza');
 const edited = { ...shape, nodes: shape.nodes.map((n, i) => (i === 3 ? { ...n, hOut: { x: n.x + 1, y: n.y + 9 } } : n)) };
 ok(!canResmooth(edited), 'manija editada: ya no se re-suaviza');
 ok(!canResmooth(makePath(nodes)) && !canResmooth(null), 'sin datos de trazo libre: no');
+
+/* ---- suavizar cualquier línea seleccionada (no solo el trazo libre recién dibujado) ---- */
+{
+  const zig = makePath(Array.from({ length: 40 }, (_, i) => ({ x: 346000 + i * 2, y: 6297000 + (i % 2 ? 3 : -3) })).map((p) => ({ ...p, hIn: null, hOut: null, smooth: false })));
+  ok(!canResmooth(zig) && canSmooth(zig), 'una línea de pluma no es trazo libre pero sí se puede suavizar');
+  ok(!canSmooth({ ...zig, holes: [[{ x: 0, y: 0 }]] }) && !canSmooth({ ...zig, locked: true }), 'con huecos o bloqueada no se suaviza');
+  const a = adoptFreehand(zig, 0.5);
+  ok(canResmooth(a) && a.freehand.level === 0, 'se adopta como trazo libre a nivel 0');
+  const soft = resmooth(a, 80);
+  ok(soft.nodes.length < zig.nodes.length, `suavizar la reduce: ${zig.nodes.length} → ${soft.nodes.length}`);
+  const back = resmooth(adoptFreehand(soft, 0.5), 0);
+  ok(back.nodes.length === zig.nodes.length, 'a nivel 0 vuelve a su forma original');
+  const edited = { ...soft, nodes: soft.nodes.map((n, i) => (i === 3 ? { ...n, x: n.x + 5 } : n)) };
+  ok(!canResmooth(edited) && canSmooth(edited), 'editada a mano deja de ser trazo libre pero se sigue pudiendo suavizar');
+  const again = adoptFreehand(edited, 0.5);
+  ok(canResmooth(again) && again.freehand.pts.length >= soft.nodes.length, 'una línea editada se re-adopta desde su forma actual');
+  ok(adoptFreehand(a, 0.5) === a, 'un trazo libre intacto no se vuelve a adoptar');
+}
 
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLOS` : ''}`);
 if (fail) process.exit(1);

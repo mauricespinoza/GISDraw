@@ -191,13 +191,24 @@ polilíneas). Todo se deshace con Ctrl+Z.
 ### Trazo libre (lápiz, B): suavizado
 
 El control **Suavizado** (0–100 %) aparece en la barra de propiedades al usar el
-lápiz y en el panel Estilo → «Trazo libre (lápiz)». Es el suavizado **por
-defecto** de los próximos trazos (50 %, se recuerda) y, mientras un trazo libre
-recién dibujado sigue seleccionado, lo **re-suaviza en vivo** a partir de los
-puntos originales (un solo paso de deshacer). 0 % deja el trazo casi como se
-dibujó; 100 % promedia el temblor de la mano, simplifica y lo redondea sin
-lazos. Si después se mueve el trazo o se editan sus nodos, deja de poder
-re-suavizarse (el control solo cambia el valor por defecto).
+lápiz y siempre que haya **una línea o polígono seleccionado** (también en el
+panel Estilo → «Trazo libre (lápiz)»). Con el lápiz es además el suavizado
+**por defecto** de los próximos trazos (50 %, se recuerda). Sobre la selección
+**re-suaviza en vivo** (un solo paso de deshacer): un trazo libre, a partir de
+sus puntos originales; cualquier otra línea (pluma, importada, ya editada o
+movida), a partir de su forma actual, que queda como el 0 %: mover el
+deslizador la suaviza y volver a 0 % la deja como estaba. 0 % deja el trazo
+casi como se dibujó; 100 % promedia el temblor, simplifica y lo redondea sin
+lazos. Los polígonos con huecos o bloqueados no se suavizan con este control
+(sí con el pincel de Suavizar, N).
+
+### Borrar nodos
+
+Con la herramienta Nodos (A), Supr / Retroceso borra el nodo activo y **elige
+solo el vecino** (el siguiente; el anterior si no hay nada más allá en un
+trazo abierto). Si se borra otra vez sin elegir otro, sigue en la misma
+dirección: dos borrados seguidos dejan elegido el tercero, así se limpia un
+tramo con Supr, Supr, Supr. Elegir otro nodo reinicia la dirección.
 
 ## Herramientas
 

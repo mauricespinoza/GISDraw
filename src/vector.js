@@ -474,6 +474,23 @@ export function canResmooth(shape) {
   return !!(shape && shape.type === 'path' && shape.freehand && !shape.holes && shape.freehand.sig === nodesSignature(shape.nodes));
 }
 
+/** ¿Se puede suavizar con el control de Suavizado? Cualquier línea o polígono sin huecos (no solo el trazo libre recién dibujado). */
+export function canSmooth(shape) {
+  return !!(shape && shape.type === 'path' && !shape.holes?.length && !shape.locked && shape.nodes?.length >= 3) || canResmooth(shape);
+}
+
+/**
+ * Toma la geometría actual como «original» del suavizado: una línea de pluma,
+ * importada o ya editada se re-suaviza igual que un trazo libre, siempre desde
+ * su forma de antes (nivel 0 = tal cual está). `mpp`: metros por píxel de la vista.
+ */
+export function adoptFreehand(shape, mpp) {
+  if (canResmooth(shape)) return shape;
+  const pts = simplify(flattenNodes(shape.nodes, shape.closed, mpp * 0.25).map(([x, y]) => ({ x, y })), mpp * 0.1);
+  const raw = shape.closed && pts.length > 1 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) < mpp * 1e-3 ? pts.slice(0, -1) : pts;
+  return { ...shape, freehand: { pts: raw, mpp, closed: !!shape.closed, level: 0, sig: nodesSignature(shape.nodes) } };
+}
+
 /** Trazo libre con otro nivel de suavizado, a partir de los puntos originales. */
 export function resmooth(shape, level) {
   const f = shape.freehand;
