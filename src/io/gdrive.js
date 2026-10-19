@@ -238,16 +238,25 @@ export async function uploadDriveFile({ name, mimeType = 'application/octet-stre
   return res.json();
 }
 
-/** Selector de Google para elegir una carpeta de Drive. @returns {Promise<{id: string, name: string}|null>} */
-export async function pickDriveFolder({ clientId, apiKey }) {
+/**
+ * Selector de Google para elegir una carpeta de Drive (también en unidades
+ * compartidas). `startIn`: id de la carpeta donde abrir (la última usada).
+ * @returns {Promise<{id: string, name: string}|null>}
+ */
+export async function pickDriveFolder({ clientId, apiKey, startIn = null }) {
   if (!clientId) throw new Error('Falta el ID de cliente de Google (Cuenta de Google → Configuración)');
-  const tok = await ensureSignedIn(clientId);
-  await loadPicker();
+  const [tok] = await Promise.all([ensureSignedIn(clientId), loadPicker()]);
   const P = globalThis.google.picker;
   return new Promise((resolve) => {
     const view = new P.DocsView(P.ViewId.FOLDERS).setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes('application/vnd.google-apps.folder');
+    if (startIn) view.setParent(startIn);
+    const mine = new P.DocsView(P.ViewId.FOLDERS).setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes('application/vnd.google-apps.folder').setParent('root');
+    const shared = new P.DocsView(P.ViewId.FOLDERS).setEnableDrives(true).setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes('application/vnd.google-apps.folder');
     let b = new P.PickerBuilder()
       .addView(view)
+      .addView(mine)
+      .addView(shared)
+      .enableFeature(P.Feature.SUPPORT_DRIVES)
       .setOAuthToken(tok)
       .setLocale('es')
       .setTitle('Elige la carpeta de Drive donde guardar')
@@ -263,4 +272,26 @@ export async function pickDriveFolder({ clientId, apiKey }) {
     if (appId) b = b.setAppId(appId);
     b.build().setVisible(true);
   });
+}
+
+/** Crea una carpeta en Drive (dentro de `parentId`, o en «Mi unidad»). @returns {Promise<{id: string, name: string}>} */
+export async function createDriveFolder(name, parentId = null) {
+  if (!isSignedIn()) throw new Error('Inicia sesión con Google primero');
+  const meta = { name, mimeType: 'application/vnd.google-apps.folder' };
+  if (parentId) meta.parents = [parentId];
+  const res = await fetch(`${API}?supportsAllDrives=true&fields=id,name`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(meta),
+  });
+  if (!res.ok) throw new Error(`Google Drive: no se pudo crear la carpeta (error ${res.status})`);
+  return res.json();
+}
+
+/** Carpeta donde está un archivo de Drive (o null si no se puede saber). */
+export async function driveParentOf(fileId) {
+  if (!isSignedIn()) return null;
+  const res = await fetch(`${API}/${encodeURIComponent(fileId)}?fields=parents&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token.value}` } });
+  if (!res.ok) return null;
+  return (await res.json()).parents?.[0] || null;
 }

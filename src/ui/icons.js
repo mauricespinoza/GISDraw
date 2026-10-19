@@ -8,7 +8,10 @@ export const ICONS = {
   lasso: s('<path d="M7 17c-3-2-4-6-1-9s10-3 12 0 0 7-5 7c-2 0-4-1-4-2"/><path d="M9 13c-1 2-1 4 1 6"/>'),
   pen: s('<path d="M12 3l6 9-6 9-6-9z"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 3v7"/>'),
   polygon: s('<path d="M4 8l7-5 9 6-3 11H6z"/><circle cx="4" cy="8" r="1.6" fill="currentColor"/><circle cx="20" cy="9" r="1.6" fill="currentColor"/>'),
-  pencil: s('<path d="M4 20c4-1 4-6 8-8s5-5 8-8"/>'),
+  // mano que escribe con un lápiz: el trazo libre sale de la punta
+  pencil: s('<path d="M3 22c1.4-.9 2.8-.9 4.2 0s2.8.9 4.2 0" stroke-width="1.5"/><path d="M4.2 18.8l1-3.7 6.8-6.8 2.7 2.7-6.8 6.8z"/><path d="M5.2 15.1l2.7 2.7"/><path d="M11.3 8.6l2.6-2.6c.9-.9 2.4-.9 3.3 0l3 3c1.2 1.2 1.2 3.2 0 4.4l-2.5 2.5c-1.2 1.2-3 1.3-4.3.3"/><path d="M15.5 6.5l-1.6 1.6M18 8.4l-1.9 1.9"/>'),
+  // Deform: un tramo que estaba recto (punteado) empujado en arco; las flechas dicen cuánto se movió cada nodo
+  deform: s('<path d="M3 19.5h18" stroke-dasharray="1 2.2" stroke-width="1.2"/><path d="M3 19.5Q12 1.5 21 19.5"/><path d="M12 18.5v-6M10.4 14.1l1.6-1.6 1.6 1.6" stroke-width="1.4"/><path d="M7.5 18.5v-3.8M6.3 15.9l1.2-1.2 1.2 1.2M16.5 18.5v-3.8M15.3 15.9l1.2-1.2 1.2 1.2" stroke-width="1.2"/>'),
   smooth: s('<path d="M3 15c2-6 4-6 6-2s4 4 6-2 4-4 6 0" stroke-dasharray="2 2.2"/><path d="M3 18c3-3 5-3 9 0s6 1 9-2"/>'),
   line: s('<path d="M5 19L19 5"/>'),
   arrow: s('<path d="M5 19L18 6"/><path d="M11 5h8v8" fill="none"/>'),

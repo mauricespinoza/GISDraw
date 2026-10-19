@@ -69,5 +69,19 @@ const bad = await packProject(doc, async () => {
 });
 ok(bad.count === 0 && bad.missing.length === 3, 'si el almacén falla, se avisa en vez de romper');
 
+// Google Drive: los archivos ya subidos van solo como referencia (no se leen ni se codifican)
+{
+  let reads = 0;
+  const linked = { Fimg: { kind: 'image', name: 'mapa.png', mime: 'image/png', bounds: [1, 2, 3, 4], driveId: 'drv123' } };
+  const r = await packProject(doc, async (id) => (reads++, store[id] || null), { linked });
+  const raw2 = JSON.parse(await r.blob.text());
+  ok(raw2.files.Fimg.driveId === 'drv123' && !raw2.files.Fimg.buffer64, 'el archivo enlazado va como referencia a Drive');
+  ok(raw2.files.Fdem.buffer64 && reads === 2, 'los no enlazados se siguen incrustando (y el enlazado no se lee)');
+  ok(r.bytes === tif.byteLength, 'el peso cuenta solo lo incrustado');
+  const files2 = unpackFiles(raw2);
+  ok(files2.size === 1 && files2.has('Fdem'), 'al abrir, solo el incrustado viene con contenido');
+  ok(raw2.driveAssets?.Fimg?.driveId === 'drv123' && raw2.driveAssets.Fimg.bounds.join() === '1,2,3,4', 'el enlazado queda en driveAssets para bajarlo de Drive');
+}
+
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLOS` : ''}`);
 if (fail) process.exit(1);

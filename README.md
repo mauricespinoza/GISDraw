@@ -57,6 +57,7 @@ node test/freehand.test.mjs  # lápiz: suavizado 0–100 % y re-suavizado del tr
 node test/trace.test.mjs     # Trace: grafo nodado, alterno, tolerancia
 node test/geomops.test.mjs  # Join, Merge, Split y Hole
 node test/smooth.test.mjs   # pincel de Suavizar: solo el sector bajo el pincel
+node test/deform.test.mjs     # Deform: gradiente, subdivisión y nodos compartidos
 node test/smoothtopo.test.mjs # suavizado por arcos: nodos compartidos, sin perder el cierre
 node test/project.test.mjs   # proyecto .gisdrawer autocontenido (imágenes incrustadas)
 node test/transform.test.mjs # Transformar (mover/rotar/escalar exactos) y lectura de coordenadas
@@ -247,6 +248,7 @@ tramo con Supr, Supr, Supr. Elegir otro nodo reinicia la dirección.
 | Y | Polígono |
 | B | Lápiz (trazo libre simplificado y suavizado; cerrar cerca del inicio = polígono) |
 | N | **Suavizar (pincel local)**, como en Illustrator: se pasa sobre un trazo (seleccionado o el que está bajo el puntero) y solo el sector bajo el pincel se promedia, se simplifica y se rehace con curvas, con transición suave en el borde del pincel; pasar de nuevo suaviza más. Intensidad y radio en la barra de propiedades; los extremos del trazo no se mueven; un solo paso de deshacer por pasada |
+| G | **Deform**: en las líneas o polígonos seleccionados (o el que está bajo el puntero) se toma una zona con el ratón o el lápiz y se arrastra; los nodos se mueven **en gradiente** —todo el arrastre donde se tomó, cada vez menos hacia los vecinos, nada en el borde del círculo—. El **radio** del área de influencia se ajusta en la barra de propiedades o con **[** y **]**. Los tramos largos bajo el círculo se subdividen al empezar, así una línea de pocos nodos también se curva. Mientras se arrastra, flechas violeta muestran cuánto se movió cada nodo desde su posición original. Si varias formas seleccionadas comparten nodos se mueven juntas; con **Move Joined** también las vecinas no seleccionadas mueven (y subdividen) su borde común, sin abrir el cierre topológico. Un solo paso de deshacer por arrastre |
 | \\ | Segmento · W Flecha · M Rectángulo · E Elipse (Mayús = proporcional, Alt = desde el centro) |
 | T | Texto (el cuadro se abre al soltar; Enter termina, Mayús+Enter salto de línea) · O Punto (símbolo) · I Cuentagotas · H Mano |
 | C | **Tijera**: corta una línea en dos o abre un polígono en el punto tocado |
@@ -530,6 +532,24 @@ entiende `mix-blend-mode`).
 | ASCII grid | elevación | — |
 | Proyecto `.gisdrawer` | sí, con sus imágenes y modelos de elevación incrustados | sí, **autocontenido**: lleva incrustados (base64) los archivos raster de sus capas (imágenes pegadas, GeoTIFF, mapas georreferenciados, DEM); además se guarda solo en el navegador |
 | **Google Drive** | cualquiera de los anteriores, elegido en Drive (Archivo → Importar → Desde Google Drive) | — |
+
+**Proyectos recientes**: la app guarda sola, en el navegador, la última
+versión de los **últimos 10 proyectos** (abiertos, guardados o en los que se
+trabajó). **Archivo → Abrir reciente…** los lista (nombre, fecha, origen y
+cantidad de objetos) y abre el elegido; la ✕ lo quita de la lista. Al abrir la
+app se abre **el último proyecto en el que se trabajó**, con sus imágenes.
+«Nuevo» deja el actual en la lista.
+
+**Google Drive**: la primera vez que se guarda un proyecto en Drive (o con
+«Guardar en Google Drive en otra carpeta…») se **elige la carpeta** —el
+selector se abre en la última usada, con pestañas «Mi unidad» y unidades
+compartidas— y el nombre; después «Guardar en Google Drive» actualiza ese
+mismo archivo. Para que sea rápido, las imágenes y modelos de elevación **se
+suben una sola vez**, como archivos binarios (sin base64) en una carpeta
+«… – imágenes (GISDrawer)» junto al proyecto, y cada guardado sube solo el
+dibujo con sus referencias (suele ser poco). Al abrir el proyecto desde Drive en
+otro equipo, las imágenes que no estén ahí se bajan solas. Guardar en archivo
+(.gisdrawer) sigue incrustándolo todo.
 
 **Proyecto autocontenido**: las imágenes y los modelos de elevación viven en el
 almacenamiento del navegador donde se importaron, no en el dibujo. Por eso

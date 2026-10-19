@@ -7,6 +7,12 @@
  *
  * Formato: el JSON de siempre más `files: { <id>: { …registro, buffer64 } }`.
  * Un proyecto sin `files` (versiones anteriores) se abre como siempre.
+ *
+ * En Google Drive, para que guardar sea rápido, los archivos raster se suben
+ * UNA vez como archivos binarios aparte (en una carpeta junto al proyecto) y
+ * el proyecto solo lleva su referencia: `files: { <id>: { …metadatos,
+ * driveId } }`. Así cada guardado sube solo el JSON del dibujo, sin volver a
+ * codificar ni subir las imágenes. Al abrirlo en otro equipo se bajan de Drive.
  */
 
 const CHUNK = 0x8000;
@@ -42,13 +48,19 @@ export function referencedFiles(doc) {
  * `{ kind, name, buffer, … }` del archivo (o null si no se encuentra).
  * @returns {Promise<{ blob: Blob, count: number, bytes: number, missing: string[] }>} `missing`: capas cuyo archivo no se pudo incrustar.
  */
-export async function packProject(doc, getRec) {
+export async function packProject(doc, getRec, { linked = {} } = {}) {
   const head = JSON.stringify({ app: 'GISDrawer', ...doc, driveFileId: undefined, files: undefined });
   const parts = [head.slice(0, -1), ',"files":{'];
   const missing = [];
   let count = 0;
   let bytes = 0;
   for (const [id, layerName] of referencedFiles(doc)) {
+    // ya está en Drive: solo la referencia (sin leer ni codificar el archivo)
+    if (linked[id]?.driveId) {
+      parts.push(`${count ? ',' : ''}${JSON.stringify(id)}:${JSON.stringify(linked[id])}`);
+      count++;
+      continue;
+    }
     let rec = null;
     try {
       rec = await getRec(id);
@@ -69,16 +81,27 @@ export async function packProject(doc, getRec) {
 }
 
 /**
- * Saca los archivos incrustados de un proyecto leído (`raw.files`), los
- * devuelve como registros listos para guardar en IndexedDB y deja `raw` sin
- * ellos. @returns {Map<string, object>} id → registro
+ * Saca los archivos de un proyecto leído (`raw.files`) y deja `raw` sin
+ * ellos. Los incrustados vuelven como registros listos para guardar en
+ * IndexedDB; los enlazados a Drive se dejan en `raw.driveAssets` (id →
+ * metadatos con `driveId`) para bajarlos si en este equipo no están.
+ * @returns {Map<string, object>} id → registro (solo los incrustados)
  */
 export function unpackFiles(raw) {
   const out = new Map();
+  const linked = { ...(raw.driveAssets || {}) };
   for (const [id, rec] of Object.entries(raw.files || {})) {
     const { buffer64, ...meta } = rec || {};
     if (typeof buffer64 === 'string') out.set(id, { ...meta, buffer: fromBase64(buffer64) });
+    else if (meta.driveId) linked[id] = meta;
   }
   delete raw.files;
+  if (Object.keys(linked).length) raw.driveAssets = linked;
   return out;
+}
+
+/** Metadatos de un registro para guardarlo como referencia a Drive (sin el contenido). */
+export function assetMeta(rec, driveId) {
+  const { buffer, ...meta } = rec;
+  return { ...meta, driveId };
 }
