@@ -167,6 +167,14 @@ cliente y la clave de API (ver abajo). Con la sesión iniciada:
   se conservan y dos nodos del mismo trazo nunca se fusionan entre sí. Deja
   listo el dibujo para Move Joined, Trace, Drag, Deform y el suavizado.
 
+**Líneas que se tocan (Move Joined)**: con Move Joined activado, al dibujar
+(pluma, polígono, lápiz, segmento, flecha) un nodo que queda por snap **sobre el
+tramo** de otra línea o polígono —un contacto que termina en medio de otro, en
+T, o un trazo de lápiz enganchado a un borde— se inserta también como nodo de
+esa otra forma, en el mismo punto. Así comparten el nodo de verdad y Nodos,
+Drag y Deform los mueven juntos (antes solo compartían si el snap caía justo en
+un vértice). Para dibujos anteriores, **Tidy** agrega esos nodos compartidos.
+
 **Insertar nodo compartido**: con la herramienta Nodos y **varias** líneas o
 polígonos seleccionados que comparten un borde (Mayús + clic o lazo), Alt +
 clic (o «Insertar al tocar») sobre ese borde, o doble clic, agrega el nodo en

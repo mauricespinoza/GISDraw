@@ -166,3 +166,72 @@ export function tidyShapes(doc, ids, tol) {
   }
   return { doc: out.size ? replaceShapes(doc, out) : doc, merged, inserted };
 }
+
+/**
+ * Nodado al dibujar: cada punto de `points` que cae SOBRE el trazo de otra
+ * forma (a menos de `tol`, lejos de sus nodos) se inserta en ese trazo como
+ * nodo, exactamente en ese lugar. Es lo que hace que una línea que termina en
+ * medio de otra (un contacto en T, un trazo de lápiz enganchado a un borde)
+ * quede COMPARTIENDO un nodo con ella, y Move Joined, Drag y Deform la
+ * arrastren junto. `exclude`: la forma recién dibujada.
+ * @returns {{ doc: object, inserted: number }}
+ */
+export function nodeInto(doc, points, { exclude = null, tol = 0.01 } = {}) {
+  if (!points.length) return { doc, inserted: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of points) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  const out = new Map();
+  let inserted = 0;
+  for (const { layer, shape } of allTopShapes(doc, { visibleOnly: false })) {
+    if (shape.id === exclude || shape.type !== 'path' || shape.locked || layer.locked) continue;
+    let cur = shape;
+    for (const r of ringsOf(shape)) {
+      let nodes = r.ring < 0 ? cur.nodes : cur.holes[r.ring];
+      // descarte rápido por caja (con las manijas)
+      let bx0 = Infinity;
+      let by0 = Infinity;
+      let bx1 = -Infinity;
+      let by1 = -Infinity;
+      for (const n of nodes) {
+        for (const q of [n, n.hIn, n.hOut]) {
+          if (!q) continue;
+          bx0 = Math.min(bx0, q.x);
+          bx1 = Math.max(bx1, q.x);
+          by0 = Math.min(by0, q.y);
+          by1 = Math.max(by1, q.y);
+        }
+      }
+      if (bx0 > maxX + tol || bx1 < minX - tol || by0 > maxY + tol || by1 < minY - tol) continue;
+      const adds = new Map();
+      for (const p of points) {
+        if (nodes.some((m) => Math.hypot(m.x - p.x, m.y - p.y) <= tol)) continue; // ya comparten un nodo
+        const near = nearestOnPath(nodes, r.closed, p);
+        if (!near || near.dist > tol || near.t <= 1e-6 || near.t >= 1 - 1e-6) continue;
+        const list = adds.get(near.segIndex) || [];
+        if (!list.some((a) => Math.hypot(a.x - p.x, a.y - p.y) <= 1e-9)) list.push({ t: near.t, x: p.x, y: p.y });
+        adds.set(near.segIndex, list);
+      }
+      if (!adds.size) continue;
+      for (const seg of [...adds.keys()].sort((a, b) => b - a)) {
+        let prevT = 1;
+        for (const a of adds.get(seg).sort((u, v) => v.t - u.t)) {
+          nodes = splitNodes(nodes, r.closed, seg, a.t / prevT);
+          nodes[seg + 1] = shiftNode(nodes[seg + 1], a.x, a.y);
+          prevT = a.t;
+          inserted++;
+        }
+      }
+      cur = r.ring < 0 ? { ...cur, nodes } : { ...cur, holes: cur.holes.map((h, i) => (i === r.ring ? nodes : h)) };
+    }
+    if (cur !== shape) out.set(shape.id, cur);
+  }
+  return { doc: out.size ? replaceShapes(doc, out) : doc, inserted };
+}
