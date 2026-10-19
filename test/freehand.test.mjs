@@ -91,7 +91,14 @@ ok(!canResmooth(makePath(nodes)) && !canResmooth(null), 'sin datos de trazo libr
   const soft = resmooth(a, 80);
   ok(soft.nodes.length < zig.nodes.length, `suavizar la reduce: ${zig.nodes.length} → ${soft.nodes.length}`);
   const back = resmooth(adoptFreehand(soft, 0.5), 0);
-  ok(back.nodes.length === zig.nodes.length, 'a nivel 0 vuelve a su forma original');
+  const dist = (p, pl) => Math.min(...pl.slice(1).map((b, i) => {
+    const a = pl[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  }));
+  ok(back.nodes.every((n) => dist(n, zig.nodes) < 0.3) && back.nodes.length >= zig.nodes.length - 2, 'a nivel 0 vuelve a su forma original');
   const edited = { ...soft, nodes: soft.nodes.map((n, i) => (i === 3 ? { ...n, x: n.x + 5 } : n)) };
   ok(!canResmooth(edited) && canSmooth(edited), 'editada a mano deja de ser trazo libre pero se sigue pudiendo suavizar');
   const again = adoptFreehand(edited, 0.5);

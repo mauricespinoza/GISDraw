@@ -5,33 +5,10 @@
  * Pasar varias veces suaviza más.
  */
 
-import { curveThrough, flattenNodes, relaxPoints, simplify } from './vector.js';
+import { curveThrough, flattenNodes, relaxPoints, resamplePolyline as resample, simplify } from './vector.js';
 
 /** Puntos {x, y} de los nodos con las curvas aplanadas (las utilidades de vector.js trabajan con {x, y}). */
 const flatPts = (nodes, closed, tol) => flattenNodes(nodes, closed, tol).map(([x, y]) => ({ x, y }));
-
-/** Puntos a intervalos regulares `step` a lo largo de la polilínea (el último punto original se conserva en un trazo abierto). */
-function resample(pts, step, closed) {
-  const ring = closed ? [...pts, pts[0]] : pts;
-  const out = [{ x: ring[0].x, y: ring[0].y }];
-  let carry = 0; // lo recorrido desde el último punto puesto
-  for (let i = 0; i + 1 < ring.length; i++) {
-    const a = ring[i];
-    const b = ring[i + 1];
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    let at = step - carry;
-    while (at <= len) {
-      out.push({ x: a.x + ((b.x - a.x) * at) / len, y: a.y + ((b.y - a.y) * at) / len });
-      at += step;
-    }
-    carry = len - (at - step);
-  }
-  const last = ring[ring.length - 1];
-  if (closed) {
-    if (out.length > 1 && Math.hypot(out[out.length - 1].x - out[0].x, out[out.length - 1].y - out[0].y) < step * 0.5) out.pop();
-  } else out.push({ x: last.x, y: last.y });
-  return out;
-}
 
 /**
  * Suavizado con peso: los puntos se vuelven a muestrear a intervalos

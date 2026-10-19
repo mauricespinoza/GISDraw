@@ -25,6 +25,7 @@ import { parseAsciiGrid } from './raster/dem.js';
 import { lonLatToTransform, proj4Def } from './io/crs.js';
 import { selectionSvg } from './io/illustrator.js';
 import { packProject, unpackFiles } from './io/project.js';
+import { buildTopology, smoothArcLevel, smoothTopology } from './smoothTopo.js';
 import { APP_VERSION } from './version.js';
 import { CANVAS_TABS, GIS_TABS, MODES, canvasDefaults, canvasFromMm, canvasRect, modeOf, normalizeCanvas } from './mode.js';
 
@@ -1299,7 +1300,14 @@ class App {
     if (!targets.length) return;
     if (!final && !this.history.anchor) this.history.begin();
     const base = this.history.anchor || this.history.doc;
-    const next = mapShapes(base, targets.map((s) => s.id), (s) => resmooth(adoptFreehand(s, this.view.mpp), level));
+    const ids = targets.map((s) => s.id);
+    // nodos compartidos con otras líneas o polígonos (misma tolerancia que Move Joined): se suavizan por arcos, sin romper el cierre
+    const key = ids.join();
+    if (this.smoothTopoCache?.base !== base || this.smoothTopoCache.key !== key) this.smoothTopoCache = { base, key, topo: buildTopology(base, ids, Math.min(this.view.mpp * 0.35, 0.5)) };
+    const topo = this.smoothTopoCache.topo;
+    const next = topo.sharesNodes
+      ? smoothTopology(topo, base, (nodes, closed) => smoothArcLevel(nodes, closed, level, this.view.mpp))
+      : mapShapes(base, ids, (s) => resmooth(adoptFreehand(s, this.view.mpp), level));
     if (final) {
       if (this.history.anchor) {
         this.history.preview(next);
