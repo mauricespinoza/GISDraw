@@ -1595,7 +1595,7 @@ class App {
         this.saveSettings({ dragReach: Number(r.value) });
       });
       const joined = this.settings.moveJoined !== false;
-      const mj = h('button', { class: `pb-btn${joined ? ' pb-on' : ''}`, 'data-tip': 'Move Joined: arrastrar también los nodos que otras líneas y polígonos comparten (mantiene el cierre topológico)', onclick: () => (this.saveSettings({ moveJoined: !joined }), this.renderPropbar()) }, joined ? '🔗 Move Joined ✓' : '🔗 Move Joined');
+      const mj = h('button', { class: `pb-btn${joined ? ' pb-on' : ''}`, 'data-tip': 'Move Joined: arrastrar también los nodos que otras líneas y polígonos comparten (mantiene el cierre topológico)', onclick: () => (this.saveSettings({ moveJoined: !joined }), this.renderPropbar()) }, joined ? 'Move Joined ✓' : 'Move Joined');
       return [h('span', { class: 'pb-l' }, 'Alcance'), r, val, mj];
     }
     if (this.editor.tool === 'deform') {
@@ -1608,7 +1608,7 @@ class App {
         this.editor.changed();
       });
       const joined = this.settings.moveJoined !== false;
-      const mj = h('button', { class: `pb-btn${joined ? ' pb-on' : ''}`, 'data-tip': 'Move Joined: arrastrar también los nodos que otras líneas y polígonos comparten con la selección (mantiene el cierre topológico)', onclick: () => (this.saveSettings({ moveJoined: !joined }), this.renderPropbar()) }, joined ? '🔗 Move Joined ✓' : '🔗 Move Joined');
+      const mj = h('button', { class: `pb-btn${joined ? ' pb-on' : ''}`, 'data-tip': 'Move Joined: arrastrar también los nodos que otras líneas y polígonos comparten con la selección (mantiene el cierre topológico)', onclick: () => (this.saveSettings({ moveJoined: !joined }), this.renderPropbar()) }, joined ? 'Move Joined ✓' : 'Move Joined');
       return [h('span', { class: 'pb-l' }, 'Radio'), r, val, mj];
     }
     if (this.editor.tool === 'smooth') {
@@ -2722,7 +2722,7 @@ const SHORTCUTS = [
     ['Ctrl+7 / Ctrl+Alt+7', 'Máscara de recorte / liberar'], ['Ctrl+] / Ctrl+[', 'Adelante / atrás (Mayús: al frente / al fondo)'],
     ['Ctrl+2 / Ctrl+Alt+2', 'Bloquear / desbloquear todo'], ['Ctrl+3 / Ctrl+Alt+3', 'Ocultar / mostrar todo'], ['Mayús+C', 'Nodo esquina ↔ curva'],
   ]],
-  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón 🔗)'], ['Guías (📐)', 'Alinear con el nivel o la vertical de otros vértices, aunque estén lejos'], ['Mayús', 'Restringir ángulo o proporción']]],
+  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón de eslabones)'], ['Guías', 'Alinear con el nivel o la vertical de otros vértices, aunque estén lejos'], ['Mayús', 'Restringir ángulo o proporción']]],
   ['Tablet (táctil)', [['Dos dedos, dos toques', 'Deshacer'], ['Tres dedos, dos toques', 'Rehacer'], ['Mantener el dedo', 'Menú contextual (Join, Merge, Split, Hole…)'], ['Dos dedos arrastrar / pellizcar', 'Desplazar / zoom']]],
   ['Vista y archivo', [
     ['Ctrl+0', 'Zoom a todo'], ['Ctrl+1', 'Escala de referencia'], ['Ctrl++ / Ctrl+−', 'Acercar / alejar'], ['Rueda del mouse', 'Zoom (Archivo → Vista: cambiar a desplazar)'], ['Trackpad', 'Dos dedos desplazan, pellizco = zoom'],
