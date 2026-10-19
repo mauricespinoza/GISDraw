@@ -6,7 +6,7 @@
  */
 
 import { buildTopology, simplifyArc, smoothArcLevel, smoothTopology } from '../src/smoothTopo.js';
-import { tidyShapes } from '../src/tidy.js';
+import { nodeInto, tidyShapes } from '../src/tidy.js';
 import { smoothAlong } from '../src/smoothTool.js';
 import { flattenNodes, makeNode, makePath } from '../src/vector.js';
 import { addShapes, allTopShapes, newDocument, updateLayer } from '../src/doc.js';
@@ -229,6 +229,26 @@ const onPolyline = (p, pl, e = 1e-6) => {
   // nodos del mismo trazo no se fusionan entre sí
   const Z = line([[0, 0], [0.2, 0], [50, 0]]);
   ok(tidyShapes(docWith([Z]), [Z.id], 1).doc === docWith([Z]) || get(tidyShapes(docWith([Z]), [Z.id], 1).doc, Z.id).nodes.length === 3, 'no colapsa nodos del mismo trazo');
+}
+
+/* ================================================================= NODADO AL DIBUJAR */
+{
+  const A = line([[0, 0], [100, 0], [200, 0]]);
+  const doc = docWith([A]);
+  // una línea que termina en medio del tramo de A (contacto en T)
+  const r = nodeInto(doc, [{ x: 50, y: 0 }, { x: 50, y: -80 }], { tol: 0.1 });
+  const a2 = get(r.doc, A.id);
+  ok(r.inserted === 1 && a2.nodes.length === 4 && a2.nodes[1].x === 50 && a2.nodes[1].y === 0, 'el punto sobre el tramo se inserta como nodo de A');
+  ok(nodeInto(doc, [{ x: 100, y: 0 }], { tol: 0.1 }).inserted === 0, 'si ya hay un nodo ahí no se inserta otro');
+  ok(nodeInto(doc, [{ x: 50, y: 5 }], { tol: 0.1 }).doc === doc, 'lejos del trazo no cambia nada');
+  // sobre una curva
+  const C = makePath([makeNode(0, 0, null, { x: 30, y: 40 }), makeNode(100, 0, { x: 70, y: 40 }, null)]);
+  const docC = docWith([C]);
+  const P = { x: 50, y: 30 }; // la cúbica pasa por (50, 30) en t = 0.5
+  const rc = nodeInto(docC, [P], { tol: 0.5 });
+  const c2 = get(rc.doc, C.id);
+  ok(rc.inserted === 1 && c2.nodes.length === 3 && c2.nodes[1].x === 50 && c2.nodes[1].y === 30 && c2.nodes[1].hIn && c2.nodes[1].hOut, 'en una curva el nodo se inserta con sus manijas, sin cambiar la forma');
+  ok(nodeInto(docWith([A]), [{ x: 50, y: 0 }], { exclude: A.id, tol: 0.1 }).inserted === 0, 'la forma excluida (la recién dibujada) no se toca');
 }
 
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLOS` : ''}`);

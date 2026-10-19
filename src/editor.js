@@ -27,6 +27,7 @@ import { SnapIndex, buildGraph, smartTrace, pointKey } from './snapping.js';
 import { smoothAlong } from './smoothTool.js';
 import { buildTopology, smoothTopology } from './smoothTopo.js';
 import { applyDeform, prepareDeform, prepareDrag } from './deform.js';
+import { nodeInto } from './tidy.js';
 import { defaultStyle, nodesD, shapeD, esc, textMeasurer } from './style.js';
 import { paperUnits } from './view.js';
 import {
@@ -1528,7 +1529,7 @@ export class Editor {
     const style = { ...st };
     if (!closed) style.fillOpen = false;
     const shape = makePath(nodes, { closed, style });
-    this.history.commit(addShapes(this.doc, d.layerId, [shape]));
+    this.commitNewShape(d.layerId, shape);
     this.snapDirty = true;
     this.setSelection([shape.id]);
   }
@@ -1753,9 +1754,27 @@ export class Editor {
     const shape = makePath(nodes, { closed, style: { ...this.getCurrentStyle() } });
     shape.freehand = { pts, mpp, closed, level, sig: nodesSignature(nodes) };
     shape.name = closed ? 'Polígono libre' : 'Trazo libre';
-    this.history.commit(addShapes(this.doc, layer.id, [shape]));
+    this.commitNewShape(layer.id, shape);
     this.snapDirty = true;
     this.setSelection([shape.id]);
+  }
+
+  /**
+   * Agrega una forma recién dibujada. Con Move Joined, sus nodos que quedaron
+   * (por snap) sobre el trazo de otra línea o polígono se insertan también en
+   * ese trazo: quedan COMPARTIDOS y luego Nodos, Drag y Deform los mueven
+   * juntos. Todo en un solo paso de deshacer.
+   */
+  commitNewShape(layerId, shape) {
+    let doc = addShapes(this.doc, layerId, [shape]);
+    if (this.settings.moveJoined !== false && shape.type === 'path') {
+      const pts = [...shape.nodes, ...(shape.holes || []).flat()].map((n) => ({ x: n.x, y: n.y }));
+      // la tolerancia cubre lo que se separa el trazo aplanado (donde engancha el snap) de la curva real
+      const r = nodeInto(doc, pts, { exclude: shape.id, tol: Math.max(this.view.mpp * 0.6, 1e-6) });
+      doc = r.doc;
+      if (r.inserted) this.onMessage(`${r.inserted} nodo(s) compartido(s) con las líneas que toca (Move Joined)`);
+    }
+    this.history.commit(doc);
   }
 
   finishCreate(d, pv) {
@@ -1779,7 +1798,7 @@ export class Editor {
       shape.name = this.tool === 'arrow' ? 'Flecha' : 'Segmento';
     }
     if (shape) {
-      this.history.commit(addShapes(this.doc, layer.id, [shape]));
+      this.commitNewShape(layer.id, shape);
       this.snapDirty = true;
       this.setSelection([shape.id]);
     } else this.changed();
