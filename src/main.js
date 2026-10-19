@@ -28,7 +28,7 @@ import { assetMeta, packProject, referencedFiles, unpackFiles } from './io/proje
 import { forgetRecent, hasContent, listRecent, loadRecent, rememberProject } from './io/recent.js';
 import { buildTopology, simplifyArc, smoothArcLevel, smoothTopology } from './smoothTopo.js';
 import { tidyShapes } from './tidy.js';
-import { APP_VERSION } from './version.js';
+import { APP_VERSION, APP_AUTHOR, CHANGELOG } from './version.js';
 import { CANVAS_TABS, GIS_TABS, MODES, canvasDefaults, canvasFromMm, canvasRect, modeOf, normalizeCanvas } from './mode.js';
 
 const SETTINGS_KEY = 'gd.settings';
@@ -801,6 +801,10 @@ class App {
       item('Layout de impresión (PDF / SVG / PNG)…', () => this.showPanel('layout')),
       item('Zoom a todo el dibujo', () => this.zoomToShapes(allTopShapes(this.history.doc).map((x) => x.shape))),
       item(`Atajos, gestos y versión (${APP_VERSION})…`, () => this.toggleHelp(true)),
+      item('Acerca de la app…', () => {
+        this.toggleHelp(true);
+        document.getElementById('about')?.scrollIntoView({ block: 'start' });
+      }),
     ].filter(Boolean);
   }
 
@@ -1591,7 +1595,7 @@ class App {
         this.saveSettings({ dragReach: Number(r.value) });
       });
       const joined = this.settings.moveJoined !== false;
-      const mj = h('button', { class: `pb-btn${joined ? ' pb-on' : ''}`, 'data-tip': 'Move Joined: arrastrar también los nodos que otras líneas y polígonos comparten (mantiene el cierre topológico)', onclick: () => (this.saveSettings({ moveJoined: !joined }), this.renderPropbar()) }, joined ? '🔗 Move Joined ✓' : '🔗 Move Joined');
+      const mj = h('button', { class: `pb-btn${joined ? ' pb-on' : ''}`, 'data-tip': 'Move Joined: arrastrar también los nodos que otras líneas y polígonos comparten (mantiene el cierre topológico)', onclick: () => (this.saveSettings({ moveJoined: !joined }), this.renderPropbar()) }, joined ? 'Move Joined ✓' : 'Move Joined');
       return [h('span', { class: 'pb-l' }, 'Alcance'), r, val, mj];
     }
     if (this.editor.tool === 'deform') {
@@ -1604,7 +1608,7 @@ class App {
         this.editor.changed();
       });
       const joined = this.settings.moveJoined !== false;
-      const mj = h('button', { class: `pb-btn${joined ? ' pb-on' : ''}`, 'data-tip': 'Move Joined: arrastrar también los nodos que otras líneas y polígonos comparten con la selección (mantiene el cierre topológico)', onclick: () => (this.saveSettings({ moveJoined: !joined }), this.renderPropbar()) }, joined ? '🔗 Move Joined ✓' : '🔗 Move Joined');
+      const mj = h('button', { class: `pb-btn${joined ? ' pb-on' : ''}`, 'data-tip': 'Move Joined: arrastrar también los nodos que otras líneas y polígonos comparten con la selección (mantiene el cierre topológico)', onclick: () => (this.saveSettings({ moveJoined: !joined }), this.renderPropbar()) }, joined ? 'Move Joined ✓' : 'Move Joined');
       return [h('span', { class: 'pb-l' }, 'Radio'), r, val, mj];
     }
     if (this.editor.tool === 'smooth') {
@@ -2718,7 +2722,7 @@ const SHORTCUTS = [
     ['Ctrl+7 / Ctrl+Alt+7', 'Máscara de recorte / liberar'], ['Ctrl+] / Ctrl+[', 'Adelante / atrás (Mayús: al frente / al fondo)'],
     ['Ctrl+2 / Ctrl+Alt+2', 'Bloquear / desbloquear todo'], ['Ctrl+3 / Ctrl+Alt+3', 'Ocultar / mostrar todo'], ['Mayús+C', 'Nodo esquina ↔ curva'],
   ]],
-  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón 🔗)'], ['Guías (📐)', 'Alinear con el nivel o la vertical de otros vértices, aunque estén lejos'], ['Mayús', 'Restringir ángulo o proporción']]],
+  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón de eslabones)'], ['Guías', 'Alinear con el nivel o la vertical de otros vértices, aunque estén lejos'], ['Mayús', 'Restringir ángulo o proporción']]],
   ['Tablet (táctil)', [['Dos dedos, dos toques', 'Deshacer'], ['Tres dedos, dos toques', 'Rehacer'], ['Mantener el dedo', 'Menú contextual (Join, Merge, Split, Hole…)'], ['Dos dedos arrastrar / pellizcar', 'Desplazar / zoom']]],
   ['Vista y archivo', [
     ['Ctrl+0', 'Zoom a todo'], ['Ctrl+1', 'Escala de referencia'], ['Ctrl++ / Ctrl+−', 'Acercar / alejar'], ['Rueda del mouse', 'Zoom (Archivo → Vista: cambiar a desplazar)'], ['Trackpad', 'Dos dedos desplazan, pellizco = zoom'],
@@ -2733,6 +2737,13 @@ function helpContent(close) {
       h('div', { class: 'help-head' }, h('h2', {}, 'Atajos de teclado'), h('button', { class: 'help-x', onclick: close, 'aria-label': 'Cerrar' }, '✕')),
       h('p', { class: 'hint' }, `Inspirados en Illustrator. En Mac, Ctrl es ⌘ y Alt es ⌥. Versión de la app: ${APP_VERSION}.`),
       h('div', { class: 'help-grid' }, ...SHORTCUTS.map(([title, rows]) => h('section', {}, h('h3', {}, title), h('table', {}, ...rows.map(([k, d]) => h('tr', {}, h('td', {}, h('kbd', {}, k)), h('td', {}, d))))))),
+      h('section', { class: 'about', id: 'about' },
+        h('h3', {}, 'Acerca de la app'),
+        h('p', {}, h('b', {}, 'GISDrawer'), ` ${APP_VERSION} · dibujo vectorial georreferenciado`),
+        h('p', {}, APP_AUTHOR.name, ' · ', h('a', { href: `mailto:${APP_AUTHOR.email}` }, APP_AUTHOR.email)),
+        h('h3', {}, 'Últimos cambios'),
+        h('ul', { class: 'changelog' }, ...CHANGELOG.map(([v, d]) => h('li', {}, h('b', {}, v), ` ${d}`))),
+      ),
     ),
   ];
 }
