@@ -26,8 +26,8 @@ import { pickShape, shapesInBox, shapesInLasso, shapeDistance, flatRings } from 
 import { SnapIndex, buildGraph, smartTrace, pointKey } from './snapping.js';
 import { smoothAlong } from './smoothTool.js';
 import { buildTopology, smoothTopology } from './smoothTopo.js';
-import { applyDeform, prepareDeform } from './deform.js';
-import { nodesD, shapeD, esc, textMeasurer } from './style.js';
+import { applyDeform, prepareDeform, prepareDrag } from './deform.js';
+import { defaultStyle, nodesD, shapeD, esc, textMeasurer } from './style.js';
 import { paperUnits } from './view.js';
 import {
   makeEllipsePath,
@@ -54,6 +54,7 @@ import {
 export const TOOLS = {
   select: { label: 'Selección', key: 'v' },
   node: { label: 'Nodos', key: 'a' },
+  drag: { label: 'Drag (nodo con arrastre proporcional)', key: 'j' },
   lasso: { label: 'Lazo', key: 'q' },
   pen: { label: 'Pluma / línea', key: 'p' },
   polygon: { label: 'Polígono', key: 'y' },
@@ -576,7 +577,7 @@ export class Editor {
   fingerTap(sp) {
     if (this.tool === 'select' || this.tool === 'node' || this.tool === 'lasso' || this.tool === 'eyedropper') {
       const hit = pickShape(this.doc, sp, this.view, this.units(), 14);
-      if (this.tool === 'eyedropper' && hit) return this.applyEyedropper(hit.shape);
+      if (this.tool === 'eyedropper' && hit) return this.applyEyedropper(hit.shape, sp);
       if (hit) {
         if (this.addMode) this.toggleSel(hit.shape.id);
         else this.setSelection([hit.shape.id]);
@@ -658,7 +659,7 @@ export class Editor {
         return this.scissorsAt(sp, wp);
       case 'eyedropper': {
         const hit = pickShape(this.doc, sp, this.view, this.units(), 10, { includeLocked: true });
-        if (hit) this.applyEyedropper(hit.shape);
+        if (hit) this.applyEyedropper(hit.shape, sp);
         return;
       }
       case 'pen':
@@ -668,6 +669,8 @@ export class Editor {
         return this.smoothDown(e, sp, wp);
       case 'deform':
         return this.deformDown(e, sp, wp);
+      case 'drag':
+        return this.dragDown(e, sp, wp);
       case 'pencil': {
         if (!this.ensureDrawableLayer()) return;
         const { point, snap } = this.snapPoint(wp);
@@ -1546,11 +1549,56 @@ export class Editor {
     this.changed();
   }
 
+  /** Nodo de los trazos seleccionados bajo el puntero (a menos de 12 px), o null. */
+  selectedNodeAt(sp) {
+    let best = null;
+    for (const s of this.selectedShapes()) {
+      if (s.type !== 'path' || s.locked) continue;
+      for (const ring of [-1, ...(s.holes || []).map((_, i) => i)]) {
+        this.ringNodes(s, ring).forEach((n, index) => {
+          const [x, y] = this.view.toScreen(n.x, n.y);
+          const d = Math.hypot(sp[0] - x, sp[1] - y);
+          if (d < 12 && (!best || d < best.d)) best = { id: s.id, ring, index, d, n };
+        });
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Drag: se toma un nodo de una línea o polígono seleccionado y se arrastra;
+   * los vecinos lo siguen cada vez menos a lo largo del trazo (hasta los
+   * extremos, que quedan fijos, o lo que diga el alcance). Tocar otra forma la
+   * selecciona (Mayús la suma: varias formas que comparten nodos se arrastran
+   * juntas; con Move Joined, también las vecinas no seleccionadas).
+   */
+  dragDown(e, sp, wp) {
+    const node = this.selectedNodeAt(sp);
+    if (!node) {
+      const hit = pickShape(this.doc, sp, this.view, this.units(), 10);
+      if (hit && (e.shiftKey || this.addMode)) this.toggleSel(hit.shape.id);
+      else this.setSelection(hit ? [hit.shape.id] : []);
+      if (hit && hit.shape.type === 'path') this.onMessage('Drag: toma un nodo y arrástralo');
+      return;
+    }
+    const prep = prepareDrag(this.doc, node, {
+      reach: (this.settings.dragReach ?? 100) / 100,
+      ids: this.selectedShapes().map((s) => s.id),
+      joined: this.settings.moveJoined !== false,
+      tol: Math.min(this.view.mpp * 0.35, 0.5),
+    });
+    this.activeNode = { id: node.id, ring: node.ring, index: node.index };
+    this.history.begin();
+    this.drag = { mode: 'deform', prep, start: [node.n.x, node.n.y], moved: false, grab: [wp[0] - node.n.x, wp[1] - node.n.y] };
+    this.changed();
+  }
+
   deformMove(sp, wp) {
     const d = this.drag;
     this.hover = { sp, wp, brush: true };
-    const dx = wp[0] - d.start[0];
-    const dy = wp[1] - d.start[1];
+    // en Drag el nodo sigue al puntero manteniendo dónde se tomó
+    const dx = wp[0] - (d.grab ? d.grab[0] : 0) - d.start[0];
+    const dy = wp[1] - (d.grab ? d.grab[1] : 0) - d.start[1];
     if (!d.moved && Math.hypot(dx, dy) < this.view.mpp * 2) return this.changed();
     d.moved = true;
     d.dx = dx;
@@ -1686,15 +1734,30 @@ export class Editor {
     this.onMessage(hit.shape.closed ? 'Polígono abierto en el punto' : 'Trazo cortado en dos');
   }
 
-  applyEyedropper(shape) {
-    const style = shape.style ? { ...shape.style } : null;
-    if (!style) return;
-    this.onMessage('Estilo copiado');
+  /**
+   * Cuentagotas: toma el estilo COMPLETO del elemento tocado —color y grosor
+   * de trazo, tipo de línea, relleno, opacidad, ornamentos…— (en un grupo, el
+   * del elemento bajo el puntero) y lo aplica a la selección o, sin
+   * selección, lo deja como estilo para lo próximo que se dibuje.
+   */
+  applyEyedropper(shape, sp = null) {
+    let leaf = shape;
+    while (leaf?.type === 'group' && leaf.children?.length) {
+      const kids = leaf.clip ? leaf.children.slice(1) : leaf.children;
+      leaf = sp ? kids.reduce((a, c) => (shapeDistance(c, sp, this.view, this.units()) < shapeDistance(a, sp, this.view, this.units()) ? c : a)) : kids[kids.length - 1];
+    }
+    if (!leaf?.style) return;
+    // todas las claves (las que el elemento no trae explícitas son las por defecto): así el grosor y el trazo siempre viajan
+    const style = { ...defaultStyle(), ...leaf.style };
     this.pickedStyle = style;
     if (this.selection.size) {
-      const ids = this.selectedShapes().filter((s) => s.id !== shape.id && s.type !== 'group').map((s) => s.id);
-      if (ids.length) this.history.commit(mapShapes(this.doc, ids, (s) => ({ ...s, style: { ...s.style, ...style } })));
+      const apply = (s) => (s.type === 'group' ? { ...s, children: s.children.map((c, i) => (s.clip && i === 0 ? c : apply(c))) } : { ...s, style: { ...s.style, ...style } });
+      const ids = this.selectedShapes().filter((s) => s.id !== shape.id && !s.locked).map((s) => s.id);
+      if (ids.length) this.history.commit(mapShapes(this.doc, ids, apply));
     }
+    const stroke = style.stroke && style.stroke !== 'none' ? `trazo ${style.stroke} de ${Number(style.strokeWidth || 0).toFixed(2)} mm` : 'sin trazo';
+    const fill = style.fill && style.fill !== 'none' ? `relleno ${style.fill}` : 'sin relleno';
+    this.onMessage(`Estilo tomado: ${stroke}, ${fill}${this.selection.size ? ' → aplicado a la selección' : ' → para lo próximo que dibujes'}`);
     this.onStylePicked?.(style);
     this.changed();
   }
@@ -1954,10 +2017,23 @@ export class Editor {
     }
 
     // Deform: área de influencia (donde se tomó, mientras se arrastra) y cuánto se movió cada nodo
-    if (this.tool === 'deform') {
+    if (this.tool === 'drag') {
+      // nodos de las formas seleccionadas: se toma uno para arrastrar
+      for (const s of this.selectedShapes()) {
+        if (s.type !== 'path' || s.locked) continue;
+        for (const ring of [-1, ...(s.holes || []).map((_, i) => i)]) {
+          this.ringNodes(s, ring).forEach((n, i) => {
+            const [x, y] = P(n.x, n.y);
+            const a = this.activeNode && this.activeNode.id === s.id && this.activeNode.ring === ring && this.activeNode.index === i;
+            out.push(`<rect x="${r2(x - 4.5)}" y="${r2(y - 4.5)}" width="9" height="9" fill="${a ? '#a855f7' : '#fff'}" stroke="#a855f7" stroke-width="1.5"/>`);
+          });
+        }
+      }
+    }
+    if (this.tool === 'deform' || this.drag?.mode === 'deform') {
       const dd = this.drag?.mode === 'deform' ? this.drag : null;
       const R = this.settings.deformRadius ?? 60;
-      const at = dd ? P(dd.start[0], dd.start[1]) : this.hover?.brush ? this.hover.sp : null;
+      const at = this.tool !== 'deform' ? null : dd ? P(dd.start[0], dd.start[1]) : this.hover?.brush ? this.hover.sp : null;
       if (at) out.push(`<circle cx="${r2(at[0])}" cy="${r2(at[1])}" r="${R}" fill="rgba(168,85,247,.07)" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="4 3"/>`);
       if (dd?.moved) {
         const moves = dd.prep.moves.length > 600 ? dd.prep.moves.filter((_, i) => i % Math.ceil(dd.prep.moves.length / 600) === 0) : dd.prep.moves;

@@ -168,3 +168,77 @@ export function applyDeform(prep, dx, dy) {
   }
   return replaceShapes(prep.base, out);
 }
+
+/** Peso de Drag a la fracción `t` del alcance: 1 en el nodo tomado, 0 al final, con transición suave. */
+export const dragWeight = (t) => (t >= 1 ? 0 : t <= 0 ? 1 : 0.5 * (1 + Math.cos(Math.PI * t)));
+
+/**
+ * Herramienta Drag: se toma UN nodo y se arrastra; los nodos vecinos lo
+ * siguen cada vez menos A LO LARGO DEL TRAZO. Con `reach` = 1 (por defecto)
+ * el gradiente llega justo hasta los extremos de la línea —que quedan
+ * fijos— o, en un anillo cerrado, hasta el punto opuesto; con menos, el
+ * movimiento es más localizado. A diferencia de Deform, la influencia se
+ * mide por el recorrido del trazo y no por la distancia en el plano.
+ *
+ * Los nodos de otras formas que coinciden con los que se mueven se arrastran
+ * igual (manteniendo el cierre): los de las formas en `ids` siempre, y con
+ * `joined` (Move Joined) también los de cualquier otra.
+ * @returns {{ base: object, moves: object[], count: number }} lo mismo que `prepareDeform`, para `applyDeform`.
+ */
+export function prepareDrag(doc, { id, ring, index }, { reach = 1, ids = [], joined = true, tol = 0.01 } = {}) {
+  const all = allTopShapes(doc, { visibleOnly: false }).filter(({ layer, shape }) => shape.type === 'path' && !shape.locked && !layer.locked && shape.nodes?.length >= 2);
+  const own = all.find(({ shape }) => shape.id === id)?.shape;
+  const nodes = own && (ring < 0 ? own.nodes : own.holes?.[ring]);
+  if (!nodes?.[index]) return { base: doc, moves: [], count: 0 };
+  const closed = ring < 0 ? !!own.closed : true;
+  const n = nodes.length;
+  const seg = (i) => Math.hypot(nodes[(i + 1) % n].x - nodes[i].x, nodes[(i + 1) % n].y - nodes[i].y);
+  const r = Math.max(1e-6, Math.min(1, reach));
+  const moves = [];
+  const put = (j, w) => w > 1e-4 && moves.push({ id, ring, index: j, w, x: nodes[j].x, y: nodes[j].y });
+  put(index, 1);
+  if (closed) {
+    // recorrido acumulado hacia adelante desde el nodo tomado
+    const per = Array.from({ length: n }, (_, i) => seg(i)).reduce((a, b) => a + b, 0);
+    const half = per / 2;
+    let f = 0;
+    const fwd = new Array(n).fill(0);
+    for (let k = 1; k < n; k++) {
+      f += seg((index + k - 1) % n);
+      fwd[(index + k) % n] = f;
+    }
+    for (let j = 0; j < n; j++) if (j !== index) put(j, dragWeight(Math.min(fwd[j], per - fwd[j]) / (half * r)));
+  } else {
+    // hacia cada extremo, con su propio largo: el extremo queda fijo
+    let total = 0;
+    for (let j = index; j < n - 1; j++) total += seg(j);
+    let acc = 0;
+    for (let j = index + 1; j < n; j++) {
+      acc += seg(j - 1);
+      put(j, total ? dragWeight(acc / (total * r)) : 0);
+    }
+    total = 0;
+    for (let j = index; j > 0; j--) total += seg(j - 1);
+    acc = 0;
+    for (let j = index - 1; j >= 0; j--) {
+      acc += seg(j);
+      put(j, total ? dragWeight(acc / (total * r)) : 0);
+    }
+  }
+
+  // nodos compartidos: los que coinciden con uno que se mueve lo siguen con el mismo peso
+  const moved = pointSet(moves.map((m) => ({ x: m.x, y: m.y, w: m.w })), tol);
+  const sel = new Set(ids);
+  for (const { shape: s } of all) {
+    if (!(joined || sel.has(s.id))) continue;
+    const rings = [{ ring: -1, nodes: s.nodes }, ...(s.holes || []).map((h, i) => ({ ring: i, nodes: h }))];
+    for (const rr of rings) {
+      rr.nodes.forEach((q, j) => {
+        if (s.id === id && rr.ring === ring) return;
+        const p = moved(q);
+        if (p) moves.push({ id: s.id, ring: rr.ring, index: j, w: p.w, x: q.x, y: q.y, joined: true });
+      });
+    }
+  }
+  return { base: doc, moves, count: moves.length };
+}
