@@ -36,6 +36,10 @@ export const loadDoc = () => tx('docs', 'readonly', (s) => s.get('current')).cat
 export const saveFile = (id, rec) => tx('files', 'readwrite', (s) => s.put(rec, id)).catch(() => null);
 export const loadFile = (id) => tx('files', 'readonly', (s) => s.get(id)).catch(() => null);
 export const deleteFile = (id) => tx('files', 'readwrite', (s) => s.delete(id)).catch(() => null);
+/** Otros registros del almacén de documentos (proyectos recientes). */
+export const putDocKey = (key, value) => tx('docs', 'readwrite', (s) => s.put(value, key)).catch(() => null);
+export const getDocKey = (key) => tx('docs', 'readonly', (s) => s.get(key)).catch(() => null);
+export const deleteDocKey = (key) => tx('docs', 'readwrite', (s) => s.delete(key)).catch(() => null);
 
 /** Descarga un Blob o texto como archivo. */
 export function download(data, filename, type = 'application/octet-stream') {

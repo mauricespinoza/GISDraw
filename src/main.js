@@ -14,7 +14,7 @@ import { Panels } from './ui/panels.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
 import { ICONS } from './ui/icons.js';
 import { h, popSlider, popSliderOpen } from './ui/dom.js';
-import { askConfirm, askForm, askText } from './ui/dialog.js';
+import { askChoice, askConfirm, askForm, askText } from './ui/dialog.js';
 import { DASHES, defaultStyle } from './style.js';
 import { copyShapes, pasteShapes, arrange, group, ungroup, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
 import { coordPreview, formatDMS, parseCoordText, toLonLat } from './proj.js';
@@ -24,7 +24,8 @@ import { parseQML, styleFor } from './io/qml.js';
 import { parseAsciiGrid } from './raster/dem.js';
 import { lonLatToTransform, proj4Def } from './io/crs.js';
 import { selectionSvg } from './io/illustrator.js';
-import { packProject, unpackFiles } from './io/project.js';
+import { assetMeta, packProject, referencedFiles, unpackFiles } from './io/project.js';
+import { forgetRecent, hasContent, listRecent, loadRecent, rememberProject } from './io/recent.js';
 import { buildTopology, smoothArcLevel, smoothTopology } from './smoothTopo.js';
 import { APP_VERSION } from './version.js';
 import { CANVAS_TABS, GIS_TABS, MODES, canvasDefaults, canvasFromMm, canvasRect, modeOf, normalizeCanvas } from './mode.js';
@@ -118,6 +119,7 @@ class App {
       guides: true, // snap ligero a guías de alineación
       smoothLevel: 50, // intensidad del pincel de Suavizar (%)
       smoothRadius: 18, // radio del pincel de Suavizar (px)
+      deformRadius: 60, // radio de influencia de Deform (px)
       gestureTaps: 'double', // dos dedos = deshacer, tres = rehacer: 'double' (dos toques) o 'single'
       fingerDraws: false,
       pencilSmooth: DEFAULT_SMOOTH, // % de suavizado del lápiz (trazo libre)
@@ -314,19 +316,100 @@ class App {
 
   scheduleSave() {
     clearTimeout(this.saveT);
-    this.saveT = setTimeout(() => saveDoc(this.history.doc), 800);
+    this.saveT = setTimeout(() => this.flushSave(), 800);
     if (!this.flushBound) {
       // al cerrar o ocultar la pestaña se guarda ya, sin esperar los 800 ms
       this.flushBound = true;
-      const now = () => {
-        if (!this.saveT) return;
-        clearTimeout(this.saveT);
-        this.saveT = null;
-        saveDoc(this.history.doc);
-      };
+      const now = () => this.saveT && this.flushSave();
       addEventListener('pagehide', now);
       document.addEventListener('visibilitychange', () => document.hidden && now());
     }
+  }
+
+  /**
+   * Guarda ya el documento en el navegador: como «el actual» (lo que se abre
+   * al volver a la app) y como su versión en la lista de recientes.
+   */
+  flushSave(meta = {}) {
+    clearTimeout(this.saveT);
+    this.saveT = null;
+    const doc = this.history.doc;
+    return Promise.all([saveDoc(doc), rememberProject(doc, meta).catch(() => null)]);
+  }
+
+  /** Proyectos recientes: elegir uno de los últimos 10 y abrir su última versión. */
+  async openRecent() {
+    await this.flushSave();
+    const list = await listRecent();
+    const cur = this.history.doc.projectId;
+    const when = (iso) => {
+      const d = new Date(iso);
+      return Number.isFinite(d.getTime()) ? d.toLocaleString('es-CL', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+    };
+    const id = await askChoice({
+      title: 'Abrir reciente',
+      hint: 'Los últimos 10 proyectos en este navegador, con su última versión (se guardan solos mientras trabajas).',
+      empty: 'Todavía no hay proyectos recientes.',
+      items: list.map((x) => ({
+        value: x.id,
+        label: `${x.name}${x.id === cur ? '  (abierto)' : ''}`,
+        hint: [when(x.savedAt), x.source === 'drive' ? 'Google Drive' : x.source === 'archivo' ? 'archivo' : 'navegador', `${x.shapes} objeto(s)`].filter(Boolean).join(' · '),
+        onRemove: x.id === cur ? null : () => forgetRecent(x.id),
+      })),
+    });
+    if (!id || id === cur) return;
+    const doc = await loadRecent(id);
+    if (!doc?.layers) {
+      await forgetRecent(id);
+      throw new Error('Ese proyecto ya no está guardado en este navegador');
+    }
+    this.loadDocument(normalizeDoc(doc));
+    this.message(`Abierto: ${list.find((x) => x.id === id)?.name || 'proyecto'}`, 3000);
+  }
+
+  /** Pone un documento como el actual: sus archivos raster y la vista. */
+  loadDocument(doc, embedded = new Map(), meta = {}) {
+    this.history.commit(doc);
+    for (const l of doc.layers) if (l.settings?.fileId) this.reloadFile(l.settings.fileId, embedded.get(l.settings.fileId)).catch(() => null);
+    if (this.mode !== 'gis') this.fitCanvas();
+    else this.zoomToShapes(allTopShapes(doc).map((x) => x.shape));
+    return this.flushSave(meta);
+  }
+
+  /**
+   * Imágenes y modelos de elevación de un proyecto guardado en Drive (van como
+   * archivos aparte) que no están en este navegador: se bajan, se guardan y se
+   * muestran. Avisa de los que no se pueden recuperar.
+   */
+  async fetchDriveAssets(doc) {
+    const need = [];
+    const lost = [];
+    for (const [id, layerName] of referencedFiles(doc)) {
+      if (imageFiles.has(id) || demFiles.has(id) || (await loadFile(id))?.buffer) continue;
+      if (doc.driveAssets?.[id]?.driveId) need.push(id);
+      else lost.push(layerName);
+    }
+    if (need.length) {
+      const gd = await import('./io/gdrive.js');
+      const { googleApiKey: apiKey } = this.settings;
+      let done = 0;
+      for (const id of need) {
+        const m = doc.driveAssets[id];
+        this.message(`Bajando de Google Drive las imágenes del proyecto… ${done + 1}/${need.length}`, 0);
+        try {
+          const f = await gd.downloadDriveFile({ id: m.driveId, name: m.name || id, mimeType: m.mime || 'application/octet-stream' }, { apiKey });
+          const { driveId, ...meta } = m;
+          const rec = { ...meta, buffer: await f.arrayBuffer() };
+          await saveFile(id, rec);
+          await this.reloadFile(id, rec);
+          done++;
+        } catch (err) {
+          lost.push(`${m.name || id} (${err.message})`);
+        }
+      }
+      if (done) this.message(`${done} imagen(es) del proyecto bajadas de Google Drive`, 3500);
+    }
+    if (lost.length) this.message(`Faltan archivos raster en este equipo: ${lost.slice(0, 3).join(', ')}${lost.length > 3 ? '…' : ''}. Inicia sesión con Google (o vuelve a importarlos) y abre de nuevo.`, 12000);
   }
 
   message(text, ms = 2600) {
@@ -346,7 +429,13 @@ class App {
   async restore() {
     const v = readJSON('gd.view');
     if (v?.mpp) Object.assign(this.view, { cx: v.cx, cy: v.cy, mpp: v.mpp });
-    const saved = await loadDoc();
+    let saved = await loadDoc();
+    // sin «actual» (o vacío): el último de los recientes
+    if (!saved?.layers || !hasContent(saved)) {
+      const [last] = await listRecent();
+      const rec = last && (await loadRecent(last.id));
+      if (rec?.layers) saved = rec;
+    }
     if (saved?.layers) {
       this.history.reset(normalizeDoc(saved));
       // archivos pesados (DEM, imágenes) desde IndexedDB
@@ -392,7 +481,7 @@ class App {
 
   buildToolbar() {
     this.toolbarEl = document.getElementById('toolbar');
-    const groups = [['select', 'node', 'lasso'], ['pen', 'polygon', 'pencil', 'smooth', 'line', 'arrow'], ['rect', 'ellipse', 'text', 'point'], ['scissors', 'eyedropper', 'pan', 'zoom']];
+    const groups = [['select', 'node', 'lasso'], ['pen', 'polygon', 'pencil', 'smooth', 'deform', 'line', 'arrow'], ['rect', 'ellipse', 'text', 'point'], ['scissors', 'eyedropper', 'pan', 'zoom']];
     const els = [];
     groups.forEach((g, gi) => {
       if (gi) els.push(h('div', { class: 'tsep' }));
@@ -650,7 +739,8 @@ class App {
     return [
       h('div', { class: 'mh' }, 'Proyecto'),
       item('Nuevo', async () => {
-        if (!(await askConfirm('Se empieza un dibujo vacío. El actual se puede recuperar con Ctrl+Z.', { title: 'Dibujo nuevo', ok: 'Empezar' }))) return;
+        if (!(await askConfirm('Se empieza un dibujo vacío. El actual queda en Archivo → Abrir reciente (y se puede recuperar con Ctrl+Z).', { title: 'Dibujo nuevo', ok: 'Empezar' }))) return;
+        await this.flushSave();
         this.history.commit(newDocument());
         if (this.mode !== 'gis') {
           this.applyCanvasDefaults();
@@ -658,8 +748,9 @@ class App {
         }
       }),
       item('Abrir proyecto (.gisdrawer)…', () => this.openProject()),
+      item('Abrir reciente…', () => this.openRecent()),
       item('Guardar proyecto (.gisdrawer, con imágenes incrustadas)', () => this.saveProject()),
-      item(this.history.doc.driveFileId ? 'Guardar en Google Drive (actualiza el archivo)' : 'Guardar en Google Drive', () => this.saveToDrive()),
+      item(this.history.doc.driveFileId ? `Guardar en Google Drive (actualiza ${this.history.doc.fileName || 'el archivo'})` : 'Guardar en Google Drive (elegir carpeta)…', () => this.saveToDrive()),
       item('Guardar en Google Drive en otra carpeta…', () => this.saveToDrive({ choose: true })),
       h('div', { class: 'mh' }, 'Importar'),
       gis && item('GeoPackage (.gpkg)…', () => this.importGpkg()),
@@ -1329,6 +1420,19 @@ class App {
 
   /** Control de suavizado (lápiz activo o trazo libre seleccionado); null si no viene al caso. */
   smoothControl() {
+    if (this.editor.tool === 'deform') {
+      // Deform: radio del área de influencia (también con [ y ]) y si arrastra lo compartido
+      const val = h('span', { class: 'pb-u pb-val' }, `${this.settings.deformRadius} px`);
+      const r = h('input', { type: 'range', class: 'pb-range pb-wide', min: 10, max: 300, step: 1, value: this.settings.deformRadius, 'data-tip': 'Área de influencia: los nodos dentro del círculo se mueven, más cuanto más cerca de donde se toma ([ y ] la achican o agrandan)' });
+      r.addEventListener('input', () => {
+        val.textContent = `${r.value} px`;
+        this.saveSettings({ deformRadius: Number(r.value) });
+        this.editor.changed();
+      });
+      const joined = this.settings.moveJoined !== false;
+      const mj = h('button', { class: `pb-btn${joined ? ' pb-on' : ''}`, 'data-tip': 'Move Joined: arrastrar también los nodos que otras líneas y polígonos comparten con la selección (mantiene el cierre topológico)', onclick: () => (this.saveSettings({ moveJoined: !joined }), this.renderPropbar()) }, joined ? '🔗 Move Joined ✓' : '🔗 Move Joined');
+      return [h('span', { class: 'pb-l' }, 'Radio'), r, val, mj];
+    }
     if (this.editor.tool === 'smooth') {
       // pincel de Suavizar: intensidad y radio
       const range = (key, min, max, label, tip, unit) => {
@@ -1584,6 +1688,18 @@ class App {
     if (k === 'x' && e.shiftKey) return run(() => this.swapColors());
     if (k === 'x') return run(() => this.setSwatchFront(this.swatchFront === 'fill' ? 'stroke' : 'fill'));
     if (k === 'd' && !e.shiftKey) return run(() => this.defaultColors());
+    // [ y ]: radio de Deform y del pincel de Suavizar
+    if ((e.key === '[' || e.key === ']') && (this.editor.tool === 'deform' || this.editor.tool === 'smooth')) {
+      const key = this.editor.tool === 'deform' ? 'deformRadius' : 'smoothRadius';
+      const [lo, hi] = key === 'deformRadius' ? [10, 300] : [6, 80];
+      const v = Math.max(lo, Math.min(hi, Math.round(this.settings[key] * (e.key === ']' ? 1.2 : 1 / 1.2))));
+      return run(() => {
+        this.saveSettings({ [key]: v });
+        this.renderPropbar();
+        this.editor.changed();
+        this.message(`Radio: ${v} px`, 1200);
+      });
+    }
     return false;
   }
 
@@ -1734,7 +1850,10 @@ class App {
   async saveProject() {
     const doc = this.history.doc;
     const r = await this.projectBlob();
-    download(r.blob, `${fileBase(doc.title)}.gisdrawer`, 'application/json');
+    const name = `${fileBase(doc.title)}.gisdrawer`;
+    download(r.blob, name, 'application/json');
+    this.history.silent({ ...this.history.doc, fileName: name });
+    rememberProject(this.history.doc, { name, source: 'archivo' }).catch(() => null);
     if (!r.missing.length && r.count) this.message(`Proyecto guardado con ${r.count} archivo(s) raster incrustado(s) (${(r.bytes / 1048576).toFixed(1)} MB)`, 5000);
   }
 
@@ -1750,11 +1869,11 @@ class App {
     const doc = normalizeDoc(raw);
     if (f.driveId) doc.driveFileId = f.driveId; // abierto desde Drive: «Guardar en Drive» lo actualiza
     else delete doc.driveFileId;
-    this.history.commit(doc);
-    for (const l of doc.layers) if (l.settings?.fileId) this.reloadFile(l.settings.fileId, embedded.get(l.settings.fileId)).catch(() => null);
+    doc.fileName = f.name;
+    await this.flushSave();
+    await this.loadDocument(doc, embedded, { name: f.name, source: f.driveId ? 'drive' : 'archivo' });
     if (embedded.size) this.message(`Proyecto abierto con ${embedded.size} archivo(s) raster incrustado(s)`, 3500);
-    if (this.mode !== 'gis') this.fitCanvas();
-    else this.zoomToShapes(allTopShapes(doc).map((x) => x.shape));
+    await this.fetchDriveAssets(doc);
   }
 
   async importGpkg(files = null) {
@@ -2023,6 +2142,13 @@ class App {
    * unidad» o, con `choose`, en la carpeta que se elija) y recuerda su id en
    * el proyecto; las siguientes lo actualiza.
    */
+  /**
+   * Guardar en Google Drive. La primera vez (o «en otra carpeta») se elige la
+   * carpeta y el nombre; después se actualiza el mismo archivo. Para que sea
+   * rápido, las imágenes y modelos de elevación se suben una sola vez, como
+   * archivos binarios en una carpeta junto al proyecto, y cada guardado sube
+   * solo el JSON del dibujo con sus referencias.
+   */
   async saveToDrive({ choose = false } = {}) {
     const { googleClientId: clientId, googleApiKey: apiKey } = this.settings;
     if (!clientId) {
@@ -2033,30 +2159,61 @@ class App {
     this.flushEdits();
     await gd.ensureSignedIn(clientId);
     this.updateGoogleButton();
-    const doc = this.history.doc;
-    let name = `${fileBase(doc.title)}.gisdrawer`;
-    let parentId = null;
+    let doc = this.history.doc;
+    let name = /\.gisdrawer$/i.test(doc.fileName || '') ? doc.fileName : `${fileBase(doc.title)}.gisdrawer`;
     let fileId = choose ? null : doc.driveFileId || null;
-    if (choose) {
-      const folder = await gd.pickDriveFolder({ clientId, apiKey });
+    let folderId = choose ? null : doc.driveFolderId || null;
+    if (!fileId) {
+      const folder = await gd.pickDriveFolder({ clientId, apiKey, startIn: this.settings.driveFolder?.id || null });
       if (!folder) return;
-      parentId = folder.id;
+      folderId = folder.id;
+      this.saveSettings({ driveFolder: folder });
       const n = await askText('Guardar en Google Drive', name, { label: `Nombre del archivo en «${folder.name}»`, ok: 'Guardar', validate: (v) => (v ? '' : 'Escribe un nombre.') });
       if (!n) return;
       name = /\.gisdrawer$/i.test(n) ? n : `${n}.gisdrawer`;
     }
-    const { blob: json } = await this.projectBlob();
-    this.message('Guardando en Google Drive…', 0);
+    const t0 = performance.now();
+
+    // 1) archivos raster que aún no están en Drive: una vez, binarios (sin base64)
+    const assets = { ...(doc.driveAssets || {}) };
+    let assetsFolder = doc.driveAssetsFolder || null;
+    const pending = [...referencedFiles(doc).keys()].filter((id) => !assets[id]?.driveId);
+    let uploaded = 0;
+    for (const id of pending) {
+      const rec = await this.fileRecord(id);
+      if (!rec?.buffer) continue;
+      try {
+        if (!assetsFolder) {
+          const parent = folderId || (fileId ? await gd.driveParentOf(fileId) : null);
+          assetsFolder = (await gd.createDriveFolder(`${name.replace(/\.gisdrawer$/i, '')} – imágenes (GISDrawer)`, parent)).id;
+        }
+        this.message(`Subiendo a Google Drive ${uploaded + 1}/${pending.length}: ${rec.name || 'imagen'} (${(rec.buffer.byteLength / 1048576).toFixed(1)} MB)…`, 0);
+        const r = await gd.uploadDriveFile({ name: rec.name || id, mimeType: rec.mime || 'application/octet-stream', data: new Blob([rec.buffer]), parentId: assetsFolder });
+        assets[id] = assetMeta(rec, r.id);
+        uploaded++;
+      } catch (err) {
+        // si no se pudo subir aparte, va incrustado en el proyecto (más lento, pero no se pierde)
+        console.warn('GISDrawer: imagen incrustada en vez de enlazada', err);
+      }
+    }
+
+    // 2) el proyecto: solo el dibujo y las referencias
+    doc = { ...this.history.doc, driveAssets: assets, driveAssetsFolder: assetsFolder, driveFolderId: folderId };
+    const packed = await packProject(doc, (id) => this.fileRecord(id), { linked: assets });
+    if (packed.missing.length) this.message(`Atención: falta el archivo de ${packed.missing.length} capa(s) (${packed.missing.slice(0, 3).join(', ')}); en otro equipo quedarán vacías.`, 9000);
+    this.message(`Guardando en Google Drive (${(packed.blob.size / 1048576).toFixed(2)} MB)…`, 0);
     let res;
     try {
-      res = await gd.uploadDriveFile({ name, mimeType: 'application/json', data: json, fileId, parentId });
+      res = await gd.uploadDriveFile({ name, mimeType: 'application/json', data: packed.blob, fileId, parentId: fileId ? null : folderId });
     } catch (err) {
       // el archivo guardado antes ya no existe o no es accesible: se crea uno nuevo
-      if (fileId && (err.status === 404 || err.status === 403)) res = await gd.uploadDriveFile({ name, mimeType: 'application/json', data: json, parentId });
+      if (fileId && (err.status === 404 || err.status === 403)) res = await gd.uploadDriveFile({ name, mimeType: 'application/json', data: packed.blob, parentId: folderId });
       else throw err;
     }
-    this.history.silent({ ...this.history.doc, driveFileId: res.id });
-    this.message(`Guardado en Google Drive: ${res.name}`, 5000);
+    this.history.silent({ ...this.history.doc, driveFileId: res.id, driveFolderId: folderId, driveAssets: assets, driveAssetsFolder: assetsFolder, fileName: res.name || name });
+    rememberProject(this.history.doc, { name: res.name || name, source: 'drive' }).catch(() => null);
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    this.message(`Guardado en Google Drive: ${res.name} (${secs} s${uploaded ? `, ${uploaded} imagen(es) subidas una vez` : ''})`, 5000);
     return res;
   }
 

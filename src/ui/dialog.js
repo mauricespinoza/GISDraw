@@ -9,6 +9,8 @@
  *   `onchange` recibe los valores en vivo (para previsualizar) y `validate`
  *   puede bloquear «Aceptar» con un mensaje.
  *
+ * - `askChoice({ título, items })` → el `value` del elemento tocado o null.
+ *
  * Enter acepta, Esc cancela, un toque fuera del cuadro cancela.
  */
 
@@ -28,7 +30,7 @@ function shell({ title, body, okLabel = 'Aceptar', cancelLabel = 'Cancelar', dan
     title ? h('h2', {}, title) : null,
     h('div', { class: 'gdlg-body' }, body),
     err,
-    h('div', { class: 'dlg-foot' }, cancelLabel ? cancel : null, ok),
+    h('div', { class: 'dlg-foot' }, cancelLabel ? cancel : null, okLabel ? ok : null),
   );
   const root = h('div', { class: `gdlg dlg${live ? ' live' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': title || 'Diálogo' }, form);
   // con vista previa en vivo el fondo queda libre (se ve el dibujo) y no cierra
@@ -193,6 +195,47 @@ export function askForm({ title, hint = '', fields, ok = 'Aceptar', validate, on
     });
     const msg = validate?.({ ...vals });
     if (msg) handle.setError(msg), (handle.ok.disabled = true);
+  });
+}
+
+/**
+ * Lista para elegir (p. ej. proyectos recientes). `items`: [{ value, label,
+ * hint, onRemove }]; con `onRemove` el elemento lleva una ✕ para quitarlo de
+ * la lista sin elegirlo. `empty`: texto si no hay nada.
+ */
+export function askChoice({ title, hint = '', items, empty = 'No hay nada para elegir.', cancel = 'Cerrar' }) {
+  return new Promise((resolve) => {
+    let handle = null;
+    const list = h('div', { class: 'dlg-choices' });
+    const render = (arr) => {
+      list.replaceChildren(
+        ...(arr.length
+          ? arr.map((it) =>
+              h(
+                'div',
+                { class: 'dlg-choice' },
+                h('button', { type: 'button', class: 'dlg-choice-main', onclick: () => (resolve(it.value), handle.done()) }, h('b', {}, it.label), it.hint ? h('span', { class: 'hint' }, it.hint) : null),
+                it.onRemove
+                  ? h('button', {
+                      type: 'button',
+                      class: 'dlg-choice-x',
+                      'aria-label': 'Quitar de la lista',
+                      'data-tip': 'Quitar de la lista',
+                      onclick: async () => {
+                        await it.onRemove();
+                        render(arr.filter((x) => x !== it));
+                      },
+                    }, '×')
+                  : null,
+              ),
+            )
+          : [h('p', { class: 'hint' }, empty)]),
+      );
+    };
+    render(items);
+    handle = shell({ title, body: [hint ? h('p', { class: 'hint' }, hint) : null, list], okLabel: null, cancelLabel: cancel, wide: true, onCancel: () => resolve(null) });
+    // la promesa ya quedó resuelta con lo elegido: el «cancelar» de cerrar no la cambia
+    handle.done = () => handle.cancel();
   });
 }
 

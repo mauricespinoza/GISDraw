@@ -26,6 +26,7 @@ import { pickShape, shapesInBox, shapesInLasso, shapeDistance, flatRings } from 
 import { SnapIndex, buildGraph, smartTrace, pointKey } from './snapping.js';
 import { smoothAlong } from './smoothTool.js';
 import { buildTopology, smoothTopology } from './smoothTopo.js';
+import { applyDeform, prepareDeform } from './deform.js';
 import { nodesD, shapeD, esc, textMeasurer } from './style.js';
 import { paperUnits } from './view.js';
 import {
@@ -58,6 +59,7 @@ export const TOOLS = {
   polygon: { label: 'Polígono', key: 'y' },
   pencil: { label: 'Lápiz (trazo libre)', key: 'b' },
   smooth: { label: 'Suavizar (pincel)', key: 'n' },
+  deform: { label: 'Deform (empujar nodos en gradiente)', key: 'g' },
   line: { label: 'Segmento', key: '\\' },
   arrow: { label: 'Flecha', key: 'w' },
   rect: { label: 'Rectángulo', key: 'm' },
@@ -471,7 +473,7 @@ export class Editor {
       // hover del lápiz o del ratón: cursor de snapping y línea elástica
       if (e.pointerType === 'touch') return;
       if (DRAW_TOOLS.has(this.tool) || this.tool === 'node') this.updateHover(sp, e.altKey);
-      else if (this.tool === 'smooth') {
+      else if (this.tool === 'smooth' || this.tool === 'deform') {
         this.hover = { sp, wp: this.view.toWorld(...sp), brush: true };
         this.changed();
       }
@@ -664,6 +666,8 @@ export class Editor {
         return this.penDown(e, sp, wp);
       case 'smooth':
         return this.smoothDown(e, sp, wp);
+      case 'deform':
+        return this.deformDown(e, sp, wp);
       case 'pencil': {
         if (!this.ensureDrawableLayer()) return;
         const { point, snap } = this.snapPoint(wp);
@@ -823,6 +827,8 @@ export class Editor {
         return this.bezierDrag(e, wp);
       case 'smooth':
         return this.smoothMove(sp, wp);
+      case 'deform':
+        return this.deformMove(sp, wp);
       case 'pen-handle': {
         const n = this.draft.nodes[this.draft.nodes.length - 1];
         if (Math.hypot(sp[0] - d.sp0[0], sp[1] - d.sp0[1]) < 4) return;
@@ -892,6 +898,13 @@ export class Editor {
           this.history.end();
           this.snapDirty = true;
         } else this.history.anchor = null;
+        this.changed();
+        return;
+      case 'deform':
+        if (d.moved) {
+          this.history.end();
+          this.snapDirty = true;
+        } else this.history.cancel();
         this.changed();
         return;
       case 'marquee': {
@@ -1497,6 +1510,54 @@ export class Editor {
     this.smoothMove(sp, wp);
   }
 
+  /* --------------------------------------------------------- deform */
+
+  /**
+   * Deform: se toma una zona de las líneas o polígonos seleccionados (o del que
+   * está bajo el puntero) y se arrastra; los nodos se mueven en gradiente
+   * dentro del radio. Con Move Joined arrastra también los nodos que otras
+   * formas comparten con la selección.
+   */
+  deformDown(e, sp, wp) {
+    let ids = this.selectedShapes().filter((s) => s.type === 'path' && !s.locked).map((s) => s.id);
+    if (!ids.length) {
+      const hit = pickShape(this.doc, sp, this.view, this.units(), 14);
+      if (hit?.shape.type === 'path' && !hit.shape.locked) {
+        ids = [hit.shape.id];
+        this.setSelection(ids);
+      }
+    }
+    if (!ids.length) {
+      this.onMessage('Deform: selecciona una línea o polígono (o toca uno) y arrastra una zona');
+      return;
+    }
+    const radius = (this.settings.deformRadius ?? 60) * this.view.mpp;
+    const prep = prepareDeform(this.doc, ids, { x: wp[0], y: wp[1] }, radius, {
+      joined: this.settings.moveJoined !== false,
+      tol: Math.min(this.view.mpp * 0.35, 0.5),
+    });
+    if (!prep.count) {
+      this.onMessage('Deform: no hay trazo dentro del área; acércate a la línea o agranda el radio ([ ])');
+      return;
+    }
+    this.history.begin();
+    this.drag = { mode: 'deform', prep, start: wp, moved: false };
+    this.hover = { sp, wp, brush: true };
+    this.changed();
+  }
+
+  deformMove(sp, wp) {
+    const d = this.drag;
+    this.hover = { sp, wp, brush: true };
+    const dx = wp[0] - d.start[0];
+    const dy = wp[1] - d.start[1];
+    if (!d.moved && Math.hypot(dx, dy) < this.view.mpp * 2) return this.changed();
+    d.moved = true;
+    d.dx = dx;
+    d.dy = dy;
+    this.history.preview(applyDeform(d.prep, dx, dy));
+  }
+
   /** Cada tramo del pincel suaviza un poco lo que toca: pasar de nuevo suaviza más. */
   smoothMove(sp, wp) {
     const d = this.drag;
@@ -1890,6 +1951,29 @@ export class Editor {
     if (this.tool === 'smooth' && this.hover?.brush) {
       const [bx, by] = this.hover.sp;
       out.push(`<circle cx="${r2(bx)}" cy="${r2(by)}" r="${this.settings.smoothRadius ?? 18}" fill="rgba(14,165,233,.08)" stroke="#0ea5e9" stroke-width="1.5" stroke-dasharray="3 3"/>`);
+    }
+
+    // Deform: área de influencia (donde se tomó, mientras se arrastra) y cuánto se movió cada nodo
+    if (this.tool === 'deform') {
+      const dd = this.drag?.mode === 'deform' ? this.drag : null;
+      const R = this.settings.deformRadius ?? 60;
+      const at = dd ? P(dd.start[0], dd.start[1]) : this.hover?.brush ? this.hover.sp : null;
+      if (at) out.push(`<circle cx="${r2(at[0])}" cy="${r2(at[1])}" r="${R}" fill="rgba(168,85,247,.07)" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="4 3"/>`);
+      if (dd?.moved) {
+        const moves = dd.prep.moves.length > 600 ? dd.prep.moves.filter((_, i) => i % Math.ceil(dd.prep.moves.length / 600) === 0) : dd.prep.moves;
+        for (const m of moves) {
+          if (m.w < 0.04) continue;
+          const [x0, y0] = P(m.x, m.y);
+          const [x1, y1] = P(m.x + m.w * dd.dx, m.y + m.w * dd.dy);
+          const L = Math.hypot(x1 - x0, y1 - y0);
+          if (L < 2) continue;
+          const ux = (x1 - x0) / L;
+          const uy = (y1 - y0) / L;
+          const k = Math.min(6, L * 0.4);
+          out.push(`<circle cx="${r2(x0)}" cy="${r2(y0)}" r="2" fill="#a855f7" opacity=".6"/>`);
+          out.push(`<path d="M${r2(x0)} ${r2(y0)}L${r2(x1)} ${r2(y1)}M${r2(x1 - k * (ux - uy * 0.5))} ${r2(y1 - k * (uy + ux * 0.5))}L${r2(x1)} ${r2(y1)}L${r2(x1 - k * (ux + uy * 0.5))} ${r2(y1 - k * (uy - ux * 0.5))}" fill="none" stroke="#a855f7" stroke-width="1.3" stroke-linecap="round" opacity="${r2(0.35 + 0.65 * m.w)}"/>`);
+        }
+      }
     }
 
     // borrador de pluma/polígono
