@@ -764,6 +764,10 @@ body {
   grid-template-columns: repeat(2, 1fr);
 }
 
+.grid-btns.one {
+  grid-template-columns: 1fr;
+}
+
 .hint {
   color: var(--muted);
   font-size: 12px;
@@ -1510,9 +1514,55 @@ body {
   }
 }
 
+/* con poco ancho el zoom / escala se queda (tocarlo abre su deslizador), más angosto */
 @media (max-width: 1100px) {
-  #topbar .scale-box {
+  #topbar .scale-box input {
+    width: 64px;
+  }
+
+  #topbar #scale-unit {
     display: none;
+  }
+
+  /* barra de propiedades: sin los rótulos (los dicen los globos de ayuda) */
+  #propbar .pb-l {
+    display: none;
+  }
+
+  #propbar .pb-sel {
+    max-width: 104px;
+  }
+}
+
+@media (max-width: 1100px) {
+  #propbar {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 800px) {
+  /* la ayuda sigue en Archivo → Vista */
+  #topbar #btn-help {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+
+  /* iPad vertical: que quepa hasta el botón del panel (☰) */
+  #topbar {
+    gap: 4px;
+    padding: 0 6px;
+  }
+
+  #topbar .sep,
+  #topbar #scale-label {
+    display: none;
+  }
+
+  #topbar .tb:not(.icon) {
+    padding: 0 6px;
   }
 }
 
@@ -1635,4 +1685,152 @@ body {
   #topbar .tb .lbl {
     display: none;
   }
+}
+
+/* ---- deslizador emergente (barra de propiedades, zoom) ---- */
+.pop-slider {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 11px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.22);
+}
+
+.pop-slider input[type='range'] {
+  width: 220px;
+  height: 28px;
+  accent-color: var(--accent);
+}
+
+/* ---- diálogos propios (en lugar de prompt / confirm) ---- */
+.dlg-card {
+  width: min(420px, calc(100vw - 24px));
+}
+
+.dlg-card.wide {
+  width: min(560px, calc(100vw - 24px));
+}
+
+.dlg-card input[type='text'],
+.dlg-card input[type='number'],
+.dlg-card select {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  font: inherit;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.dlg-msg {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.dlg-lbl {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.dlg-row {
+  display: grid;
+  gap: 4px;
+}
+
+.dlg-row > label:first-child {
+  font-size: 13px;
+  color: #475569;
+}
+
+.dlg-row .hint {
+  margin: 0;
+}
+
+.dlg-num {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dlg-num input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  accent-color: var(--accent);
+}
+
+.dlg-num input[type='number'] {
+  flex: 0 0 96px;
+  width: 96px;
+}
+
+.dlg-num input[type='number']:only-child {
+  flex: 1;
+  width: auto;
+}
+
+.dlg-unit {
+  color: var(--muted);
+  font-size: 13px;
+  min-width: 14px;
+}
+
+.dlg-preview {
+  margin: 0;
+  font-size: 12px;
+  color: var(--accent-ink);
+  min-height: 1em;
+}
+
+.dlg-err {
+  margin: 10px 0 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.dlg-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.dlg-foot .btn {
+  min-width: 96px;
+  height: 36px;
+}
+
+.btn.danger-fill {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+/* diálogo con vista previa en vivo: sin velo, a un costado, el dibujo se ve */
+.gdlg.dlg.live {
+  background: transparent;
+  pointer-events: none;
+  place-items: start end;
+  padding: calc(var(--top-h) + 12px) 16px 16px;
+}
+
+.gdlg.dlg.live .dlg-card {
+  pointer-events: auto;
+  width: min(360px, calc(100vw - 24px));
+  max-height: calc(100vh - var(--top-h) - 28px);
+}
+
+.dlg-row[hidden] {
+  display: none;
 }

@@ -13,15 +13,16 @@ import { BASEMAPS } from './raster/basemap.js';
 import { Panels } from './ui/panels.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
 import { ICONS } from './ui/icons.js';
-import { h } from './ui/dom.js';
+import { h, popSlider, popSliderOpen } from './ui/dom.js';
+import { askConfirm, askForm, askText } from './ui/dialog.js';
 import { DASHES, defaultStyle } from './style.js';
-import { copyShapes, pasteShapes, arrange, group, ungroup, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame } from './ops.js';
-import { formatDMS, toLonLat } from './proj.js';
+import { copyShapes, pasteShapes, arrange, group, ungroup, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
+import { coordPreview, formatDMS, parseCoordText, toLonLat } from './proj.js';
 import { shapeBBox, unionBBox, walkShapes, newId, DEFAULT_SMOOTH, canResmooth, resmooth } from './vector.js';
 import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles } from './io/store.js';
 import { parseQML, styleFor } from './io/qml.js';
 import { parseAsciiGrid } from './raster/dem.js';
-import { lonLatToTransform } from './io/crs.js';
+import { lonLatToTransform, proj4Def } from './io/crs.js';
 import { selectionSvg } from './io/illustrator.js';
 import { APP_VERSION } from './version.js';
 import { CANVAS_TABS, GIS_TABS, MODES, canvasDefaults, canvasFromMm, canvasRect, modeOf, normalizeCanvas } from './mode.js';
@@ -486,7 +487,7 @@ class App {
   /** Barra de control (como la de Illustrator): trazo, grosor, tipo, relleno y opacidad a mano. */
   renderPropbar() {
     const bar = document.getElementById('propbar');
-    if (!bar || bar.contains(document.activeElement)) return;
+    if (!bar || bar.contains(document.activeElement) || popSliderOpen('pb')) return;
     const ed = this.editor;
     const sel = ed.selectedShapes();
     const st = { ...defaultStyle(), ...this.shownStyle() };
@@ -513,6 +514,9 @@ class App {
       if (Number.isFinite(v) && v >= 0) this.editStyle({ strokeWidth: v }, true);
     });
     const widths = h('select', { class: 'pb-sel pb-w', 'data-tip': 'Grosores frecuentes', onchange: (e) => e.target.value && this.editStyle({ strokeWidth: Number(e.target.value) }, true) }, h('option', { value: '' }, '▾'), ...[0.1, 0.18, 0.25, 0.35, 0.5, 0.7, 1, 1.4, 2, 3, 5, 8, 12, 20, 30].map((v) => h('option', { value: v }, `${v} mm`)));
+    // tocar el número abre un deslizador: se ve el cambio en vivo y queda un solo deshacer
+    const reRender = () => setTimeout(() => this.renderPropbar(), 0);
+    popSlider(w, { min: 0.05, max: 30, step: 0.01, log: true, get: () => Number(st.strokeWidth) || 0.35, fmt: (v) => v.toFixed(2), oninput: (v) => this.editStyle({ strokeWidth: v }, false), onchange: (v) => this.editStyle({ strokeWidth: v }, true), onclose: reRender, cls: 'pb' });
     items.push(w, h('span', { class: 'pb-u' }, 'mm'), widths);
     const dash = h('select', { class: 'pb-sel', 'data-tip': 'Tipo de línea', onchange: (e) => this.editStyle({ dash: e.target.value }, true) }, ...Object.entries(DASHES).map(([k, d]) => h('option', { value: k, selected: (st.dash || 'solid') === k }, d.label)));
     items.push(dash, h('span', { class: 'pb-sep' }));
@@ -522,6 +526,7 @@ class App {
       const v = Math.max(0, Math.min(100, Number(op.value)));
       if (Number.isFinite(v)) this.editStyle({ opacity: v / 100 }, true);
     });
+    popSlider(op, { min: 0, max: 100, step: 1, get: () => Math.round((st.opacity ?? 1) * 100), oninput: (v) => this.editStyle({ opacity: v / 100 }, false), onchange: (v) => this.editStyle({ opacity: v / 100 }, true), onclose: reRender, cls: 'pb' });
     items.push(h('span', { class: 'pb-sep' }), lbl('Opac.'), op, h('span', { class: 'pb-u' }, '%'));
     if (text) {
       const fs = h('input', { type: 'number', class: 'pb-num', min: 0.5, step: 0.5, value: text.fontSize, 'data-tip': 'Tamaño de letra (pt a la escala de referencia)' });
@@ -529,6 +534,18 @@ class App {
         const v = Number(fs.value);
         if (v > 0) this.history.commit(mapShapes(this.history.doc, [text.id], (x) => ({ ...x, fontSize: v })));
       });
+      const fsBase = this.history.doc;
+      const setFs = (v, final) => {
+        const next = mapShapes(fsBase, [text.id], (x) => ({ ...x, fontSize: v }));
+        if (!final) {
+          if (!this.history.anchor) this.history.begin();
+          this.history.preview(next);
+        } else if (this.history.anchor) {
+          this.history.preview(next);
+          this.history.end();
+        } else this.history.commit(next);
+      };
+      popSlider(fs, { min: 1, max: 96, step: 0.5, log: true, get: () => text.fontSize, oninput: (v) => setFs(v, false), onchange: (v) => setFs(v, true), onclose: reRender, cls: 'pb' });
       items.push(h('span', { class: 'pb-sep' }), lbl('Letra'), fs, h('span', { class: 'pb-u' }, 'pt'));
     }
     items.push(
@@ -569,6 +586,16 @@ class App {
       if (!(v > 0)) return;
       if (this.mode === 'gis') this.view.setScale(v);
       else this.view.setScale(this.history.doc.refScale / (v / 100));
+    });
+    // deslizador de zoom (Canvas, %) o de escala (GIS, 1:N), logarítmico
+    const zoomTo = (v) => (this.mode === 'gis' ? this.view.setScale(v) : this.view.setScale(this.history.doc.refScale / (v / 100)));
+    popSlider(this.scaleInput, {
+      min: () => (this.mode === 'gis' ? 100 : 5),
+      max: () => (this.mode === 'gis' ? 1e7 : 3200),
+      log: true,
+      get: () => (this.mode === 'gis' ? this.view.scale : (this.history.doc.refScale / this.view.scale) * 100),
+      fmt: (v) => (this.mode === 'gis' ? Math.round(v).toLocaleString('es-CL') : String(Math.round(v))),
+      oninput: zoomTo,
     });
     const menu = $('menu-file');
     $('btn-file').onclick = (e) => {
@@ -620,8 +647,8 @@ class App {
     const gis = this.mode === 'gis';
     return [
       h('div', { class: 'mh' }, 'Proyecto'),
-      item('Nuevo', () => {
-        if (!confirm('¿Empezar un dibujo nuevo? (El actual se puede deshacer con Ctrl+Z)')) return;
+      item('Nuevo', async () => {
+        if (!(await askConfirm('Se empieza un dibujo vacío. El actual se puede recuperar con Ctrl+Z.', { title: 'Dibujo nuevo', ok: 'Empezar' }))) return;
         this.history.commit(newDocument());
         if (this.mode !== 'gis') {
           this.applyCanvasDefaults();
@@ -667,6 +694,7 @@ class App {
       item(`Cambiar a modo ${this.mode === 'gis' ? MODES.canvas : MODES.gis}`, () => this.setMode(this.mode === 'gis' ? 'canvas' : 'gis')),
       item('Layout de impresión (PDF / SVG / PNG)…', () => this.showPanel('layout')),
       item('Zoom a todo el dibujo', () => this.zoomToShapes(allTopShapes(this.history.doc).map((x) => x.shape))),
+      item(`Atajos, gestos y versión (${APP_VERSION})…`, () => this.toggleHelp(true)),
     ].filter(Boolean);
   }
 
@@ -872,6 +900,7 @@ class App {
         n === 1 && this.mode === 'gis' ? it('Atributos…', '', () => this.showPanel('attrs')) : null,
         n === 1 && sel[0].type === 'text' ? it('Editar texto', 'Doble clic', () => this.editText(sel[0])) : null,
         n === 1 && sel[0].type === 'path' ? it('Editar nodos', 'A', () => ed.setTool('node')) : null,
+        it('Transformar: mover, rotar, escalar…', 'Ctrl+Mayús+M', () => this.transformDialog()),
       ]);
       groups.push([
         it('Traer al frente', 'Ctrl+Mayús+]', () => this.history.commit(arrange(doc, ed.selection, 'front'))),
@@ -939,8 +968,8 @@ class App {
     const t = `${lat.toFixed(6)}, ${lon.toFixed(6)}  (${formatDMS(lat, true)} ${formatDMS(lon, false)} · ${Math.round(wp[0])} E ${Math.round(wp[1])} N UTM 19S)`;
     navigator.clipboard?.writeText(t).then(
       () => this.message('Coordenadas copiadas'),
-      () => prompt('Coordenadas', t),
-    ) ?? prompt('Coordenadas', t);
+      () => askText('Coordenadas', t, { ok: 'Cerrar', hint: 'No se pudo copiar solo: selecciona el texto y cópialo.' }),
+    ) ?? askText('Coordenadas', t, { ok: 'Cerrar' });
   }
 
   /** Qué se puede hacer con la selección: Join, Merge, Split y Hole. */
@@ -1058,7 +1087,60 @@ class App {
       item('Hueco con la forma de arriba (Hole)', () => this.holeSelected(false), g.canHole, 'Selecciona el polígono y, encima, la forma que lo abre'),
       item('Hueco conservando la forma (Hole)', () => this.holeSelected(true), g.canHole, 'Selecciona el polígono y, encima, la forma que lo abre'),
       item('Hueco dibujando una forma (Hole)…', () => this.holeByDrawing(), g.canHoleDraw, 'Selecciona un polígono'),
+      h('div', { class: 'mh' }, 'Selección'),
+      item('Transformar: mover, rotar, escalar…', () => this.transformDialog(), this.editor.selection.size > 0, 'Selecciona uno o más objetos', 'Ctrl+Mayús+M'),
     ];
+  }
+
+  /**
+   * Transformar con valores exactos: desplazamiento (mm de papel en Canvas,
+   * metros en GIS), rotación y escala, con deslizadores y vista previa en vivo.
+   * Aceptar deja un solo paso en el historial; Cancelar no deja nada.
+   */
+  async transformDialog() {
+    const ed = this.editor;
+    const ids = new Set(ed.selection);
+    const sel = ed.selectedShapes();
+    if (!sel.length) return this.message('Selecciona algo para transformar');
+    const gis = this.mode === 'gis';
+    const k = gis ? 1 : this.history.doc.refScale / 1000; // metros del mundo por unidad mostrada
+    const unit = gis ? 'm' : 'mm';
+    const box = unionBBox(sel.map((s) => shapeBBox(s, ed.est())));
+    const f = (v) => (gis ? Math.round(v) : (v / k).toFixed(1));
+    const last = this.lastTransform || {};
+    this.history.begin();
+    const base = this.history.doc;
+    const opts = (v) => ({
+      dx: (Number(v.dx) || 0) * k,
+      dy: (Number(v.dy) || 0) * k,
+      angle: Number(v.angle) || 0,
+      sx: (Number(v.sx) || 100) / 100,
+      sy: (v.uniform ? Number(v.sx) || 100 : Number(v.sy) || 100) / 100,
+      pivot: v.pivot,
+      strokes: v.strokes,
+    });
+    const r = await askForm({
+      title: 'Transformar',
+      hint: `${sel.length} objeto(s) · ${f(box.w)} × ${f(box.h)} ${unit}. Se aplica en orden: escala, rotación y desplazamiento.`,
+      fields: [
+        { key: 'dx', label: `Mover → este (${unit})`, type: 'number', value: 0, step: gis ? 1 : 0.5 },
+        { key: 'dy', label: `Mover ↑ norte (${unit})`, type: 'number', value: 0, step: gis ? 1 : 0.5 },
+        { key: 'angle', label: 'Rotar (°, antihorario)', type: 'number', value: 0, min: -180, max: 180, step: 1, unit: '°' },
+        { key: 'sx', label: 'Escala', type: 'number', value: 100, min: 5, max: 500, step: 1, unit: '%', log: true },
+        { key: 'uniform', label: 'Escala uniforme (vertical = horizontal)', type: 'check', value: last.uniform ?? true },
+        { key: 'sy', label: 'Escala vertical', type: 'number', value: 100, min: 5, max: 500, step: 1, unit: '%', log: true, when: (v) => !v.uniform },
+        { key: 'strokes', label: 'Escalar también los grosores de trazo', type: 'check', value: last.strokes ?? false },
+        { key: 'pivot', label: 'Centro de rotación y escala', type: 'select', value: last.pivot || 'center', options: { center: 'Centro de la selección', each: 'Centro de cada objeto' } },
+      ],
+      ok: 'Aplicar',
+      live: true,
+      validate: (v) => (Number(v.sx) > 0 && (v.uniform || Number(v.sy) > 0) ? '' : 'La escala debe ser mayor que 0 %.'),
+      onchange: (v) => this.history.preview(transformShapes(base, ids, opts(v), ed.est())),
+    });
+    if (!r) return this.history.cancel();
+    this.lastTransform = { uniform: r.uniform, strokes: r.strokes, pivot: r.pivot };
+    this.history.preview(transformShapes(base, ids, opts(r), ed.est()));
+    this.history.end();
   }
 
   lockSelection() {
@@ -1415,6 +1497,7 @@ class App {
     if (k === 'f') return run(() => this.paste(true));
     if (k === 'b') return run(() => this.paste(true, 'back'));
     if (k === 'd') return run(() => ed.duplicate());
+    if (k === 'm' && e.shiftKey) return run(() => this.transformDialog());
     if (k === 'a' && e.shiftKey) return run(() => ed.setSelection([]));
     if (k === 'a') return run(() => ed.selectAll());
     if (k === 's') return run(() => this.saveProject());
@@ -1539,29 +1622,48 @@ class App {
     if (img) this.view.fit({ x: img.x0, y: img.y0, w: img.x1 - img.x0, h: img.y1 - img.y0 });
   }
 
-  gotoCoords() {
-    const t = prompt('Coordenadas: "lat, lon" (grados o 33°27\'S, 70°40\'W) o "E N" en UTM 19S', '');
-    if (!t) return;
-    import('./proj.js').then(({ parseDMS, fromLonLat }) => {
-      const parts = t.split(/[,;]|\s{2,}/).map((p) => p.trim()).filter(Boolean);
-      let x;
-      let y;
-      if (parts.length === 1) {
-        const m = t.trim().split(/\s+/);
-        if (m.length === 2 && Number(m[0]) > 1000) [x, y] = m.map(Number);
-      }
-      if (x == null && parts.length >= 2) {
-        const a = parseDMS(parts[0]);
-        const b = parseDMS(parts[1]);
-        if (Math.abs(a) > 1000) [x, y] = [a, b];
-        else [x, y] = fromLonLat(b, a);
-      }
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return this.message('No entendí las coordenadas');
-      this.view.cx = x;
-      this.view.cy = y;
-      if (this.view.mpp > 20) this.view.mpp = 10;
-      this.view.emit();
+  async gotoCoords() {
+    const t = await askText('Ir a coordenadas', '', {
+      placeholder: '33°27\'12"S, 70°40\'W  ·  -33.45, -70.67  ·  346000 6297000',
+      hint: '«lat, lon» en grados (decimales o con °\'") o «E N» en metros UTM 19S.',
+      ok: 'Ir',
+      preview: coordPreview,
+      validate: (v) => (parseCoordText(v) ? '' : 'No entiendo esas coordenadas.'),
     });
+    const xy = t && parseCoordText(t);
+    if (!xy) return;
+    [this.view.cx, this.view.cy] = xy;
+    if (this.view.mpp > 20) this.view.mpp = 10;
+    this.view.emit();
+  }
+
+  /**
+   * Sistema de coordenadas de un archivo que no lo declara: lista de los
+   * habituales en Chile y un código EPSG libre, validado.
+   */
+  async askEpsg(title, value = 32719) {
+    const common = {
+      32719: 'WGS84 / UTM 19S (32719)',
+      32718: 'WGS84 / UTM 18S (32718)',
+      32720: 'WGS84 / UTM 20S (32720)',
+      4326: 'WGS84 geográficas, lat/lon (4326)',
+      24879: 'PSAD56 / UTM 19S (24879)',
+      24878: 'PSAD56 / UTM 18S (24878)',
+      29189: 'SAD69 / UTM 19S (29189)',
+      31979: 'SIRGAS 2000 / UTM 19S (31979)',
+      3857: 'Web Mercator (3857)',
+      other: 'Otro código EPSG…',
+    };
+    const r = await askForm({
+      title,
+      fields: [
+        { key: 'pick', label: 'Sistema', type: 'select', options: common, value: common[value] ? value : 'other' },
+        { key: 'code', label: 'EPSG (si es «otro»)', type: 'text', value: common[value] ? '' : String(value), placeholder: 'p. ej. 32719' },
+      ],
+      validate: (v) => (v.pick !== 'other' || proj4Def(v.code) ? '' : 'Código EPSG no reconocido (UTM WGS84, PSAD56, SAD69, SIRGAS, 4326 o 3857).'),
+    });
+    if (!r) return null;
+    return Number(r.pick === 'other' ? r.code : r.pick);
   }
 
   async startGeoref(file = null) {
@@ -1824,7 +1926,12 @@ class App {
     let picked;
     if (clientId) picked = await gd.pickDriveFiles({ clientId, apiKey });
     else {
-      const link = prompt('Enlace de Google Drive del archivo (compartido con «cualquier persona con el enlace»):', '');
+      const link = await askText('Abrir desde Google Drive', '', {
+        label: 'Enlace del archivo',
+        placeholder: 'https://drive.google.com/file/d/…',
+        hint: 'El archivo debe estar compartido con «cualquier persona con el enlace».',
+        validate: (v) => (gd.parseDriveId(v) ? '' : 'No reconozco el enlace de Google Drive.'),
+      });
       if (!link) return;
       const id = gd.parseDriveId(link);
       if (!id) throw new Error('No reconozco el enlace de Google Drive');
@@ -1881,7 +1988,7 @@ class App {
       const folder = await gd.pickDriveFolder({ clientId, apiKey });
       if (!folder) return;
       parentId = folder.id;
-      const n = prompt(`Nombre del archivo en «${folder.name}»`, name);
+      const n = await askText('Guardar en Google Drive', name, { label: `Nombre del archivo en «${folder.name}»`, ok: 'Guardar', validate: (v) => (v ? '' : 'Escribe un nombre.') });
       if (!n) return;
       name = /\.gisdrawer$/i.test(n) ? n : `${n}.gisdrawer`;
     }
@@ -1964,9 +2071,9 @@ class App {
     if (rec.format === 'tif') {
       const { readGeoTIFF } = await import('./io/geotiff.js');
       const info = await readGeoTIFF(buffer);
-      if (!info.epsg) rec.epsg = Number(prompt('El GeoTIFF no declara su sistema. EPSG:', '32719')) || null;
+      if (!info.epsg) rec.epsg = await this.askEpsg('El GeoTIFF no declara su sistema de coordenadas');
     } else {
-      rec.epsg = Number(prompt('Sistema del ASCII grid (EPSG):', '4326')) || 4326;
+      rec.epsg = (await this.askEpsg('Sistema del ASCII grid', 4326)) || 4326;
     }
     const fileId = newId('F');
     const grid = await this.buildDem(rec);
@@ -2002,7 +2109,7 @@ class App {
     const buffer = await f.arrayBuffer();
     const { readGeoTIFF } = await import('./io/geotiff.js');
     const info = await readGeoTIFF(buffer);
-    const rec = { kind: 'image', name: f.name, buffer, epsg: info.epsg ? null : Number(prompt('El GeoTIFF no declara su sistema. EPSG:', '32719')) || null };
+    const rec = { kind: 'image', name: f.name, buffer, epsg: info.epsg ? null : await this.askEpsg('El GeoTIFF no declara su sistema de coordenadas') };
     const img = await this.buildImage(rec);
     const fileId = newId('F');
     imageFiles.set(fileId, img);
@@ -2135,7 +2242,7 @@ const SHORTCUTS = [
   ['Color', [['X', 'Alternar relleno / trazo'], ['Mayús+X', 'Intercambiar relleno y trazo'], ['D', 'Colores predeterminados'], ['/', 'Ninguno']]],
   ['Edición', [
     ['Ctrl+Z / Ctrl+Mayús+Z', 'Deshacer / rehacer'], ['Ctrl+C / X / V', 'Copiar / cortar / pegar (también desde y hacia Illustrator)'], ['Ctrl+F / Ctrl+B', 'Pegar en el lugar delante / detrás'],
-    ['Ctrl+D', 'Duplicar'], ['Alt+arrastrar', 'Duplicar al mover'], ['Supr', 'Eliminar'], ['Flechas', 'Mover 1 px (Mayús: 10)'],
+    ['Ctrl+D', 'Duplicar'], ['Ctrl+Mayús+M', 'Transformar: mover, rotar, escalar con valores exactos'], ['Alt+arrastrar', 'Duplicar al mover'], ['Supr', 'Eliminar'], ['Flechas', 'Mover 1 px (Mayús: 10)'],
     ['Ctrl+A / Ctrl+Mayús+A', 'Seleccionar todo / nada'], ['Ctrl+G / Ctrl+Mayús+G', 'Agrupar / desagrupar'], ['Ctrl+J', 'Unir líneas (Join) / fusionar polígonos (Merge)'],
     ['Ctrl+7 / Ctrl+Alt+7', 'Máscara de recorte / liberar'], ['Ctrl+] / Ctrl+[', 'Adelante / atrás (Mayús: al frente / al fondo)'],
     ['Ctrl+2 / Ctrl+Alt+2', 'Bloquear / desbloquear todo'], ['Ctrl+3 / Ctrl+Alt+3', 'Ocultar / mostrar todo'], ['Mayús+C', 'Nodo esquina ↔ curva'],

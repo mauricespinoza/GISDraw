@@ -24,6 +24,7 @@ import { lonLatBBox } from '../raster/dem.js';
 import { View } from '../view.js';
 import { h, sec, row, select, num, text, check, btn, color } from './dom.js';
 import { download } from '../io/store.js';
+import { askConfirm, askText } from './dialog.js';
 import { loadScript } from '../io/loader.js';
 import { isGisLayer } from '../mode.js';
 
@@ -1000,8 +1001,13 @@ export class LayoutEditor {
       h(
         'div',
         { class: 'grid-btns two' },
-        btn('Guardar como estilo…', () => {
-          const name = prompt('Nombre del estilo de layout', this.styleChoice || 'Mi estilo');
+        btn('Guardar como estilo…', async () => {
+          const name = await askText('Guardar estilo de layout', this.styleChoice || 'Mi estilo', {
+            label: 'Nombre del estilo',
+            hint: 'Guarda la página, la grilla, los elementos y su posición, el marco, el tamaño de símbolos y los cuadros de texto.',
+            validate: (v) => (v ? '' : 'Escribe un nombre.'),
+            preview: (v) => (names[v] ? `Reemplazará el estilo «${v}».` : ''),
+          });
           if (!name) return;
           try {
             saveStyle(name, L);
@@ -1018,8 +1024,8 @@ export class LayoutEditor {
         ? h(
             'div',
             { class: 'grid-btns three' },
-            btn('Borrar', () => {
-              if (!confirm(`¿Borrar el estilo «${this.styleChoice}»?`)) return;
+            btn('Borrar', async () => {
+              if (!(await askConfirm(`Se borrará el estilo «${this.styleChoice}» de este navegador.`, { title: 'Borrar estilo de layout', ok: 'Borrar', danger: true }))) return;
               deleteStyle(this.styleChoice);
               this.app.panels.render();
             }, 'danger'),
@@ -1160,15 +1166,15 @@ export class LayoutEditor {
     return sec(
       'Tamaño de símbolos y textos',
       row('Modo', select(SYMBOL_SCALES, L.symbolScale || 'auto', (v) => this.set({ symbolScale: v }))),
-      L.symbolScale === 'custom' ? row('Factor ×', num(L.symbolFactor, (v) => v > 0 && this.set({ symbolFactor: v }), { step: 0.05, min: 0.05 })) : null,
+      L.symbolScale === 'custom' ? row('Factor ×', num(L.symbolFactor, (v) => v > 0 && this.set({ symbolFactor: v }), { step: 0.05, min: 0.05, slide: [0.1, 5], log: true })) : null,
       h(
         'p',
         { class: 'hint' },
         `Dibujo a 1:${fmt(ref)}, lámina a 1:${fmt(L.scale)}: grosores, ornamentos, tramas y textos al ${Math.round(f * 100)} % de su tamaño en el estilo. «Automático» toma el punto medio entre dejarlos fijos en papel y escalarlos con el mapa, para que el cambio de escala no sea brusco.`,
       ),
       ref !== L.scale
-        ? btn(`Usar 1:${fmt(L.scale)} como escala de referencia del dibujo`, () => {
-            if (!confirm(`¿Cambiar la escala de referencia del dibujo de 1:${fmt(ref)} a 1:${fmt(L.scale)}? Los tamaños en pantalla pasarán a medirse a esa escala.`)) return;
+        ? btn(`Usar 1:${fmt(L.scale)} como escala de referencia del dibujo`, async () => {
+            if (!(await askConfirm(`La escala de referencia del dibujo pasa de 1:${fmt(ref)} a 1:${fmt(L.scale)}: los grosores y textos en pantalla pasarán a medirse a esa escala.`, { title: 'Cambiar escala de referencia', ok: 'Cambiar' }))) return;
             this.app.history.commit({ ...this.app.history.doc, refScale: L.scale });
             this.schedule(0);
           })
@@ -1190,11 +1196,11 @@ export class LayoutEditor {
         'Página',
         row('Tamaño', select(Object.keys(PAGES), L.page, set('page'))),
         row('Orientación', select({ landscape: 'Horizontal', portrait: 'Vertical' }, L.orientation, set('orientation'))),
-        row('Margen (mm)', num(L.margin, set('margin'), { step: 1, min: 0 })),
+        row('Margen (mm)', num(L.margin, set('margin'), { step: 1, min: 0, slide: [0, 40] })),
       ),
       sec(
         'Mapa',
-        row('Escala 1:', num(L.scale, set('scale'), { step: 1000, min: 100 })),
+        row('Escala 1:', num(L.scale, set('scale'), { step: 1000, min: 100, slide: [1000, 2e6], log: true })),
         row('Centro E', num(L.center[0], (x) => this.set({ center: [x, L.center[1]] }), { step: 100 })),
         row('Centro N', num(L.center[1], (y) => this.set({ center: [L.center[0], y] }), { step: 100 })),
         h(
@@ -1223,7 +1229,7 @@ export class LayoutEditor {
         row('Intervalo geo (min)', num(L.geoInterval || '', set('geoInterval'), { step: 1, min: 0 })),
         h('p', { class: 'hint' }, 'Intervalos vacíos o 0 = automáticos.'),
         row('Color', color(L.gridColor, null, set('gridColor'))),
-        row('Rótulos (pt)', num(L.gridLabelSize, set('gridLabelSize'), { step: 0.5, min: 3 })),
+        row('Rótulos (pt)', num(L.gridLabelSize, set('gridLabelSize'), { step: 0.5, min: 3, slide: [3, 24] })),
         check('Borde de cebra', L.zebra, set('zebra')),
         ]),
       ),
@@ -1247,7 +1253,7 @@ export class LayoutEditor {
         row('Color del fondo', color(L.scaleBgColor || '#ffffff', null, set('scaleBgColor'))),
         h('p', { class: 'hint' }, 'La escala gráfica y la numérica son dos elementos independientes: se mueven y escalan por separado.'),
         check('Leyenda (columna lateral)', L.legend, set('legend')),
-        L.legend ? row('Ancho columna (mm)', num(L.legendWidth, set('legendWidth'), { step: 2, min: 40 })) : null,
+        L.legend ? row('Ancho columna (mm)', num(L.legendWidth, set('legendWidth'), { step: 2, min: 40, slide: [40, 200] })) : null,
         L.legend ? row('Título leyenda', text(L.legendTitle, set('legendTitle'))) : null,
         h('p', { class: 'hint' }, 'La leyenda junta un símbolo por estilo distinto de cada capa visible, rotulado con el campo de etiqueta de la capa.'),
       ),

@@ -20,10 +20,18 @@ import { SAME_CRITERIA, align, arrange, distribute, group, moveToLayer, selectBy
 import { measure, shapeBBox, unionBBox, walkShapes } from '../vector.js';
 import { LABEL_SEPARATORS, labelText } from '../labels.js';
 import { RAMPS, applyRenderer, buildRenderer, clearRenderer, countClasses, defaultRendererOptions, fieldChoices, rampCss } from '../symbology.js';
-import { h, sec, row, select, slider, num, text, color, check, btn } from './dom.js';
+import { h, sec, row, select, slider, num, text, color, check, btn, closePopSliders } from './dom.js';
 import { TAB_ICONS } from './icons.js';
+import { askConfirm, askText } from './dialog.js';
 import { alignOf, layoutText } from '../textLayout.js';
 import { CANVAS_SIZES, CANVAS_TABS, GIS_TABS, canvasDefaults, canvasMm, isGisLayer, normalizeCanvas } from '../mode.js';
+
+/** Validador de un nombre de campo nuevo: no vacío, sin repetir. */
+const fieldName = (existing = []) => (v) => {
+  if (!v) return 'Escribe un nombre.';
+  if (existing.includes(v)) return `El campo «${v}» ya existe.`;
+  return '';
+};
 
 export const TABS = {
   layers: 'Capas',
@@ -111,6 +119,7 @@ export class Panels {
   }
 
   render() {
+    closePopSliders();
     const scroll = this.body.scrollTop;
     if (!this.tabAllowed(this.tab)) this.tab = 'layers';
     const fn = {
@@ -169,8 +178,8 @@ export class Panels {
       sec(
         'Valores por defecto',
         h('p', { class: 'hint' }, `Para una figura de media hoja: trazo de ${d.strokeWidth} mm y letra de ${d.fontSize} pt${c.size === 'A4' ? ' (A4)' : ` (a escala de ${Math.round(d.factor * 100)} % respecto de A4)`}. Al cambiar el tamaño de la hoja se vuelven a calcular.`),
-        row('Grosor de trazo (mm)', num(app.currentStyle.strokeWidth, (v) => v > 0 && app.setCurrentStyle({ ...app.currentStyle, strokeWidth: v }), { step: 0.05, min: 0.05 })),
-        row('Letra (pt)', num(app.currentStyle.fontSize || 10, (v) => v > 0 && app.setCurrentStyle({ ...app.currentStyle, fontSize: v }), { step: 0.5, min: 1 })),
+        row('Grosor de trazo (mm)', num(app.currentStyle.strokeWidth, (v) => v > 0 && app.setCurrentStyle({ ...app.currentStyle, strokeWidth: v }), { step: 0.05, min: 0.05, slide: [0.05, 5], log: true })),
+        row('Letra (pt)', num(app.currentStyle.fontSize || 10, (v) => v > 0 && app.setCurrentStyle({ ...app.currentStyle, fontSize: v }), { step: 0.5, min: 1, slide: [4, 72], log: true })),
         btn('Usar los de media hoja', () => app.applyCanvasDefaults()),
       ),
     ];
@@ -184,18 +193,19 @@ export class Panels {
     const list = h('div', {});
     // de arriba hacia abajo, como en cualquier programa de dibujo
     for (const l of [...doc.layers].reverse()) if (app.mode === 'gis' || !isGisLayer(l)) list.append(this.layerRow(l));
+    const tip = (el, t) => (el && el.setAttribute('data-tip', t), el);
     const add = h(
       'div',
-      { class: 'grid-btns' },
-      btn('+ Vectorial', () => {
+      { class: `grid-btns${app.mode === 'gis' ? '' : ' one'}` },
+      tip(btn('+ Capa', () => {
         const l = makeVectorLayer(`Capa ${doc.layers.filter((x) => x.kind === 'vector').length + 1}`);
         app.history.commit(addLayer(this.doc, l, this.doc.activeLayerId));
-      }),
-      app.mode === 'gis' && btn('+ Mapa base', () => {
+      }), 'Capa vectorial nueva, sobre la activa'),
+      app.mode === 'gis' && tip(btn('+ Mapa', () => {
         const l = makeRasterLayer('basemap', 'Mapa base: Esri satélite', { source: 'esri_imagery' });
         app.history.commit({ ...addLayer(this.doc, l), layers: [l, ...this.doc.layers] });
-      }),
-      app.mode === 'gis' && btn('+ Relieve', () => {
+      }), 'Mapa base en línea (satélite, topográfico…), al fondo'),
+      app.mode === 'gis' && tip(btn('+ Relieve', () => {
         const l = makeRasterLayer('hillshade', 'Relieve sombreado', defaultHillshadeSettings());
         const layers = this.doc.layers.slice();
         // por defecto sobre los mapas base y bajo el dibujo
@@ -203,7 +213,7 @@ export class Panels {
         layers.splice(firstVector < 0 ? layers.length : firstVector, 0, l);
         app.history.commit({ ...this.doc, layers });
         this.show('relief');
-      }),
+      }), 'Relieve sombreado de un modelo de elevación, bajo el dibujo'),
     );
     return [
       sec('Capas', list, add),
@@ -240,8 +250,8 @@ export class Panels {
           else this.expanded.add(l.id);
           this.render();
         },
-        ondblclick: () => {
-          const n = prompt('Nombre de la capa', l.name);
+        ondblclick: async () => {
+          const n = await askText('Renombrar capa', l.name, { label: 'Nombre', validate: (v) => (v ? '' : 'Escribe un nombre.') });
           if (n) set({ name: n });
         },
       },
@@ -294,8 +304,9 @@ export class Panels {
       if (l.kind === 'image') actions.append(btn('Zoom a imagen', () => app.zoomToImage(l)));
       actions.append(
         btn('Duplicar', () => app.history.commit(duplicateLayer(this.doc, l.id))),
-        btn('Eliminar', () => {
-          if (confirm(`¿Eliminar la capa «${l.name}»?`)) app.history.commit(removeLayer(this.doc, l.id));
+        btn('Eliminar', async () => {
+          const n = l.shapes?.length || 0;
+          if (await askConfirm(`Se eliminará la capa «${l.name}»${n ? ` con ${n} objeto(s)` : ''}. Se puede deshacer con Ctrl+Z.`, { title: 'Eliminar capa', ok: 'Eliminar', danger: true })) app.history.commit(removeLayer(this.doc, l.id));
         }, 'danger'),
       );
       more.append(actions);
@@ -400,7 +411,7 @@ export class Panels {
       row('Esquinas', select({ round: 'Redondas', miter: 'En punta', bevel: 'Biseladas' }, s.join || 'round', fin('join'))),
       row('Alinear borde', select({ outside: 'Hacia afuera (no tapa el relleno)', center: 'Centrado', inside: 'Hacia adentro' }, s.align || 'outside', fin('align'))),
       row('Halo', check('Activado', s.casing, fin('casing')), color(s.casingColor || '#ffffff', live('casingColor'), fin('casingColor'))),
-      s.casing ? row('Ancho halo (mm)', num(s.casingWidth, fin('casingWidth'), { step: 0.05, min: 0 })) : null,
+      s.casing ? row('Ancho halo (mm)', num(s.casingWidth, fin('casingWidth'), { step: 0.05, min: 0, slide: [0, 3], oninput: live('casingWidth') })) : null,
       s.casing ? row('Opacidad halo', ...slider({ min: 0, max: 100, value: Math.round((s.casingOpacity ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live('casingOpacity')(v / 100), onchange: (v) => fin('casingOpacity')(v / 100) })) : null,
       h('p', { class: 'hint' }, 'El halo del trazo (en líneas y en el borde de polígonos) se agrega a cada lado, por debajo: el centro conserva el color del trazo. Útil para que se lea sobre una imagen oscura.'),
       h('p', { class: 'hint' }, 'El borde de polígonos crece solo hacia afuera: aumentar el grosor nunca resta superficie visible al relleno.'),
@@ -479,8 +490,8 @@ export class Panels {
       'Ornamento de falla / pliegue',
       row('Ornamento', select(Object.fromEntries(Object.entries(ORNAMENTS).map(([k, o]) => [k, o.label])), orn, (v) => edit(ornamentDefaults(v)))),
       orn !== 'none' ? row('Tamaño', ...slider({ min: Math.round(lim.size.min * 100), max: Math.round(lim.size.max * 100), value: Math.round((s.ornamentSize || 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => live('ornamentSize')(v / 100), onchange: (v) => fin('ornamentSize')(v / 100) })) : null,
-      orn !== 'none' ? row('Separación (mm)', num(s.ornamentSpacing, fin('ornamentSpacing'), { step: 0.5, min: lim.spacing.min, max: lim.spacing.max })) : null,
-      orn === 'dextral' || orn === 'sinistral' ? row('Dist. a la traza (mm)', num(s.ornamentGap, fin('ornamentGap'), { step: 0.1, min: lim.gap.min, max: lim.gap.max })) : null,
+      orn !== 'none' ? row('Separación (mm)', num(s.ornamentSpacing, fin('ornamentSpacing'), { step: 0.5, min: lim.spacing.min, max: lim.spacing.max, slide: [lim.spacing.min, lim.spacing.max], oninput: live('ornamentSpacing') })) : null,
+      orn === 'dextral' || orn === 'sinistral' ? row('Dist. a la traza (mm)', num(s.ornamentGap, fin('ornamentGap'), { step: 0.1, min: lim.gap.min, max: lim.gap.max, slide: [lim.gap.min, lim.gap.max], oninput: live('ornamentGap') })) : null,
       ORNAMENTS[orn]?.flippable
         ? row('Lado', select({ left: 'Izquierda del sentido de digitalización', right: 'Derecha' }, s.ornamentSide || 'left', fin('ornamentSide')), btn('⇄', () => edit({ ornamentSide: (s.ornamentSide || 'left') === 'left' ? 'right' : 'left' }), 'sm'))
         : null,
@@ -530,8 +541,8 @@ export class Panels {
     const wavySec = sec(
       'Discordancia (línea ondulada)',
       row('Forma', select({ straight: 'Recta', wavy: 'Ondulada' }, s.wavy ? 'wavy' : 'straight', (v) => edit({ wavy: v === 'wavy' }))),
-      s.wavy ? row('Amplitud (mm)', num(s.waveAmp, fin('waveAmp'), { step: 0.1, min: 0.1 })) : null,
-      s.wavy ? row('Long. onda (mm)', num(s.waveLen, fin('waveLen'), { step: 0.2, min: 0.8 })) : null,
+      s.wavy ? row('Amplitud (mm)', num(s.waveAmp, fin('waveAmp'), { step: 0.1, min: 0.1, slide: [0.1, 5], oninput: live('waveAmp') })) : null,
+      s.wavy ? row('Long. onda (mm)', num(s.waveLen, fin('waveLen'), { step: 0.2, min: 0.8, slide: [0.8, 20], oninput: live('waveLen') })) : null,
     );
     return [this.styleHead(shapes), presetSec, ornSec, wavySec, patSec];
   }
@@ -570,10 +581,10 @@ export class Panels {
     return sec(
       `Texto (${texts.length} textos)`,
       row('Fuente', select({ ...FONTS, ...(FONTS[t.fontFamily] ? {} : { [t.fontFamily]: t.fontFamily }) }, t.fontFamily, (v) => set({ fontFamily: v }))),
-      row('Tamaño (pt)', num(t.fontSize, (v) => set({ fontSize: v }), { step: 0.5, min: 1 })),
+      row('Tamaño (pt)', num(t.fontSize, (v) => set({ fontSize: v }), { step: 0.5, min: 1, slide: [1, 96], log: true })),
       row('Estilo', check('Negrita', t.fontWeight >= 600, (v) => set({ fontWeight: v ? 700 : 400 })), check('Cursiva', t.italic, (v) => set({ italic: v }))),
       row('Halo', check('Activado', t.halo, (v) => set({ halo: v })), color(t.haloColor || '#ffffff', (v) => set({ haloColor: v }, false), (v) => set({ haloColor: v }))),
-      row('Ancho halo (mm)', num(t.haloWidth ?? 0.5, (v) => set({ haloWidth: v }), { step: 0.1, min: 0 })),
+      row('Ancho halo (mm)', num(t.haloWidth ?? 0.5, (v) => set({ haloWidth: v }), { step: 0.1, min: 0, slide: [0, 3] })),
       row('Opacidad halo', ...slider({ min: 0, max: 100, value: Math.round((t.haloOpacity ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => set({ haloOpacity: v / 100 }, false), onchange: (v) => set({ haloOpacity: v / 100 }) })),
       h('p', { class: 'hint' }, 'Color de letra, opacidad y demás ajustes de relleno/trazo están en las secciones de abajo y valen para todos los objetos seleccionados.'),
     );
@@ -600,7 +611,7 @@ export class Panels {
     return [
       row('Texto', ta),
       row('Fuente', select({ ...FONTS, ...(FONTS[t.fontFamily] ? {} : { [t.fontFamily]: t.fontFamily }) }, t.fontFamily, (v) => set({ fontFamily: v }))),
-      row('Tamaño (pt)', num(t.fontSize, (v) => set({ fontSize: v }), { step: 0.5, min: 1 })),
+      row('Tamaño (pt)', num(t.fontSize, (v) => set({ fontSize: v }), { step: 0.5, min: 1, slide: [1, 96], log: true })),
       h('p', { class: 'hint' }, 'También se cambia estirando la esquina de la caja de selección; el borde izquierdo o derecho cambia el ancho del cuadro.'),
       row('Estilo', check('Negrita', t.fontWeight >= 600, (v) => set({ fontWeight: v ? 700 : 400 })), check('Cursiva', t.italic, (v) => set({ italic: v }))),
       colorCtl ? row('Color', color(colorCtl[0], (v) => colorCtl[1](v, false), (v) => colorCtl[1](v, true))) : null,
@@ -615,7 +626,7 @@ export class Panels {
       h('p', { class: 'hint' }, 'Espaciados en milésimas de em (como el «tracking» de Illustrator). Varios espacios seguidos se respetan.'),
       row('Rotación', ...slider({ min: -180, max: 180, value: t.rotation || 0, fmt: (v) => `${v}°`, oninput: (v) => set({ rotation: v }, false), onchange: (v) => set({ rotation: v }) })),
       row('Halo', check('Activado', t.halo, (v) => set({ halo: v })), color(t.haloColor, (v) => set({ haloColor: v }, false), (v) => set({ haloColor: v }))),
-      row('Ancho halo (mm)', num(t.haloWidth, (v) => set({ haloWidth: v }), { step: 0.1, min: 0 })),
+      row('Ancho halo (mm)', num(t.haloWidth, (v) => set({ haloWidth: v }), { step: 0.1, min: 0, slide: [0, 3] })),
       row('Opacidad halo', ...slider({ min: 0, max: 100, value: Math.round((t.haloOpacity ?? 1) * 100), fmt: (v) => `${v}%`, oninput: (v) => set({ haloOpacity: v / 100 }, false), onchange: (v) => set({ haloOpacity: v / 100 }) })),
       h('p', { class: 'hint' }, 'El halo del texto es externo: rodea las letras sin tapar su interior.'),
     ];
@@ -680,7 +691,7 @@ export class Panels {
     if (o.mode === 'graduated') {
       out.push(
         row('Método', select({ quantile: 'Cuantiles (igual cantidad)', equal: 'Intervalos iguales', pretty: 'Cortes redondos', jenks: 'Cortes naturales (Jenks)' }, o.method, (v) => (o.method = v))),
-        row('Clases', num(o.n, (v) => (o.n = Math.max(2, Math.min(30, Math.round(v)))), { step: 1, min: 2, max: 30 })),
+        row('Clases', num(o.n, (v) => (o.n = Math.max(2, Math.min(30, Math.round(v)))), { step: 1, min: 2, max: 30, slide: [2, 30] })),
       );
     }
     out.push(
@@ -768,18 +779,18 @@ export class Panels {
       sec(
         'Tipografía',
         row('Fuente', select(FONTS, c.fontFamily, (v) => set({ fontFamily: v }))),
-        row('Tamaño (pt)', num(c.fontSize, (v) => set({ fontSize: v }), { step: 0.5, min: 2 })),
+        row('Tamaño (pt)', num(c.fontSize, (v) => set({ fontSize: v }), { step: 0.5, min: 2, slide: [2, 72], log: true })),
         row('Estilo', check('Negrita', c.fontWeight >= 600, (v) => set({ fontWeight: v ? 700 : 400 })), check('Cursiva', c.italic, (v) => set({ italic: v }))),
         row('Color', color(c.color, (v) => set({ color: v }, false), (v) => set({ color: v }))),
         row('Halo', check('Activado', c.halo, (v) => set({ halo: v })), color(c.haloColor, (v) => set({ haloColor: v }, false), (v) => set({ haloColor: v }))),
-        row('Ancho halo (mm)', num(c.haloWidth, (v) => set({ haloWidth: v }), { step: 0.1, min: 0 })),
+        row('Ancho halo (mm)', num(c.haloWidth, (v) => set({ haloWidth: v }), { step: 0.1, min: 0, slide: [0, 3] })),
         row('Fondo', check('Placa', c.background, (v) => set({ background: v })), color(c.backgroundColor, (v) => set({ backgroundColor: v }, false), (v) => set({ backgroundColor: v }))),
       ),
       sec(
         'Ubicación',
         row('Colocación', select({ auto: 'Automática', curved: 'Curvada sobre la línea', horizontal: 'Horizontal', centroid: 'Interior del polígono' }, c.placement, (v) => set({ placement: v }))),
-        row('Desplaz. (mm)', num(c.offset, (v) => set({ offset: v }), { step: 0.2 })),
-        row('Repetir cada (mm)', num(c.repeat, (v) => set({ repeat: v }), { step: 10, min: 0 })),
+        row('Desplaz. (mm)', num(c.offset, (v) => set({ offset: v }), { step: 0.2, slide: [-10, 10] })),
+        row('Repetir cada (mm)', num(c.repeat, (v) => set({ repeat: v }), { step: 10, min: 0, slide: [0, 500] })),
         check('Evitar superposición', c.avoidOverlap, (v) => set({ avoidOverlap: v })),
         row('Visible hasta 1:', num(c.minScale || '', (v) => set({ minScale: v }), { step: 1000, min: 0 })),
         h('p', { class: 'hint' }, 'Puntos: arriba a la derecha. Líneas: sobre el tramo más recto, siempre legibles de izquierda a derecha. Polígonos: en el punto interior más alejado del borde.'),
@@ -1034,7 +1045,7 @@ export class Panels {
     };
     return sec(
       'Topología',
-      row('Tolerancia (m)', num(st.tol, (v) => (st.tol = v), { step: 0.5, min: 0.01 })),
+      row('Tolerancia (m)', num(st.tol, (v) => (st.tol = v), { step: 0.5, min: 0.01, slide: [0.01, 100], log: true })),
       h(
         'div',
         { class: 'grid-btns two' },
@@ -1068,7 +1079,7 @@ export class Panels {
           }
         }),
       ),
-      row('Cerrar huecos (m)', num(st.snap, (v) => (st.snap = v), { step: 0.5, min: 0 })),
+      row('Cerrar huecos (m)', num(st.snap, (v) => (st.snap = v), { step: 0.5, min: 0, slide: [0, 100] })),
       h('p', { class: 'hint' }, 'Actúan sobre la selección o, si no hay, sobre la capa activa. Confirmar topología hace que los bordes vecinos compartan vértices. Polígonos desde líneas convierte contactos y fallas en unidades cerradas, sin huecos ni traslapes.'),
     );
   }
@@ -1086,8 +1097,8 @@ export class Panels {
           ? sec(
               `Campos de «${active.name}»`,
               h('p', { class: 'hint' }, (active.fields || []).join(', ') || 'sin campos'),
-              btn('+ Campo a la capa', () => {
-                const f = prompt('Nombre del campo nuevo');
+              btn('+ Campo a la capa', async () => {
+                const f = await askText('Campo nuevo', '', { label: `Nombre del campo en «${active.name}»`, placeholder: 'p. ej. codigo, edad, nombre', validate: fieldName(active.fields) });
                 if (!f) return;
                 app.history.commit(updateLayer(this.doc, active.id, (l) => ({ ...l, fields: [...new Set([...(l.fields || []), f])] })));
               }),
@@ -1123,8 +1134,8 @@ export class Panels {
       sec(
         'Atributos',
         fields.length ? table : h('p', { class: 'hint' }, 'Sin atributos.'),
-        btn('+ Campo', () => {
-          const f = prompt('Nombre del campo');
+        btn('+ Campo', async () => {
+          const f = await askText('Campo nuevo', '', { label: 'Nombre del campo', placeholder: 'p. ej. codigo, edad, nombre', validate: fieldName(fields) });
           if (!f) return;
           app.history.commit(updateLayer(mapShapes(this.doc, [s.id], (x) => ({ ...x, attrs: { ...(x.attrs || {}), [f]: '' } })), layer.id, (l) => ({ ...l, fields: [...new Set([...(l.fields || []), f])] })));
         }),

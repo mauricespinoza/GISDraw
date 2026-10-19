@@ -15,7 +15,8 @@
  */
 
 import { TRANSFORMS, affineOf, solveGeoref, warpToUtm } from '../georef.js';
-import { fromLonLat, parseDMS, toLonLat, formatDMS } from '../proj.js';
+import { coordPreview, parseCoordText, toLonLat, formatDMS } from '../proj.js';
+import { askConfirm, askText } from './dialog.js';
 import { h, sec, row, select, slider, btn } from './dom.js';
 import { makeRasterLayer } from '../doc.js';
 import { newId } from '../vector.js';
@@ -235,30 +236,23 @@ export class GeorefSession {
           btn('Exportar .points', () => this.exportPoints()),
           btn('Importar .points', () => this.importPoints().catch((e) => app.message(e.message, 5000))),
         ),
-        btn('Cerrar sin aplicar', () => { if (confirm('¿Cerrar la georreferenciación?')) this.close(); }, 'danger'),
+        btn('Cerrar sin aplicar', async () => {
+          if (await askConfirm('Se perderán los puntos de control que no hayas exportado (.points).', { title: 'Cerrar la georreferenciación', ok: 'Cerrar', danger: true })) this.close();
+        }, 'danger'),
       ),
     ];
   }
 
-  typeCoords(g) {
+  async typeCoords(g) {
     const cur = g.dst ? toLonLat(...g.dst) : null;
-    const t = prompt(
-      'Coordenadas del punto: "E N" (UTM 19S, m) o "lat, lon" en grados (33°27\'12"S, 70°40\'W o decimales)',
-      g.dst ? `${formatDMS(cur[1], true)}, ${formatDMS(cur[0], false)}` : '',
-    );
+    const t = await askText('Coordenadas del punto de control', g.dst ? `${formatDMS(cur[1], true)}, ${formatDMS(cur[0], false)}` : '', {
+      placeholder: '33°27\'12"S, 70°40\'W  ·  -33.45, -70.67  ·  346000 6297000',
+      hint: '«lat, lon» en grados (decimales o con °\'") o «E N» en metros UTM 19S.',
+      preview: coordPreview,
+      validate: (v) => (parseCoordText(v) ? '' : 'No entiendo esas coordenadas.'),
+    });
     if (!t) return;
-    let xy = null;
-    const m = t.trim().split(/[\s,;]+/);
-    if (m.length === 2 && Number(m[0]) > 1000 && Number(m[1]) > 1000) xy = [Number(m[0]), Number(m[1])];
-    else {
-      const parts = t.split(/[,;]/);
-      if (parts.length >= 2) {
-        const lat = parseDMS(parts[0]);
-        const lon = parseDMS(parts[1]);
-        if (Number.isFinite(lat) && Number.isFinite(lon)) xy = fromLonLat(lon, lat);
-      }
-    }
-    if (!xy) return this.app.message('No entendí las coordenadas');
+    const xy = parseCoordText(t);
     g.dst = xy;
     if (this.mode === 'dst') this.mode = 'idle';
     this.solve();
