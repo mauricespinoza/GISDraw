@@ -149,6 +149,8 @@ class App {
     });
     this.editor.onCommandKey = (e) => this.commandKey(e);
     this.editor.onPlainKey = (e) => this.plainKey(e);
+    this.editor.onCutLine = (c) => this.runCutLine(c).catch((err) => this.message(`Error: ${err.message}`, 6000));
+    this.editor.onCutTouch = (c) => this.runCutTouch(c).catch((err) => this.message(`Error: ${err.message}`, 6000));
     this.editor.onRadius = (key, v) => {
       this.saveSettings({ [key]: v });
       this.renderPropbar();
@@ -490,7 +492,7 @@ class App {
 
   buildToolbar() {
     this.toolbarEl = document.getElementById('toolbar');
-    const groups = [['select', 'node', 'drag', 'lasso'], ['pen', 'polygon', 'pencil', 'smooth', 'deform', 'line', 'arrow'], ['rect', 'ellipse', 'text', 'point'], ['scissors', 'eyedropper', 'pan', 'zoom']];
+    const groups = [['select', 'node', 'drag', 'lasso'], ['pen', 'polygon', 'pencil', 'smooth', 'deform', 'line', 'arrow'], ['split', 'reshape'], ['rect', 'ellipse', 'text', 'point'], ['scissors', 'eyedropper', 'pan', 'zoom']];
     const els = [];
     groups.forEach((g, gi) => {
       if (gi) els.push(h('div', { class: 'tsep' }));
@@ -1036,8 +1038,8 @@ class App {
         [
           g.canJoin ? it(g.lines.length === 1 ? 'Cerrar trazo (Join)' : 'Unir líneas (Join)', 'Ctrl+J', () => this.joinSelected()) : null,
           g.canMerge ? it('Fusionar polígonos (Merge)', 'Ctrl+J', () => this.mergeSelected()) : null,
-          g.canSplitSel ? it('Dividir con la línea seleccionada (Split)', '', () => this.splitSelected()) : null,
-          g.canSplitDraw ? it('Dividir dibujando una línea (Split)…', '', () => this.splitByDrawing()) : null,
+          it('Dividir (Split): línea que cruza o corte arrastrado…', 'U', () => ed.setTool('split')),
+          g.polys.length + g.lines.length ? it('Reshape: redibujar el contorno con una línea…', 'R', () => ed.setTool('reshape')) : null,
           g.canHole ? it('Hueco con la forma de arriba (Hole)', '', () => this.holeSelected(false)) : null,
           g.canHole ? it('Hueco conservando la forma (Hole)', '', () => this.holeSelected(true)) : null,
           g.canHoleDraw ? it('Hueco dibujando una forma (Hole)…', '', () => this.holeByDrawing()) : null,
@@ -1156,6 +1158,47 @@ class App {
     this.editor.beginCut('split', polys.map((p) => p.id));
   }
 
+  /**
+   * Split con la línea dibujada al arrastrar: corta lo seleccionado (líneas en
+   * los cruces, polígonos de borde a borde) o, sin selección, todo lo visible
+   * y desbloqueado que la línea cruza.
+   */
+  async runCutLine({ kind, pts, alt }) {
+    const { splitShapes, reshapeShapes, loadJsts } = await import('./geomOps.js');
+    const tol = this.geomTol();
+    const doc = this.history.doc;
+    const ids = this.editor.selection.size ? new Set(this.editor.selection) : null;
+    if (kind === 'reshape') {
+      const r = reshapeShapes(doc, ids, pts, { tol, keep: alt ? 'smaller' : 'larger' });
+      return this.applyGeom(r, `Reshape: ${r.changed || 1} forma(s) redibujada(s)${alt ? ' (se conservó el trozo menor)' : ''}`);
+    }
+    const r = splitShapes(await loadJsts(), doc, ids, pts, { tol });
+    this.applyGeom(r, `Dividido: ${r.lines ? `${r.lines} línea(s)` : ''}${r.lines && r.polys ? ' y ' : ''}${r.polys ? `${r.polys} polígono(s)` : ''}`);
+  }
+
+  /**
+   * Un toque con Split: con algo seleccionado, la línea (o contorno) tocada lo
+   * corta donde lo cruza; sin selección, el toque selecciona.
+   */
+  async runCutTouch({ kind, hit, shift }) {
+    const ed = this.editor;
+    const sel = new Set(ed.selection);
+    if (!hit) {
+      if (!shift) ed.setSelection([]);
+      return;
+    }
+    if (kind === 'reshape') return ed.setSelection(shift ? [...sel, hit.id] : [hit.id]);
+    const targets = new Set([...sel].filter((id) => id !== hit.id));
+    if (!targets.size || hit.type !== 'path') {
+      ed.setSelection(shift && hit.type === 'path' ? [...sel, hit.id] : [hit.id]);
+      return this.message('Dividir: con la línea o el polígono seleccionado, toca otra línea que lo cruce (o arrastra un corte)', 5000);
+    }
+    const { splitShapes, cutterFromShape, loadJsts } = await import('./geomOps.js');
+    const tol = this.geomTol();
+    const r = splitShapes(await loadJsts(), this.history.doc, targets, cutterFromShape(hit, tol), { tol });
+    this.applyGeom(r, `Dividido: ${r.lines ? `${r.lines} línea(s)` : ''}${r.lines && r.polys ? ' y ' : ''}${r.polys ? `${r.polys} polígono(s)` : ''}`);
+  }
+
   /** Hole: al polígono de más abajo se le resta lo que cubren los demás. */
   async holeSelected(keep) {
     const { holePolygons, loadJsts } = await import('./geomOps.js');
@@ -1199,8 +1242,8 @@ class App {
       item('Invertir dirección', () => this.editor.reverseSelected(), g.lines.length + g.polys.length > 0, 'Selecciona un trazo'),
       h('div', { class: 'mh' }, 'Polígonos'),
       item('Fusionar polígonos (Merge)', () => this.mergeSelected(), g.canMerge, 'Selecciona dos o más polígonos', 'Ctrl+J'),
-      item('Dividir con la línea seleccionada (Split)', () => this.splitSelected(), g.canSplitSel, 'Selecciona el polígono y, con Mayús, la línea que lo cruza'),
-      item('Dividir dibujando una línea (Split)…', () => this.splitByDrawing(), g.canSplitDraw, 'Selecciona un polígono'),
+      item('Dividir (Split): tocar una línea que cruza, o arrastrar un corte…', () => this.editor.setTool('split'), true, '', 'U'),
+      item('Reshape: redibujar el contorno con una línea…', () => this.editor.setTool('reshape'), g.lines.length + g.polys.length > 0, 'Selecciona un polígono o una línea', 'R'),
       item('Hueco con la forma de arriba (Hole)', () => this.holeSelected(false), g.canHole, 'Selecciona el polígono y, encima, la forma que lo abre'),
       item('Hueco conservando la forma (Hole)', () => this.holeSelected(true), g.canHole, 'Selecciona el polígono y, encima, la forma que lo abre'),
       item('Hueco dibujando una forma (Hole)…', () => this.holeByDrawing(), g.canHoleDraw, 'Selecciona un polígono'),
