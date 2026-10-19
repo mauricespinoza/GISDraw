@@ -229,3 +229,24 @@ export function smoothArcLevel(nodes, closed, level, mpp) {
   if (pts.length < min) return null;
   return curveThrough(pts, tension, closed);
 }
+
+/**
+ * Simplificar un arco: menos nodos sin perder la forma (Ramer–Douglas–Peucker
+ * sobre el trazo aplanado, con tolerancia `tol` en metros). Con `curves` el
+ * resultado se rehace con curvas suaves por los nodos que quedan (para trazos
+ * curvos); sin ello, con tramos rectos. Los extremos de un arco abierto no se
+ * mueven. Devuelve null si no se gana nada.
+ */
+export function simplifyArc(nodes, closed, tol, { curves = false, flat = tol / 4 } = {}) {
+  const min = closed ? 3 : 2;
+  if (nodes.length <= min) return null;
+  let pts = flattenNodes(nodes, closed, Math.max(flat, 1e-9)).map(([x, y]) => ({ x, y }));
+  if (closed && pts.length > 1 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) < 1e-9) pts.pop();
+  let out = simplify(pts, tol);
+  if (closed && out.length < 3) {
+    // un anillo muy chico: se conservan los tres puntos más separados del primero
+    out = [pts[0], pts[Math.floor(pts.length / 3)], pts[Math.floor((2 * pts.length) / 3)]];
+  }
+  if (out.length >= nodes.length || out.length < min) return null;
+  return curves ? curveThrough(out, 0.25, closed) : out.map((p) => ({ x: p.x, y: p.y, hIn: null, hOut: null, smooth: false }));
+}

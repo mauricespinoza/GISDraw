@@ -1168,7 +1168,20 @@ export class Editor {
         }
       }
     }
+    // varias formas seleccionadas (p. ej. vecinas que comparten borde): insertar en la que está bajo el
+    // puntero, y el nodo queda compartido por todas las que tienen ese tramo
+    if (!shape && this.selection.size > 1) {
+      for (const s of this.selectedShapes()) {
+        if (s.type !== 'path' || s.locked) continue;
+        for (const ring of [-1, ...(s.holes || []).map((_, i) => i)]) {
+          const near = nearestOnPath(this.ringNodes(s, ring), ring < 0 ? s.closed : true, { x: wp[0], y: wp[1] });
+          if (near && near.dist / this.view.mpp < 8 && (e.altKey || this.settings.insertOnTap)) return this.insertNode(s.id, ring, near.segIndex, near.t);
+        }
+      }
+    }
     const hit = pickShape(this.doc, sp, this.view, this.units(), 10);
+    // con varias seleccionadas, tocar una de ellas no deshace la selección (el doble clic inserta un nodo compartido)
+    if (hit && this.selection.size > 1 && this.selection.has(hit.shape.id)) return;
     this.setSelection(hit ? [hit.shape.id] : []);
   }
 
@@ -1302,11 +1315,59 @@ export class Editor {
     this.changed();
   }
 
+  /**
+   * Inserta un nodo en el tramo `seg` del anillo. Si otras líneas o polígonos
+   * tienen ese MISMO tramo (sus dos nodos coinciden con los de este) —las
+   * seleccionadas siempre y, con Move Joined, cualquiera— el nodo se inserta
+   * también en ellas, en el mismo punto: queda compartido y el cierre no se pierde.
+   */
   insertNode(id, ring, seg, t) {
-    this.history.commit(
-      mapShapes(this.doc, [id], (shape) => this.updateRing(shape, ring, (nodes) => splitNodes(nodes, ring < 0 ? shape.closed : true, seg, t))),
-    );
+    const found = findTopShape(this.doc, id);
+    if (!found) return;
+    const shape = found.shape;
+    const nodes = this.ringNodes(shape, ring);
+    const closed = ring < 0 ? !!shape.closed : true;
+    const A = nodes[seg];
+    const B = nodes[(seg + 1) % nodes.length];
+    const split = splitNodes(nodes, closed, seg, t);
+    const P = split[seg + 1];
+    const tol = Math.min(this.view.mpp * 0.35, 0.5);
+    const same = (p, q) => Math.hypot(p.x - q.x, p.y - q.y) <= tol;
+    const at = (n) => {
+      const dx = P.x - n.x;
+      const dy = P.y - n.y;
+      const mv = (h) => (h ? { x: h.x + dx, y: h.y + dy } : h);
+      return { ...n, x: P.x, y: P.y, hIn: mv(n.hIn), hOut: mv(n.hOut) };
+    };
+    const sel = this.selection;
+    const joined = this.settings.moveJoined !== false;
+    const map = new Map([[id, this.updateRing(shape, ring, () => split)]]);
+    let shared = 0;
+    for (const { layer, shape: s } of allTopShapes(this.doc, { visibleOnly: false })) {
+      if (s.type !== 'path' || s.locked || layer.locked || !(sel.has(s.id) || joined)) continue;
+      let cur = map.get(s.id) || s;
+      for (const r of [-1, ...(s.holes || []).map((_, i) => i)]) {
+        if (s.id === id && r === ring) continue;
+        const ns = this.ringNodes(cur, r);
+        const cl = r < 0 ? !!cur.closed : true;
+        const segs = cl ? ns.length : ns.length - 1;
+        for (let i = 0; i < segs; i++) {
+          const a = ns[i];
+          const b = ns[(i + 1) % ns.length];
+          if (!((same(a, A) && same(b, B)) || (same(a, B) && same(b, A)))) continue;
+          const near = nearestOnPath([a, b], false, P);
+          const out = splitNodes(ns, cl, i, near ? near.t : 0.5);
+          out[i + 1] = at(out[i + 1]);
+          cur = this.updateRing(cur, r, () => out);
+          shared++;
+          break;
+        }
+      }
+      if (cur !== s) map.set(s.id, cur);
+    }
+    this.history.commit(replaceShapes(this.doc, map));
     this.activeNode = { id, ring, index: seg + 1 };
+    if (shared) this.onMessage(`Nodo agregado y compartido con ${shared} borde(s) vecino(s)`);
     this.snapDirty = true;
     this.changed();
   }
@@ -1588,8 +1649,25 @@ export class Editor {
       tol: Math.min(this.view.mpp * 0.35, 0.5),
     });
     this.activeNode = { id: node.id, ring: node.ring, index: node.index };
+    // vértices a los que puede engancharse el nodo arrastrado: los de las formas visibles en la vista, menos los que se mueven
+    const moving = new Set(prep.moves.map((m) => `${m.id}|${m.ring}|${m.index}`));
+    const ext = this.view.extent(SNAP_PX);
+    const targets = [];
+    for (const { shape: s } of allTopShapes(this.doc)) {
+      if (s.type === 'point') {
+        targets.push([s.x, s.y]);
+        continue;
+      }
+      if (s.type !== 'path') continue;
+      for (const ring of [-1, ...(s.holes || []).map((_, i) => i)]) {
+        this.ringNodes(s, ring).forEach((n, i) => {
+          if (n.x < ext.minX || n.x > ext.maxX || n.y < ext.minY || n.y > ext.maxY || moving.has(`${s.id}|${ring}|${i}`)) return;
+          targets.push([n.x, n.y]);
+        });
+      }
+    }
     this.history.begin();
-    this.drag = { mode: 'deform', prep, start: [node.n.x, node.n.y], moved: false, grab: [wp[0] - node.n.x, wp[1] - node.n.y] };
+    this.drag = { mode: 'deform', prep, start: [node.n.x, node.n.y], moved: false, grab: [wp[0] - node.n.x, wp[1] - node.n.y], targets };
     this.changed();
   }
 
@@ -1597,8 +1675,26 @@ export class Editor {
     const d = this.drag;
     this.hover = { sp, wp, brush: true };
     // en Drag el nodo sigue al puntero manteniendo dónde se tomó
-    const dx = wp[0] - (d.grab ? d.grab[0] : 0) - d.start[0];
-    const dy = wp[1] - (d.grab ? d.grab[1] : 0) - d.start[1];
+    let dx = wp[0] - (d.grab ? d.grab[0] : 0) - d.start[0];
+    let dy = wp[1] - (d.grab ? d.grab[1] : 0) - d.start[1];
+    // Drag con Snap: el nodo arrastrado se engancha al vértice más cercano (a menos de 12 px)
+    d.snapTo = null;
+    if (d.targets && this.settings.snap) {
+      const px = d.start[0] + dx;
+      const py = d.start[1] + dy;
+      let best = SNAP_PX * this.view.mpp;
+      for (const t of d.targets) {
+        const dist = Math.hypot(t[0] - px, t[1] - py);
+        if (dist < best) {
+          best = dist;
+          d.snapTo = t;
+        }
+      }
+      if (d.snapTo) {
+        dx = d.snapTo[0] - d.start[0];
+        dy = d.snapTo[1] - d.start[1];
+      }
+    }
     if (!d.moved && Math.hypot(dx, dy) < this.view.mpp * 2) return this.changed();
     d.moved = true;
     d.dx = dx;
@@ -1978,6 +2074,17 @@ export class Editor {
 
     // nodos
     const ns = this.tool === 'node' ? this.nodeTarget() : null;
+    if (this.tool === 'node' && !ns && this.selection.size > 1) {
+      for (const s of this.selectedShapes()) {
+        if (s.type !== 'path') continue;
+        for (const ring of [-1, ...(s.holes || []).map((_, i) => i)]) {
+          for (const n of this.ringNodes(s, ring)) {
+            const [x, y] = P(n.x, n.y);
+            out.push(`<rect x="${r2(x - 4)}" y="${r2(y - 4)}" width="8" height="8" fill="#fff" stroke="#0ea5e9" stroke-width="1.5"/>`);
+          }
+        }
+      }
+    }
     if (ns) {
       const rings = [-1, ...(ns.holes || []).map((_, i) => i)];
       for (const ring of rings) {
@@ -2029,6 +2136,10 @@ export class Editor {
           });
         }
       }
+    }
+    if (this.drag?.mode === 'deform' && this.drag.snapTo) {
+      const [x, y] = P(this.drag.snapTo[0], this.drag.snapTo[1]);
+      out.push(`<rect x="${r2(x - 7)}" y="${r2(y - 7)}" width="14" height="14" fill="none" stroke="#db2777" stroke-width="2"/>`);
     }
     if (this.tool === 'deform' || this.drag?.mode === 'deform') {
       const dd = this.drag?.mode === 'deform' ? this.drag : null;
