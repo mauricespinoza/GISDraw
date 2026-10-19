@@ -23,7 +23,8 @@ import { addShapes, allTopShapes, findTopShape, inLockedLayer, layerOfShape, map
 import { splitPath } from './ops.js';
 import { layoutText, textCorners } from './textLayout.js';
 import { pickShape, shapesInBox, shapesInLasso, shapeDistance, flatRings } from './hit.js';
-import { SnapIndex, buildGraph, tracePath } from './snapping.js';
+import { SnapIndex, buildGraph, smartTrace, pointKey } from './snapping.js';
+import { smoothAlong } from './smoothTool.js';
 import { nodesD, shapeD, esc, textMeasurer } from './style.js';
 import { paperUnits } from './view.js';
 import {
@@ -55,6 +56,7 @@ export const TOOLS = {
   pen: { label: 'Pluma / línea', key: 'p' },
   polygon: { label: 'Polígono', key: 'y' },
   pencil: { label: 'Lápiz (trazo libre)', key: 'b' },
+  smooth: { label: 'Suavizar (pincel)', key: 'n' },
   line: { label: 'Segmento', key: '\\' },
   arrow: { label: 'Flecha', key: 'w' },
   rect: { label: 'Rectángulo', key: 'm' },
@@ -70,6 +72,9 @@ export const TOOLS = {
 const DRAW_TOOLS = new Set(['pen', 'polygon', 'pencil', 'line', 'arrow', 'rect', 'ellipse', 'text', 'point']);
 const HANDLE_KEYS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 const SNAP_PX = 12;
+/** Tolerancia de simplificación (px) del pincel de Suavizar para una intensidad. */
+const smoothTolPx = (level) => 0.3 + (Math.max(0, Math.min(100, level)) / 100) * 2.5;
+const GUIDE_PX = 6; // snap ligero a guías de alineación
 const TAP_MS = 350;
 const TAP_MOVE = 8;
 const LONG_PRESS_MS = 550;
@@ -152,6 +157,7 @@ export class Editor {
     if (this.draft) this.finishDraft(false);
     this.tool = tool;
     this.preview = null;
+    this.guides = null;
     this.activeNode = null;
     this.host.dataset.tool = tool;
     this.changed();
@@ -252,7 +258,7 @@ export class Editor {
 
   /** Punto de mundo con snapping (a vértices y segmentos, y al propio borrador). */
   snapPoint(wp, { force = false } = {}) {
-    if (!this.settings.snap && !force) return { point: wp, snap: null };
+    if (!this.settings.snap && !force) return { point: this.guidePoint(wp), snap: null };
     const tol = SNAP_PX * this.view.mpp;
     // primero el borrador: cerrar el polígono / unir al inicio
     if (this.draft?.nodes.length) {
@@ -260,8 +266,91 @@ export class Editor {
       if (Math.hypot(first.x - wp[0], first.y - wp[1]) < tol) return { point: [first.x, first.y], snap: { type: 'first' } };
     }
     const s = this.snapIndex().query(wp, tol);
-    if (s) return { point: s.point, snap: s };
-    return { point: wp, snap: null };
+    if (s) {
+      this.guides = null;
+      return { point: s.point, snap: s };
+    }
+    return { point: this.guidePoint(wp), snap: null };
+  }
+
+  /* ------------------------------------------------- guías de alineación */
+
+  /**
+   * Vértices de todo el dibujo (aunque estén lejos) ordenados por x y por y,
+   * para alinear lo que se dibuja con ellos: mismo nivel (y) o misma vertical
+   * (x). Se rehace solo cuando cambia el documento (en un arrastre, el de antes
+   * de empezar, que no incluye lo que se mueve).
+   */
+  alignIndex() {
+    const doc = this.history.anchor || this.doc;
+    if (this._align && this._alignDoc === doc) return this._align;
+    const xs = [];
+    const ys = [];
+    const add = (n) => {
+      xs.push([n.x, n.y]);
+      ys.push([n.y, n.x]);
+    };
+    const visit = (sh) => {
+      if (sh.visible === false) return;
+      if (sh.type === 'group') sh.children.forEach(visit);
+      else if (sh.type === 'path') {
+        sh.nodes.forEach(add);
+        for (const h of sh.holes || []) h.forEach(add);
+      } else if (sh.type === 'point' || sh.type === 'text') add(sh);
+    };
+    for (const l of doc.layers) if (l.kind === 'vector' && l.visible) l.items.forEach(visit);
+    xs.sort((a, b) => a[0] - b[0]);
+    ys.sort((a, b) => a[0] - b[0]);
+    this._align = { xs, ys };
+    this._alignDoc = doc;
+    return this._align;
+  }
+
+  /**
+   * Alineación con otros vértices: si el punto queda a menos de GUIDE_PX de la
+   * x o la y de alguno (también del borrador), se lleva a ese nivel y se
+   * dibuja la guía. Es un snap ligero: no engancha al vértice, solo al eje.
+   * `exclude`: puntos que no cuentan (lo que se está moviendo).
+   */
+  guidePoint(wp, { exclude = [] } = {}) {
+    this.guides = null;
+    if (this.settings.guides === false) return wp;
+    const tol = GUIDE_PX * this.view.mpp;
+    const { xs, ys } = this.alignIndex();
+    const extra = (this.draft?.nodes || []).map((n) => [n.x, n.y]);
+    const skip = (x, y) => exclude.some((q) => Math.abs(q[0] - x) < 1e-6 && Math.abs(q[1] - y) < 1e-6);
+    // el candidato más cercano en el eje (`k`) y, de los empatados en ese eje, el más próximo en el otro
+    const best = (arr, k, pts) => {
+      let lo = 0;
+      let hi = arr.length;
+      const target = wp[k];
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (arr[mid][0] < target - tol) lo = mid + 1;
+        else hi = mid;
+      }
+      let out = null;
+      const consider = (v, other) => {
+        const x = k === 0 ? v : other;
+        const y = k === 0 ? other : v;
+        if (skip(x, y)) return;
+        const d = Math.abs(v - target);
+        if (d > tol) return;
+        const along = Math.abs(other - wp[1 - k]);
+        if (!out || d < out.d - 1e-9 || (Math.abs(d - out.d) < 1e-9 && along < out.along)) out = { v, other, d, along };
+      };
+      for (let i = lo; i < arr.length && arr[i][0] <= target + tol; i++) consider(arr[i][0], arr[i][1]);
+      for (const p of pts) consider(p[k], p[1 - k]);
+      return out;
+    };
+    const gx = best(xs, 0, extra);
+    const gy = best(ys, 1, extra);
+    if (!gx && !gy) return wp;
+    const point = [gx ? gx.v : wp[0], gy ? gy.v : wp[1]];
+    this.guides = [];
+    if (gx) this.guides.push({ axis: 'x', value: gx.v, from: [gx.v, gx.other], to: point });
+    if (gy) this.guides.push({ axis: 'y', value: gy.v, from: [gy.other, gy.v], to: point });
+    return point;
   }
 
   /* ---------------------------------------------------------------- entrada */
@@ -275,6 +364,7 @@ export class Editor {
     h.addEventListener('pointerleave', (e) => {
       if (e.pointerType !== 'touch' && !this.drag) {
         this.hover = null;
+        this.guides = null;
         this.changed();
       }
     });
@@ -308,6 +398,12 @@ export class Editor {
     }
     const sp = this.screenPoint(e);
     this.pointers.set(e.pointerId, { sp, type: e.pointerType, t: performance.now(), start: sp });
+    // toque de varios dedos (dos = deshacer, tres = rehacer): se sigue desde que baja el primer dedo
+    if (e.pointerType === 'touch') {
+      const n = [...this.pointers.values()].filter((q) => q.type === 'touch').length;
+      if (!this.tapSession) this.tapSession = { t0: performance.now(), max: n, moved: false };
+      else this.tapSession.max = Math.max(this.tapSession.max, n);
+    }
     if (e.pointerType === 'pen') this.penSeen = true;
     this.onPointerStart?.();
 
@@ -349,6 +445,7 @@ export class Editor {
     const sp = this.screenPoint(e);
     const p = this.pointers.get(e.pointerId);
     if (p) p.sp = sp;
+    if (p && this.tapSession && Math.hypot(sp[0] - p.start[0], sp[1] - p.start[1]) > 14) this.tapSession.moved = true;
     if (this.lp && this.lp.id === e.pointerId && Math.hypot(sp[0] - this.lp.sp[0], sp[1] - this.lp.sp[1]) > TAP_MOVE) this.clearLongPress();
     const d = this.drag;
 
@@ -373,6 +470,10 @@ export class Editor {
       // hover del lápiz o del ratón: cursor de snapping y línea elástica
       if (e.pointerType === 'touch') return;
       if (DRAW_TOOLS.has(this.tool) || this.tool === 'node') this.updateHover(sp, e.altKey);
+      else if (this.tool === 'smooth') {
+        this.hover = { sp, wp: this.view.toWorld(...sp), brush: true };
+        this.changed();
+      }
       return;
     }
     this.toolMove(e, sp);
@@ -382,6 +483,7 @@ export class Editor {
     if (this.lp?.id === e.pointerId) this.clearLongPress();
     const p = this.pointers.get(e.pointerId);
     this.pointers.delete(e.pointerId);
+    this.endTapSession(cancelled);
     const d = this.drag;
     if (!d) return;
     if (d.mode === 'pinch') {
@@ -403,6 +505,31 @@ export class Editor {
       return;
     }
     this.toolUp(e, this.screenPoint(e));
+  }
+
+  /**
+   * Gestos de toque de varios dedos, como en las tablets de dibujo: un toque
+   * corto de DOS dedos, dos veces seguidas, deshace; de TRES dedos, dos veces,
+   * rehace. (Con `gestureTaps: 'single'` basta un toque.) No cuenta si los
+   * dedos se movieron (eso es desplazar o hacer zoom).
+   */
+  endTapSession(cancelled) {
+    const ts = this.tapSession;
+    if (!ts || [...this.pointers.values()].some((q) => q.type === 'touch')) return;
+    this.tapSession = null;
+    const now = performance.now();
+    if (cancelled || ts.moved || ts.max < 2 || ts.max > 3 || now - ts.t0 > 380) return;
+    const need = this.settings.gestureTaps === 'single' ? 1 : 2;
+    const last = this.lastMultiTap;
+    if (need > 1 && !(last && last.n === ts.max && now - last.t < 500)) {
+      this.lastMultiTap = { n: ts.max, t: now };
+      return;
+    }
+    this.lastMultiTap = null;
+    if (ts.max === 2) {
+      if (this.history.undo()) this.onMessage('Deshacer', 900);
+    } else if (this.history.redo()) this.onMessage('Rehacer', 900);
+    this.changed();
   }
 
   clearLongPress() {
@@ -534,6 +661,8 @@ export class Editor {
       case 'pen':
       case 'polygon':
         return this.penDown(e, sp, wp);
+      case 'smooth':
+        return this.smoothDown(e, sp, wp);
       case 'pencil': {
         if (!this.ensureDrawableLayer()) return;
         const { point, snap } = this.snapPoint(wp);
@@ -546,7 +675,7 @@ export class Editor {
       case 'rect':
       case 'ellipse': {
         if (!this.ensureDrawableLayer()) return;
-        const snapped = ['line', 'arrow'].includes(this.tool) ? this.snapPoint(wp).point : wp;
+        const snapped = ['line', 'arrow'].includes(this.tool) ? this.snapPoint(wp).point : this.guidePoint(wp);
         this.drag = { mode: 'create', start: snapped };
         this.preview = { kind: this.tool, start: snapped, end: snapped };
         return;
@@ -691,6 +820,8 @@ export class Editor {
         return this.nodeDrag(e, wp);
       case 'bezier':
         return this.bezierDrag(e, wp);
+      case 'smooth':
+        return this.smoothMove(sp, wp);
       case 'pen-handle': {
         const n = this.draft.nodes[this.draft.nodes.length - 1];
         if (Math.hypot(sp[0] - d.sp0[0], sp[1] - d.sp0[1]) < 4) return;
@@ -708,7 +839,7 @@ export class Editor {
         return;
       }
       case 'create': {
-        let end = ['line', 'arrow'].includes(this.tool) ? this.snapPoint(wp).point : wp;
+        let end = ['line', 'arrow'].includes(this.tool) ? this.snapPoint(wp).point : this.guidePoint(wp);
         if (e.shiftKey) end = constrain(d.start, end, this.tool);
         this.preview = { kind: this.tool, start: d.start, end, fromCenter: e.altKey };
         this.changed();
@@ -721,6 +852,7 @@ export class Editor {
   toolUp(e, sp) {
     const d = this.drag;
     this.drag = null;
+    this.guides = null;
     const wp = this.view.toWorld(...sp);
     switch (d.mode) {
       case 'move':
@@ -751,6 +883,15 @@ export class Editor {
       case 'bezier':
         this.history.end();
         this.snapDirty = true;
+        this.guides = null;
+        this.changed();
+        return;
+      case 'smooth':
+        if (d.moved) {
+          this.history.end();
+          this.snapDirty = true;
+        } else this.history.anchor = null;
+        this.changed();
         return;
       case 'marquee': {
         this.preview = null;
@@ -1035,6 +1176,20 @@ export class Editor {
     return out;
   }
 
+  /** Posiciones originales del nodo arrastrado y de los que se mueven con él. */
+  nodeOrigins(d) {
+    if (d._origins) return d._origins;
+    const base = this.history.anchor || this.doc;
+    const out = [];
+    for (const t of [{ id: d.id, ring: d.ring, index: d.index }, ...(d.joined || [])]) {
+      const sh = allTopShapes(base).find((x) => x.shape.id === t.id)?.shape;
+      const n = sh && this.ringNodes(sh, t.ring)?.[t.index];
+      if (n) out.push([n.x, n.y]);
+    }
+    d._origins = out;
+    return out;
+  }
+
   nodeDrag(e, wp) {
     const d = this.drag;
     let p = wp;
@@ -1044,6 +1199,12 @@ export class Editor {
       const skip = new Set([d.id, ...joined.map((j) => j.id)]);
       const s = this.snapIndex().query(wp, SNAP_PX * this.view.mpp);
       if (s && !skip.has(s.meta?.id)) p = s.point;
+    }
+    this.guides = null;
+    if (p === wp) {
+      // sin snap duro: alinear con otros vértices (sin contar este nodo ni los que lo acompañan en su lugar original)
+      const orig = this.nodeOrigins(d);
+      p = this.guidePoint(wp, { exclude: orig });
     }
     const move = (nodes, index) =>
       nodes.map((n, i) => {
@@ -1180,7 +1341,7 @@ export class Editor {
       const prevSnap = this.draft.snaps[this.draft.snaps.length - 1];
       if (prevSnap?.segment != null) {
         // Alt = el otro camino (por el otro lado de un polígono, por ejemplo)
-        const path = tracePath(this.snapIndex(), this.graph(), prevSnap, snap, { alt: e.altKey });
+        const path = this.traceFor(prevSnap, snap, { alt: e.altKey });
         if (path && path.length > 2) {
           for (const q of path.slice(1, -1)) {
             nodes.push(makeNode(q[0], q[1]));
@@ -1198,13 +1359,27 @@ export class Editor {
     this.changed();
   }
 
+  /**
+   * Recorrido de Trace de `prevSnap` a `snap`, el mismo en la vista previa y al
+   * poner el vértice: va por el camino más corto, pero sigue el sentido que ya
+   * llevaba desde ese origen (no cambia de lado en un anillo apenas el otro
+   * parece más corto) y no vuelve a pasar por los vértices ya puestos.
+   */
+  traceFor(prevSnap, snap, { alt = false, preview = false } = {}) {
+    const avoid = new Set((this.draft?.nodes || []).slice(0, -1).map((n) => pointKey([n.x, n.y])));
+    const prefer = this.traceDir?.from === prevSnap ? this.traceDir.first : null;
+    const path = smartTrace(this.snapIndex(), this.graph(), prevSnap, snap, { prefer, avoid, alt, maxVisited: preview ? 40000 : undefined });
+    if (path && !alt) this.traceDir = { from: prevSnap, first: path.first };
+    return path;
+  }
+
   updateHover(sp, alt = false) {
     const wp = this.view.toWorld(...sp);
     const { point, snap } = this.snapPoint(wp);
     let tracePreview = null;
     if (this.settings.trace && this.draft && snap?.segment != null && this.draft.snaps.length) {
       const prev = this.draft.snaps[this.draft.snaps.length - 1];
-      if (prev?.segment != null) tracePreview = tracePath(this.snapIndex(), this.graph(), prev, snap, { maxVisited: 40000, alt });
+      if (prev?.segment != null) tracePreview = this.traceFor(prev, snap, { alt, preview: true });
     }
     this.hover = { sp, wp: point, snap, tracePreview };
     this.changed();
@@ -1259,6 +1434,70 @@ export class Editor {
     if (!this.draft.nodes.length) this.draft = null;
     this.changed();
     return true;
+  }
+
+  /* --------------------------------------------------------- suavizar */
+
+  /** Suavizar (pincel): trazos seleccionados o, si no hay, el que está bajo el puntero. */
+  smoothDown(e, sp, wp) {
+    let ids = this.selectedShapes().filter((s) => s.type === 'path' && !s.locked).map((s) => s.id);
+    if (!ids.length) {
+      const hit = pickShape(this.doc, sp, this.view, this.units(), 14);
+      if (hit?.shape.type === 'path' && !hit.shape.locked) {
+        ids = [hit.shape.id];
+        this.setSelection(ids);
+      }
+    }
+    if (!ids.length) {
+      this.onMessage('Suavizar: pasa el pincel sobre un trazo (o selecciónalo primero)');
+      return;
+    }
+    this.history.begin();
+    this.drag = { mode: 'smooth', ids, last: wp, moved: false };
+    this.smoothMove(sp, wp);
+  }
+
+  /** Cada tramo del pincel suaviza un poco lo que toca: pasar de nuevo suaviza más. */
+  smoothMove(sp, wp) {
+    const d = this.drag;
+    this.hover = { sp, wp, brush: true };
+    const step = Math.hypot(wp[0] - d.last[0], wp[1] - d.last[1]);
+    if (step < this.view.mpp * 3 && d.moved) {
+      this.changed();
+      return;
+    }
+    const brush = [d.last, wp];
+    d.last = wp;
+    const o = {
+      radius: (this.settings.smoothRadius ?? 18) * this.view.mpp,
+      tol: this.view.mpp * smoothTolPx(this.settings.smoothLevel ?? 50),
+      level: this.settings.smoothLevel ?? 50,
+      flat: this.view.mpp * 0.5,
+    };
+    let changed = false;
+    const next = mapShapes(this.doc, d.ids, (shape) => {
+      let out = shape;
+      const ring = (nodes, closed, set) => {
+        const r = smoothAlong(nodes, closed, brush, o);
+        if (r) {
+          out = set(r);
+          changed = true;
+        }
+      };
+      ring(out.nodes, out.closed, (nodes) => ({ ...out, nodes }));
+      (shape.holes || []).forEach((h, i) =>
+        ring(h, true, (nodes) => {
+          const holes = out.holes.slice();
+          holes[i] = nodes;
+          return { ...out, holes };
+        }),
+      );
+      return out;
+    });
+    if (changed) {
+      d.moved = true;
+      this.history.preview(next);
+    } else this.changed();
   }
 
   /* --------------------------------------------------------- lápiz y formas */
@@ -1604,6 +1843,24 @@ export class Editor {
           );
         });
       }
+    }
+
+    // guías de alineación
+    if (this.guides?.length) {
+      const ext = this.view.extent(0);
+      for (const g of this.guides) {
+        const a = g.axis === 'x' ? P(g.value, ext.minY) : P(ext.minX, g.value);
+        const b = g.axis === 'x' ? P(g.value, ext.maxY) : P(ext.maxX, g.value);
+        out.push(`<line x1="${r2(a[0])}" y1="${r2(a[1])}" x2="${r2(b[0])}" y2="${r2(b[1])}" stroke="#ec4899" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.75"/>`);
+        const [fx, fy] = P(g.from[0], g.from[1]);
+        out.push(`<circle cx="${r2(fx)}" cy="${r2(fy)}" r="4" fill="none" stroke="#ec4899" stroke-width="1.5"/>`);
+      }
+    }
+
+    // pincel de Suavizar
+    if (this.tool === 'smooth' && this.hover?.brush) {
+      const [bx, by] = this.hover.sp;
+      out.push(`<circle cx="${r2(bx)}" cy="${r2(by)}" r="${this.settings.smoothRadius ?? 18}" fill="rgba(14,165,233,.08)" stroke="#0ea5e9" stroke-width="1.5" stroke-dasharray="3 3"/>`);
     }
 
     // borrador de pluma/polígono

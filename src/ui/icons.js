@@ -9,6 +9,7 @@ export const ICONS = {
   pen: s('<path d="M12 3l6 9-6 9-6-9z"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 3v7"/>'),
   polygon: s('<path d="M4 8l7-5 9 6-3 11H6z"/><circle cx="4" cy="8" r="1.6" fill="currentColor"/><circle cx="20" cy="9" r="1.6" fill="currentColor"/>'),
   pencil: s('<path d="M4 20c4-1 4-6 8-8s5-5 8-8"/>'),
+  smooth: s('<path d="M3 15c2-6 4-6 6-2s4 4 6-2 4-4 6 0" stroke-dasharray="2 2.2"/><path d="M3 18c3-3 5-3 9 0s6 1 9-2"/>'),
   line: s('<path d="M5 19L19 5"/>'),
   arrow: s('<path d="M5 19L18 6"/><path d="M11 5h8v8" fill="none"/>'),
   rect: s('<rect x="4" y="6" width="16" height="12" rx="1"/>'),

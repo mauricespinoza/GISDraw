@@ -112,6 +112,10 @@ class App {
       snap: true,
       trace: false,
       moveJoined: true,
+      guides: true, // snap ligero a guías de alineación
+      smoothLevel: 50, // intensidad del pincel de Suavizar (%)
+      smoothRadius: 18, // radio del pincel de Suavizar (px)
+      gestureTaps: 'double', // dos dedos = deshacer, tres = rehacer: 'double' (dos toques) o 'single'
       fingerDraws: false,
       pencilSmooth: DEFAULT_SMOOTH, // % de suavizado del lápiz (trazo libre)
       opentopoKey: '',
@@ -385,7 +389,7 @@ class App {
 
   buildToolbar() {
     this.toolbarEl = document.getElementById('toolbar');
-    const groups = [['select', 'node', 'lasso'], ['pen', 'polygon', 'pencil', 'line', 'arrow'], ['rect', 'ellipse', 'text', 'point'], ['scissors', 'eyedropper', 'pan', 'zoom']];
+    const groups = [['select', 'node', 'lasso'], ['pen', 'polygon', 'pencil', 'smooth', 'line', 'arrow'], ['rect', 'ellipse', 'text', 'point'], ['scissors', 'eyedropper', 'pan', 'zoom']];
     const els = [];
     groups.forEach((g, gi) => {
       if (gi) els.push(h('div', { class: 'tsep' }));
@@ -542,6 +546,11 @@ class App {
     $('btn-snap').onclick = () => this.saveSettings({ snap: !this.settings.snap });
     $('btn-trace').onclick = () => this.saveSettings({ trace: !this.settings.trace });
     $('btn-joined').onclick = () => this.saveSettings({ moveJoined: !this.settings.moveJoined });
+    $('btn-guides').onclick = () => {
+      this.saveSettings({ guides: this.settings.guides === false });
+      this.editor.guides = null;
+      this.editor.changed();
+    };
     $('btn-finger').onclick = () => this.saveSettings({ fingerDraws: !this.settings.fingerDraws });
     $('btn-redraw').onclick = () => {
       const n = this.raster.redrawHillshades(this.history.doc.layers);
@@ -549,6 +558,8 @@ class App {
     };
     $('btn-mode-canvas').onclick = () => this.setMode('canvas');
     $('btn-mode-gis').onclick = () => this.setMode('gis');
+    $('btn-google').onclick = () => this.configureDrive();
+    this.updateGoogleButton();
     $('btn-panel').onclick = () => this.togglePanel();
     $('btn-help').onclick = () => this.toggleHelp();
     if (window.innerWidth < 900) document.getElementById('app').classList.add('panel-hidden');
@@ -619,6 +630,8 @@ class App {
       }),
       item('Abrir proyecto (.gisdrawer)…', () => this.openProject()),
       item('Guardar proyecto (.gisdrawer)', () => this.saveProject()),
+      item(this.history.doc.driveFileId ? 'Guardar en Google Drive (actualiza el archivo)' : 'Guardar en Google Drive', () => this.saveToDrive()),
+      item('Guardar en Google Drive en otra carpeta…', () => this.saveToDrive({ choose: true })),
       h('div', { class: 'mh' }, 'Importar'),
       gis && item('GeoPackage (.gpkg)…', () => this.importGpkg()),
       gis && item('GeoJSON…', () => this.importGeoJSON()),
@@ -630,7 +643,7 @@ class App {
       !gis && item('Imagen (PNG / JPG) como capa de imagen…', () => this.importPlainImage()),
       item('Illustrator (.ai, .svg) / PDF vectorial, una capa por capa…', () => this.importSvgFile()),
       item('Desde Google Drive…', () => this.importFromDrive()),
-      item('Configurar Google Drive…', () => this.configureDrive()),
+      item('Cuenta de Google y Drive…', () => this.configureDrive()),
       h('div', { class: 'mh' }, 'Exportar'),
       gis && item('GeoPackage (todas las capas, con estilo QGIS)', () => this.exportGpkg()),
       gis && item('Simbología QGIS (.qlr) + GeoPackage', () => this.exportQLR()),
@@ -645,6 +658,10 @@ class App {
       item(`Rueda del mouse: ${this.settings.wheelMode === 'pan' ? 'desplaza (Ctrl/Alt = zoom) → cambiar a zoom' : 'zoom → cambiar a desplazar'}`, () => {
         this.saveSettings({ wheelMode: this.settings.wheelMode === 'pan' ? 'zoom' : 'pan' });
         this.message(`Rueda del mouse: ${this.settings.wheelMode === 'pan' ? 'desplaza el mapa' : 'zoom'}`);
+      }),
+      item(`Gestos de tablet (2 dedos = deshacer, 3 = rehacer): ${this.settings.gestureTaps === 'single' ? 'un toque → cambiar a dos toques' : 'dos toques → cambiar a un toque'}`, () => {
+        this.saveSettings({ gestureTaps: this.settings.gestureTaps === 'single' ? 'double' : 'single' });
+        this.message(`Gestos de tablet: ${this.settings.gestureTaps === 'single' ? 'un toque' : 'dos toques seguidos'}`);
       }),
       gis && item('Ir a coordenadas…', () => this.gotoCoords()),
       item(`Cambiar a modo ${this.mode === 'gis' ? MODES.canvas : MODES.gis}`, () => this.setMode(this.mode === 'gis' ? 'canvas' : 'gis')),
@@ -702,6 +719,7 @@ class App {
     set('btn-snap', this.settings.snap);
     set('btn-trace', this.settings.trace);
     set('btn-joined', this.settings.moveJoined !== false);
+    set('btn-guides', this.settings.guides !== false);
     set('btn-finger', this.settings.fingerDraws);
   }
 
@@ -1206,6 +1224,23 @@ class App {
 
   /** Control de suavizado (lápiz activo o trazo libre seleccionado); null si no viene al caso. */
   smoothControl() {
+    if (this.editor.tool === 'smooth') {
+      // pincel de Suavizar: intensidad y radio
+      const range = (key, min, max, label, tip, unit) => {
+        const val = h('span', { class: 'pb-u pb-val' }, `${this.settings[key]}${unit}`);
+        const r = h('input', { type: 'range', class: 'pb-range', min, max, step: 1, value: this.settings[key], 'data-tip': tip });
+        r.addEventListener('input', () => {
+          val.textContent = `${r.value}${unit}`;
+          this.saveSettings({ [key]: Number(r.value) });
+          this.editor.changed();
+        });
+        return [h('span', { class: 'pb-l' }, label), r, val];
+      };
+      return [
+        ...range('smoothLevel', 1, 100, 'Intensidad', 'Cuánto suaviza cada pasada del pincel (pasar de nuevo suaviza más)', ' %'),
+        ...range('smoothRadius', 6, 80, 'Radio', 'Tamaño del pincel en píxeles', ' px'),
+      ];
+    }
     if (this.editor.tool !== 'pencil' && !this.resmoothable().length) return null;
     const level = this.smoothLevel();
     const val = h('span', { class: 'pb-u pb-val' }, `${level} %`);
@@ -1559,6 +1594,8 @@ class App {
     if (!raw.layers) throw new Error('No es un proyecto de GISDrawer');
     delete raw.app;
     const doc = normalizeDoc(raw);
+    if (f.driveId) doc.driveFileId = f.driveId; // abierto desde Drive: «Guardar en Drive» lo actualiza
+    else delete doc.driveFileId;
     this.history.commit(doc);
     for (const l of doc.layers) if (l.settings?.fileId) this.reloadFile(l.settings.fileId).catch(() => null);
     if (this.mode !== 'gis') this.fitCanvas();
@@ -1804,19 +1841,63 @@ class App {
     }
   }
 
-  configureDrive() {
-    const s = this.settings;
-    const clientId = prompt(
-      'Google Drive — ID de cliente OAuth (opcional; habilita el selector de archivos con tu cuenta).\n' +
-        'Google Cloud Console → APIs y servicios → Credenciales → ID de cliente de OAuth, tipo «Aplicación web», ' +
-        `con ${location.origin} en «Orígenes de JavaScript autorizados». Activa «Google Drive API» y «Google Picker API».`,
-      s.googleClientId || '',
-    );
-    if (clientId === null) return;
-    const apiKey = prompt('Google Drive — Clave de API del mismo proyecto (Credenciales → Crear credenciales → Clave de API).\nSin ID de cliente, sirve para abrir archivos compartidos por enlace.', s.googleApiKey || '');
-    if (apiKey === null) return;
-    this.saveSettings({ googleClientId: clientId.trim(), googleApiKey: apiKey.trim() });
-    this.message(clientId.trim() || apiKey.trim() ? 'Google Drive configurado: Archivo → Importar → Desde Google Drive' : 'Google Drive sin configurar', 5000);
+  /** Cuenta de Google: inicio de sesión, credenciales y atajos de Drive. */
+  async configureDrive() {
+    const { openGoogleDialog } = await import('./ui/googleDialog.js');
+    openGoogleDialog(this);
+  }
+
+  /** Botón «G» de la barra: la inicial de la cuenta si hay sesión. */
+  async updateGoogleButton() {
+    const b = document.getElementById('btn-google');
+    if (!b) return;
+    const { googleUser, isSignedIn } = await import('./io/gdrive.js');
+    const u = googleUser();
+    b.classList.toggle('on', isSignedIn());
+    b.textContent = u?.name ? u.name[0].toUpperCase() : 'G';
+    b.dataset.tip = u ? `Google: ${u.name} (${u.email})${isSignedIn() ? '' : ' · sesión vencida'}` : 'Cuenta de Google / Drive';
+  }
+
+  /**
+   * Guarda el proyecto en Google Drive. La primera vez crea el archivo (en «Mi
+   * unidad» o, con `choose`, en la carpeta que se elija) y recuerda su id en
+   * el proyecto; las siguientes lo actualiza.
+   */
+  async saveToDrive({ choose = false } = {}) {
+    const { googleClientId: clientId, googleApiKey: apiKey } = this.settings;
+    if (!clientId) {
+      this.message('Primero configura tu cuenta de Google (ID de cliente)', 6000);
+      return this.configureDrive();
+    }
+    const gd = await import('./io/gdrive.js');
+    this.flushEdits();
+    await gd.ensureSignedIn(clientId);
+    this.updateGoogleButton();
+    const doc = this.history.doc;
+    let name = `${fileBase(doc.title)}.gisdrawer`;
+    let parentId = null;
+    let fileId = choose ? null : doc.driveFileId || null;
+    if (choose) {
+      const folder = await gd.pickDriveFolder({ clientId, apiKey });
+      if (!folder) return;
+      parentId = folder.id;
+      const n = prompt(`Nombre del archivo en «${folder.name}»`, name);
+      if (!n) return;
+      name = /\.gisdrawer$/i.test(n) ? n : `${n}.gisdrawer`;
+    }
+    const json = JSON.stringify({ app: 'GISDrawer', ...doc, driveFileId: undefined });
+    this.message('Guardando en Google Drive…', 0);
+    let res;
+    try {
+      res = await gd.uploadDriveFile({ name, mimeType: 'application/json', data: json, fileId, parentId });
+    } catch (err) {
+      // el archivo guardado antes ya no existe o no es accesible: se crea uno nuevo
+      if (fileId && (err.status === 404 || err.status === 403)) res = await gd.uploadDriveFile({ name, mimeType: 'application/json', data: json, parentId });
+      else throw err;
+    }
+    this.history.silent({ ...this.history.doc, driveFileId: res.id });
+    this.message(`Guardado en Google Drive: ${res.name}`, 5000);
+    return res;
   }
 
   async importGeoJSON(files = null) {
@@ -2047,7 +2128,7 @@ class App {
 
 const SHORTCUTS = [
   ['Herramientas', [
-    ['V', 'Selección'], ['A', 'Nodos'], ['Q', 'Lazo'], ['P', 'Pluma / línea'], ['Y', 'Polígono'], ['B', 'Lápiz'],
+    ['V', 'Selección'], ['A', 'Nodos'], ['Q', 'Lazo'], ['P', 'Pluma / línea'], ['Y', 'Polígono'], ['B', 'Lápiz'], ['N', 'Suavizar (pincel local)'],
     ['\\', 'Segmento'], ['W', 'Flecha'], ['M', 'Rectángulo'], ['E', 'Elipse'], ['T', 'Texto'], ['O', 'Punto'],
     ['C', 'Tijera'], ['I', 'Cuentagotas'], ['H', 'Mano'], ['Z', 'Zoom (Alt = alejar)'], ['Espacio', 'Mano temporal'],
   ]],
@@ -2059,7 +2140,8 @@ const SHORTCUTS = [
     ['Ctrl+7 / Ctrl+Alt+7', 'Máscara de recorte / liberar'], ['Ctrl+] / Ctrl+[', 'Adelante / atrás (Mayús: al frente / al fondo)'],
     ['Ctrl+2 / Ctrl+Alt+2', 'Bloquear / desbloquear todo'], ['Ctrl+3 / Ctrl+Alt+3', 'Ocultar / mostrar todo'], ['Mayús+C', 'Nodo esquina ↔ curva'],
   ]],
-  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón 🔗)'], ['Mayús', 'Restringir ángulo o proporción']]],
+  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón 🔗)'], ['Guías (📐)', 'Alinear con el nivel o la vertical de otros vértices, aunque estén lejos'], ['Mayús', 'Restringir ángulo o proporción']]],
+  ['Tablet (táctil)', [['Dos dedos, dos toques', 'Deshacer'], ['Tres dedos, dos toques', 'Rehacer'], ['Mantener el dedo', 'Menú contextual (Join, Merge, Split, Hole…)'], ['Dos dedos arrastrar / pellizcar', 'Desplazar / zoom']]],
   ['Vista y archivo', [
     ['Ctrl+0', 'Zoom a todo'], ['Ctrl+1', 'Escala de referencia'], ['Ctrl++ / Ctrl+−', 'Acercar / alejar'], ['Rueda del mouse', 'Zoom (Archivo → Vista: cambiar a desplazar)'], ['Trackpad', 'Dos dedos desplazan, pellizco = zoom'],
     ['Tab', 'Mostrar / ocultar panel'], ['F7 / Ctrl+F10', 'Capas / Estilo'], ['Ctrl+L', 'Capa nueva'], ['Ctrl+S / Ctrl+O', 'Guardar / abrir proyecto'], ['Ctrl+P', 'Layout de impresión'], ['? o F1', 'Esta ayuda'],
