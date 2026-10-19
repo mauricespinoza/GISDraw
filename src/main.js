@@ -18,7 +18,7 @@ import { askConfirm, askForm, askText } from './ui/dialog.js';
 import { DASHES, defaultStyle } from './style.js';
 import { copyShapes, pasteShapes, arrange, group, ungroup, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
 import { coordPreview, formatDMS, parseCoordText, toLonLat } from './proj.js';
-import { shapeBBox, unionBBox, walkShapes, newId, DEFAULT_SMOOTH, canResmooth, resmooth } from './vector.js';
+import { shapeBBox, unionBBox, walkShapes, newId, DEFAULT_SMOOTH, canResmooth, canSmooth, adoptFreehand, resmooth } from './vector.js';
 import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles } from './io/store.js';
 import { parseQML, styleFor } from './io/qml.js';
 import { parseAsciiGrid } from './raster/dem.js';
@@ -1275,12 +1275,14 @@ class App {
   /** Cambia el estilo de la selección (todas las hojas de los grupos) o el de dibujo. */
   /** Trazos libres seleccionados que aún se pueden re-suavizar (recién dibujados y sin editar). */
   resmoothable() {
-    return this.editor.selectedShapes().filter(canResmooth);
+    return this.editor.selectedShapes().filter(canSmooth);
   }
 
   /** Suavizado actual: el del trazo libre seleccionado, o el que se usará al dibujar. */
   smoothLevel() {
-    return this.resmoothable()[0]?.freehand.level ?? this.settings.pencilSmooth ?? DEFAULT_SMOOTH;
+    const sel = this.resmoothable();
+    if (sel.length) return canResmooth(sel[0]) ? sel[0].freehand.level : 0; // una línea que no es trazo libre parte de «tal cual está»
+    return this.settings.pencilSmooth ?? DEFAULT_SMOOTH;
   }
 
   /**
@@ -1290,12 +1292,13 @@ class App {
    */
   setSmooth(level, final) {
     level = Math.max(0, Math.min(100, Math.round(level)));
-    this.saveSettings({ pencilSmooth: level });
     const targets = this.resmoothable();
+    // es también el valor de los próximos trazos libres, salvo que solo se esté suavizando una línea ajena (pluma, importada…)
+    if (!targets.length || targets.some(canResmooth) || this.editor.tool === 'pencil') this.saveSettings({ pencilSmooth: level });
     if (!targets.length) return;
     if (!final && !this.history.anchor) this.history.begin();
     const base = this.history.anchor || this.history.doc;
-    const next = mapShapes(base, targets.map((s) => s.id), (s) => resmooth(s, level));
+    const next = mapShapes(base, targets.map((s) => s.id), (s) => resmooth(adoptFreehand(s, this.view.mpp), level));
     if (final) {
       if (this.history.anchor) {
         this.history.preview(next);
@@ -1324,9 +1327,10 @@ class App {
       ];
     }
     if (this.editor.tool !== 'pencil' && !this.resmoothable().length) return null;
+    const n = this.resmoothable().length;
     const level = this.smoothLevel();
     const val = h('span', { class: 'pb-u pb-val' }, `${level} %`);
-    const r = h('input', { type: 'range', class: 'pb-range', min: 0, max: 100, step: 1, value: level, 'data-tip': 'Suavizado del trazo libre: 0 = tal cual se dibujó, 100 = muy redondeado. Con un trazo libre seleccionado lo cambia en vivo; también es el valor para los próximos.' });
+    const r = h('input', { type: 'range', class: 'pb-range', min: 0, max: 100, step: 1, value: level, 'data-tip': n ? `Suavizado de la selección (${n} línea${n > 1 ? 's' : ''}): 0 = tal cual está, 100 = muy redondeado. Se aplica en vivo a cualquier línea o polígono; con el lápiz es también el valor para los próximos trazos.` : 'Suavizado del trazo libre: 0 = tal cual se dibujó, 100 = muy redondeado. Es el valor para los próximos trazos.' });
     r.addEventListener('input', () => {
       val.textContent = `${r.value} %`;
       this.setSmooth(Number(r.value), false);
