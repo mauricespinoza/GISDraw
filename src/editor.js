@@ -25,6 +25,7 @@ import { layoutText, textCorners } from './textLayout.js';
 import { pickShape, shapesInBox, shapesInLasso, shapeDistance, flatRings } from './hit.js';
 import { SnapIndex, buildGraph, smartTrace, pointKey } from './snapping.js';
 import { smoothAlong } from './smoothTool.js';
+import { buildTopology, smoothTopology } from './smoothTopo.js';
 import { nodesD, shapeD, esc, textMeasurer } from './style.js';
 import { paperUnits } from './view.js';
 import {
@@ -1494,26 +1495,10 @@ export class Editor {
       level: this.settings.smoothLevel ?? 50,
       flat: this.view.mpp * 0.5,
     };
-    let changed = false;
-    const next = mapShapes(this.doc, d.ids, (shape) => {
-      let out = shape;
-      const ring = (nodes, closed, set) => {
-        const r = smoothAlong(nodes, closed, brush, o);
-        if (r) {
-          out = set(r);
-          changed = true;
-        }
-      };
-      ring(out.nodes, out.closed, (nodes) => ({ ...out, nodes }));
-      (shape.holes || []).forEach((h, i) =>
-        ring(h, true, (nodes) => {
-          const holes = out.holes.slice();
-          holes[i] = nodes;
-          return { ...out, holes };
-        }),
-      );
-      return out;
-    });
+    // por arcos: lo que comparten dos formas se suaviza una vez y las dos lo reciben igual (no se pierde el cierre)
+    const topo = buildTopology(this.doc, d.ids, Math.min(this.view.mpp * 0.35, 0.5));
+    const next = smoothTopology(topo, this.doc, (nodes, closed) => smoothAlong(nodes, closed, brush, o));
+    const changed = next !== this.doc;
     if (changed) {
       d.moved = true;
       this.history.preview(next);

@@ -409,6 +409,44 @@ export function freehandParams(level) {
   return { passes: Math.round(t * 6), tolerance: 0.25 * Math.exp(t * Math.log(40)), tension: t * 0.5 };
 }
 
+/** Puntos a intervalos regulares `step` a lo largo de la polilínea (el último punto original se conserva en un trazo abierto). */
+export function resamplePolyline(pts, step, closed) {
+  const ring = closed ? [...pts, pts[0]] : pts;
+  const out = [{ x: ring[0].x, y: ring[0].y }];
+  let carry = 0; // lo recorrido desde el último punto puesto
+  for (let i = 0; i + 1 < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[i + 1];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    let at = step - carry;
+    while (at <= len) {
+      out.push({ x: a.x + ((b.x - a.x) * at) / len, y: a.y + ((b.y - a.y) * at) / len });
+      at += step;
+    }
+    carry = len - (at - step);
+  }
+  const last = ring[ring.length - 1];
+  if (closed) {
+    if (out.length > 1 && Math.hypot(out[out.length - 1].x - out[0].x, out[out.length - 1].y - out[0].y) < step * 0.5) out.pop();
+  } else out.push({ x: last.x, y: last.y });
+  return out;
+}
+
+/**
+ * Densifica una línea poco detallada (pocos vértices muy separados) a unos 3 px
+ * entre puntos, como si se hubiera dibujado a mano a esa vista. Así el
+ * promedio del suavizado actúa sobre una distancia y no sobre una cantidad de
+ * puntos: sin esto, el promedio de un polígono de pluma de cuatro esquinas lo
+ * encogería hacia su centro.
+ */
+export function densifyForSmoothing(pts, mpp, closed) {
+  let len = 0;
+  for (let i = 0; i + 1 < pts.length; i++) len += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+  if (closed && pts.length > 1) len += Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y);
+  const step = Math.max(mpp * 3, len / 4000);
+  return pts.length >= 2 && len > 0 ? resamplePolyline(pts, step, closed) : pts;
+}
+
 /** Promedio móvil 1-2-1 (los extremos de un trazo abierto no se mueven). */
 export function relaxPoints(pts, passes, closed) {
   let cur = pts;
@@ -487,7 +525,8 @@ export function canSmooth(shape) {
 export function adoptFreehand(shape, mpp) {
   if (canResmooth(shape)) return shape;
   const pts = simplify(flattenNodes(shape.nodes, shape.closed, mpp * 0.25).map(([x, y]) => ({ x, y })), mpp * 0.1);
-  const raw = shape.closed && pts.length > 1 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) < mpp * 1e-3 ? pts.slice(0, -1) : pts;
+  const open = shape.closed && pts.length > 1 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) < mpp * 1e-3 ? pts.slice(0, -1) : pts;
+  const raw = densifyForSmoothing(open, mpp, !!shape.closed);
   return { ...shape, freehand: { pts: raw, mpp, closed: !!shape.closed, level: 0, sig: nodesSignature(shape.nodes) } };
 }
 

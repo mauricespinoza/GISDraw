@@ -57,6 +57,7 @@ node test/freehand.test.mjs  # lápiz: suavizado 0–100 % y re-suavizado del tr
 node test/trace.test.mjs     # Trace: grafo nodado, alterno, tolerancia
 node test/geomops.test.mjs  # Join, Merge, Split y Hole
 node test/smooth.test.mjs   # pincel de Suavizar: solo el sector bajo el pincel
+node test/smoothtopo.test.mjs # suavizado por arcos: nodos compartidos, sin perder el cierre
 node test/project.test.mjs   # proyecto .gisdrawer autocontenido (imágenes incrustadas)
 node test/transform.test.mjs # Transformar (mover/rotar/escalar exactos) y lectura de coordenadas
 node test/sw.test.mjs        # todo módulo está en el precache offline
@@ -202,6 +203,23 @@ deslizador la suaviza y volver a 0 % la deja como estaba. 0 % deja el trazo
 casi como se dibujó; 100 % promedia el temblor, simplifica y lo redondea sin
 lazos. Los polígonos con huecos o bloqueados no se suavizan con este control
 (sí con el pincel de Suavizar, N).
+
+**Nodos compartidos (topología)**: si las líneas o polígonos que se suavizan
+comparten nodos con otros —el borde común de dos polígonos, una línea que
+termina en el vértice de otra, la isla que rellena el hueco de un polígono—, el
+suavizado trabaja por **arcos** (el tramo entre dos nodos de unión): cada arco
+compartido se suaviza **una sola vez** y todas las formas que lo usan lo reciben
+idéntico, así que **no se abren huecos ni solapes** y los polígonos siguen
+cerrados. Los nodos de unión no se mueven. Las formas vecinas que no estaban
+seleccionadas se actualizan igual en el borde compartido (eso es lo que
+mantiene el cierre); un arco compartido con una forma bloqueada, o en una capa
+bloqueada, se deja como estaba. Vale para el control Suavizado y para el
+pincel de Suavizar. La coincidencia de nodos usa la misma tolerancia que
+Move Joined. El nivel se aplica desde la forma que tenían al seleccionarlas:
+con nodos compartidos, volver a 0 % en un segundo movimiento del deslizador ya
+no recupera la forma de antes del primero (sí Ctrl+Z). Las líneas con pocos
+vértices muy separados se densifican (≈3 px) antes de suavizar, para que el
+promedio no encoja un polígono de pocas esquinas.
 
 ### Borrar nodos
 
