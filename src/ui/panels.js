@@ -21,7 +21,7 @@ import { measure, shapeBBox, unionBBox, walkShapes } from '../vector.js';
 import { LABEL_SEPARATORS, labelText } from '../labels.js';
 import { RAMPS, applyRenderer, buildRenderer, clearRenderer, countClasses, defaultRendererOptions, fieldChoices, rampCss } from '../symbology.js';
 import { h, sec, row, select, slider, num, text, color, check, btn, closePopSliders } from './dom.js';
-import { TAB_ICONS } from './icons.js';
+import { TAB_ICONS, LAYER_ICONS } from './icons.js';
 import { askConfirm, askText } from './dialog.js';
 import { alignOf, layoutText } from '../textLayout.js';
 import { CANVAS_SIZES, CANVAS_TABS, GIS_TABS, canvasDefaults, canvasMm, isGisLayer, normalizeCanvas } from '../mode.js';
@@ -234,7 +234,7 @@ export class Panels {
       if (final) app.history.commit(next);
       else app.history.preview(next);
     };
-    const kindIcon = { vector: '✎', basemap: '🗺', hillshade: '⛰', image: '🖼' }[l.kind] || '';
+    const kindIcon = h('span', { class: 'kind-ico', html: LAYER_ICONS[l.kind] || '' });
     const count = l.kind === 'vector' ? h('small', {}, `(${l.items.length})`) : null;
     const name = h(
       'div',
@@ -255,20 +255,21 @@ export class Panels {
           if (n) set({ name: n });
         },
       },
-      `${kindIcon} ${l.name}`,
+      kindIcon,
+      ` ${l.name}`,
       count,
     );
     const el = h(
       'div',
       { class: `layer${active ? ' active' : ''}` },
-      h('button', { class: `ico${l.visible ? '' : ' off'}`, title: 'Visible', onclick: () => set({ visible: !l.visible }) }, '👁'),
-      h('button', { class: `ico${l.locked ? '' : ' off'}`, title: 'Bloqueo', onclick: () => set({ locked: !l.locked }) }, l.locked ? '🔒' : '🔓'),
+      h('button', { class: `ico${l.visible ? '' : ' off'}`, title: 'Visible', html: l.visible ? LAYER_ICONS.eye : LAYER_ICONS.eyeOff, onclick: () => set({ visible: !l.visible }) }),
+      h('button', { class: `ico${l.locked ? '' : ' off'}`, title: 'Bloqueo', html: l.locked ? LAYER_ICONS.lock : LAYER_ICONS.unlock, onclick: () => set({ locked: !l.locked }) }),
       name,
       h(
         'div',
         {},
-        h('button', { class: 'ico', title: 'Subir', onclick: () => app.history.commit(moveLayer(this.doc, l.id, +1)) }, '▲'),
-        h('button', { class: 'ico', title: 'Bajar', onclick: () => app.history.commit(moveLayer(this.doc, l.id, -1)) }, '▼'),
+        h('button', { class: 'ico', title: 'Subir', html: LAYER_ICONS.up, onclick: () => app.history.commit(moveLayer(this.doc, l.id, +1)) }),
+        h('button', { class: 'ico', title: 'Bajar', html: LAYER_ICONS.down, onclick: () => app.history.commit(moveLayer(this.doc, l.id, -1)) }),
       ),
     );
     if (this.expanded.has(l.id)) {
