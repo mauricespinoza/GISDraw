@@ -1240,6 +1240,26 @@ export class Editor {
     // varias formas seleccionadas (p. ej. vecinas que comparten borde): insertar en la que está bajo el
     // puntero, y el nodo queda compartido por todas las que tienen ese tramo
     if (!shape && this.selection.size > 1) {
+      // tiradores Bézier de cualquiera de las seleccionadas
+      for (const s of this.selectedShapes()) {
+        if (s.type !== 'path' || s.locked) continue;
+        for (const ring of [-1, ...(s.holes || []).map((_, i) => i)]) {
+          const nodes = this.ringNodes(s, ring);
+          for (let i = 0; i < nodes.length; i++) {
+            for (const kind of ['hIn', 'hOut']) {
+              if (!nodes[i][kind]) continue;
+              const [hx, hy] = this.view.toScreen(nodes[i][kind].x, nodes[i][kind].y);
+              if (Math.hypot(sp[0] - hx, sp[1] - hy) < tol) {
+                this.activeNode = { id: s.id, ring, index: i };
+                this.history.begin();
+                this.drag = { mode: 'bezier', id: s.id, ring, index: i, kind, alt: e.altKey };
+                this.changed();
+                return;
+              }
+            }
+          }
+        }
+      }
       // sobre un vértice de cualquiera de las seleccionadas: se mueve (con «Move Joined», junto con los que lo comparten)
       let best = null;
       for (const s of this.selectedShapes()) {
@@ -2268,6 +2288,12 @@ export class Editor {
         for (const ring of [-1, ...(s.holes || []).map((_, i) => i)]) {
           for (const n of this.ringNodes(s, ring)) {
             const [x, y] = P(n.x, n.y);
+            for (const h of ['hIn', 'hOut']) {
+              if (!n[h]) continue;
+              const [hx, hy] = P(n[h].x, n[h].y);
+              out.push(`<line x1="${r2(x)}" y1="${r2(y)}" x2="${r2(hx)}" y2="${r2(hy)}" stroke="#f59e0b"/>`);
+              out.push(`<circle cx="${r2(hx)}" cy="${r2(hy)}" r="4.5" fill="#f59e0b" stroke="#fff"/>`);
+            }
             out.push(`<rect x="${r2(x - 4)}" y="${r2(y - 4)}" width="8" height="8" fill="#fff" stroke="#0ea5e9" stroke-width="1.5"/>`);
           }
         }
