@@ -1012,7 +1012,10 @@ class App {
     }
     if (info.node) {
       const a = info.node;
+      const nd = ed.ringNodes(allTopShapes(doc, { visibleOnly: false }).find((x) => x.shape.id === a.id)?.shape || { nodes: [] }, a.ring)?.[a.index];
+      const frozen = ed.frozenAt(nd);
       groups.push([
+        frozen ? it('Unfreeze node (descongelar)', '', () => ed.freezeNode(a, false)) : it('Freeze node (dejar fijo)', '', () => ed.freezeNode(a, true)),
         it('Borrar nodo', 'Supr', () => ed.deleteActiveNode()),
         it('Esquina ↔ curva', 'Mayús+C', () => ed.toggleSmooth(a.id, a.ring, a.index)),
         a.ring < 0 ? it('Cortar en este nodo', 'C', () => commitSel(splitPath(this.history.doc, a.id, a.index, 0))) : null,
@@ -1035,6 +1038,7 @@ class App {
         it('Transformar: mover, rotar, escalar…', 'Ctrl+Mayús+M', () => this.transformDialog()),
         paths.length ? it('Simplificar (menos nodos)…', '', () => this.simplifyDialog()) : null,
         paths.length > 1 ? it('Tidy: compartir nodos cercanos…', '', () => this.tidyDialog()) : null,
+        paths.some((s) => [s.nodes, ...(s.holes || [])].some((r) => r?.some((q) => q.frozen))) ? it('Unfreeze nodes (descongelar todos)', '', () => ed.unfreezeSelection()) : null,
       ]);
       groups.push([
         it('Traer al frente', 'Ctrl+Mayús+]', () => this.history.commit(arrange(doc, ed.selection, 'front'))),
@@ -2738,7 +2742,7 @@ const SHORTCUTS = [
     ['Ctrl+7 / Ctrl+Alt+7', 'Máscara de recorte / liberar'], ['Ctrl+] / Ctrl+[', 'Adelante / atrás (Mayús: al frente / al fondo)'],
     ['Ctrl+2 / Ctrl+Alt+2', 'Bloquear / desbloquear todo'], ['Ctrl+3 / Ctrl+Alt+3', 'Ocultar / mostrar todo'], ['Mayús+C', 'Nodo esquina ↔ curva'],
   ]],
-  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón de eslabones)'], ['Guías', 'Alinear con el nivel o la vertical de otros vértices, aunque estén lejos'], ['Mayús', 'Restringir ángulo o proporción']]],
+  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón de eslabones)'], ['Freeze node', 'Menú contextual sobre un nodo: queda fijo ante transformaciones y frena Deform, Drag y Suavizar (Unfreeze nodes lo libera)'], ['Guías', 'Alinear con el nivel o la vertical de otros vértices, aunque estén lejos'], ['Mayús', 'Restringir ángulo o proporción']]],
   ['Tablet (táctil)', [['Dos dedos, dos toques', 'Deshacer'], ['Tres dedos, dos toques', 'Rehacer'], ['Mantener el dedo', 'Menú contextual (Join, Merge, Split, Hole…)'], ['Dos dedos arrastrar / pellizcar', 'Desplazar / zoom']]],
   ['Vista y archivo', [
     ['Ctrl+0', 'Zoom a todo'], ['Ctrl+1', 'Escala de referencia'], ['Ctrl++ / Ctrl+−', 'Acercar / alejar'], ['Rueda del mouse', 'Zoom (Archivo → Vista: cambiar a desplazar)'], ['Trackpad', 'Dos dedos desplazan, pellizco = zoom'],

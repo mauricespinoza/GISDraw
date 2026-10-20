@@ -59,6 +59,7 @@ node test/geomops.test.mjs  # Join, Merge, Split y Hole
 node test/smooth.test.mjs   # pincel de Suavizar: solo el sector bajo el pincel
 node test/split.test.mjs      # Split de líneas y polígonos (toque o arrastre) y Reshape
 node test/deform.test.mjs     # Deform y Drag: gradiente, alcance, subdivisión y nodos compartidos
+node test/freeze.test.mjs     # Freeze node: nodos fijos ante transformaciones y límite de Deform, Drag y Suavizar
 node test/smoothtopo.test.mjs # suavizado por arcos: nodos compartidos, sin perder el cierre
 node test/project.test.mjs   # proyecto .gisdrawer autocontenido (imágenes incrustadas)
 node test/transform.test.mjs # Transformar (mover/rotar/escalar exactos) y lectura de coordenadas

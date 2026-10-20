@@ -20,13 +20,13 @@
 
 import { imageRect } from './raster/rasterView.js';
 import { addShapes, allTopShapes, findTopShape, inLockedLayer, layerOfShape, mapShapes, removeShapes, replaceShapes } from './doc.js';
-import { splitPath } from './ops.js';
+import { frozenPoints, setNodesFrozen, splitPath } from './ops.js';
 import { layoutText, textCorners } from './textLayout.js';
 import { pickShape, shapesInBox, shapesInLasso, shapeDistance, flatRings } from './hit.js';
 import { SnapIndex, buildGraph, smartTrace, pointKey } from './snapping.js';
 import { smoothAlong } from './smoothTool.js';
 import { buildTopology, smoothTopology } from './smoothTopo.js';
-import { applyDeform, prepareDeform, prepareDrag } from './deform.js';
+import { applyDeform, frozenTest, prepareDeform, prepareDrag } from './deform.js';
 import { nodeInto } from './tidy.js';
 import { defaultStyle, nodesD, shapeD, esc, textMeasurer } from './style.js';
 import { paperUnits } from './view.js';
@@ -570,10 +570,15 @@ export class Editor {
           if (!node && Math.hypot(sp[0] - x, sp[1] - y) < 14) node = { id: shape.id, ring, index: i };
         });
       }
-      if (node) {
-        this.activeNode = node;
-        this.changed();
-      }
+    }
+    // con Drag, Deform o varias formas en Nodos: el vértice de lo seleccionado bajo el puntero
+    if (!node && ['node', 'drag', 'deform'].includes(this.tool)) {
+      const sn = this.selectedNodeAt(sp);
+      if (sn) node = { id: sn.id, ring: sn.ring, index: sn.index };
+    }
+    if (node) {
+      this.activeNode = node;
+      this.changed();
     }
     if (!node && hit && !this.selection.has(hit.shape.id)) this.setSelection([hit.shape.id]);
     this.onContextMenu(sp, { hit: hit?.shape || null, node, wp: this.view.toWorld(...sp) });
@@ -1220,6 +1225,7 @@ export class Editor {
             }
             this.lastNodeTap = { id: shape.id, ring, index: i, t: now };
             this.activeNode = { id: shape.id, ring, index: i };
+            if (this.frozenAt(nodes[i])) return this.frozenNotice();
             this.history.begin();
             this.drag = { mode: 'node', id: shape.id, ring, index: i, joined: this.settings.moveJoined === false ? [] : this.findJoined(shape, ring, i) };
             this.changed();
@@ -1275,6 +1281,8 @@ export class Editor {
       if (best) {
         const { s, ring, i } = best;
         if (e.altKey) return this.toggleSmooth(s.id, ring, i);
+        this.activeNode = { id: s.id, ring, index: i };
+        if (this.frozenAt(this.ringNodes(s, ring)[i])) return this.frozenNotice();
         this.history.begin();
         this.drag = { mode: 'node', id: s.id, ring, index: i, joined: this.settings.moveJoined === false ? [] : this.findJoined(s, ring, i) };
         this.changed();
@@ -1292,6 +1300,46 @@ export class Editor {
     // con varias seleccionadas, tocar una de ellas no deshace la selección (el doble clic inserta un nodo compartido)
     if (hit && this.selection.size > 1 && this.selection.has(hit.shape.id)) return;
     this.setSelection(hit ? [hit.shape.id] : []);
+  }
+
+  /* ------------------------------------------------ nodos congelados */
+
+  /** Distancia bajo la cual dos nodos son el mismo (la de Move Joined). */
+  joinTol() {
+    return Math.min(this.view.mpp * 0.35, 0.5);
+  }
+
+  /** ¿El nodo `n` está congelado (en esta forma o en otra que lo comparte)? */
+  frozenAt(n) {
+    return !!n && (n.frozen || frozenTest(this.doc, this.joinTol())(n));
+  }
+
+  frozenNotice() {
+    this.onMessage('Nodo congelado: no se mueve (menú contextual → Unfreeze node)');
+    this.changed();
+  }
+
+  /**
+   * Freeze / Unfreeze del nodo `a` ({id, ring, index}): se marca en todas las
+   * formas que lo comparten. Un nodo congelado no se mueve con las
+   * transformaciones y limita las deformaciones en gradiente.
+   */
+  freezeNode(a, value = true) {
+    const sh = allTopShapes(this.doc, { visibleOnly: false }).find((x) => x.shape.id === a.id)?.shape;
+    const n = sh && this.ringNodes(sh, a.ring)?.[a.index];
+    if (!n) return;
+    const r = setNodesFrozen(this.doc, [{ x: n.x, y: n.y }], value, this.joinTol());
+    if (r.count) this.history.commit(r.doc);
+    this.onMessage(value ? 'Nodo congelado: no se mueve con transformaciones y frena las deformaciones' : 'Nodo descongelado');
+  }
+
+  /** Unfreeze nodes: descongela todos los nodos de la selección (y los que comparten su lugar). */
+  unfreezeSelection() {
+    const pts = frozenPoints(this.doc, this.selection);
+    if (!pts.length) return this.onMessage('La selección no tiene nodos congelados');
+    const r = setNodesFrozen(this.doc, pts, false, this.joinTol());
+    if (r.count) this.history.commit(r.doc);
+    this.onMessage(`${pts.length} nodo(s) descongelado(s)`);
   }
 
   updateRing(shape, ring, f) {
@@ -1820,6 +1868,7 @@ export class Editor {
       tol: Math.min(this.view.mpp * 0.35, 0.5),
     });
     this.activeNode = { id: node.id, ring: node.ring, index: node.index };
+    if (prep.frozen) return this.frozenNotice();
     // vértices a los que puede engancharse el nodo arrastrado: los de las formas visibles en la vista, menos los que se mueven
     const moving = new Set(prep.moves.map((m) => `${m.id}|${m.ring}|${m.index}`));
     const ext = this.view.extent(SNAP_PX);
@@ -2475,6 +2524,19 @@ export class Editor {
       if (t === 'vertex' || t === 'first') out.push(`<rect x="${r2(x - 6)}" y="${r2(y - 6)}" width="12" height="12" fill="none" stroke="#db2777" stroke-width="2"/>`);
       else out.push(`<path d="M${r2(x - 6)} ${r2(y - 6)}L${r2(x + 6)} ${r2(y + 6)}M${r2(x - 6)} ${r2(y + 6)}L${r2(x + 6)} ${r2(y - 6)}" stroke="#db2777" stroke-width="2"/>`);
     }
+    // nodos congelados de lo seleccionado: un rombo oscuro con borde blanco
+    for (const s of this.selectedShapes()) {
+      if (s.type !== 'path') continue;
+      for (const ring of [-1, ...(s.holes || []).map((_, i) => i)]) {
+        for (const n of this.ringNodes(s, ring)) {
+          if (!n.frozen) continue;
+          const [x, y] = P(n.x, n.y);
+          out.push(`<path d="M${r2(x)} ${r2(y - 7)}L${r2(x + 7)} ${r2(y)}L${r2(x)} ${r2(y + 7)}L${r2(x - 7)} ${r2(y)}Z" fill="#1e3a8a" stroke="#fff" stroke-width="1.5"/>`);
+          out.push(`<circle cx="${r2(x)}" cy="${r2(y)}" r="1.8" fill="#fff"/>`);
+        }
+      }
+    }
+
     return out.join('');
   }
 }
