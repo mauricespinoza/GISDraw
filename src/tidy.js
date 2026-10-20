@@ -8,6 +8,9 @@
  *    tramo corto.
  * 2. Nodado: un nodo que cae sobre el tramo de otra forma (a menos del
  *    umbral, lejos de sus nodos) se inserta en ese tramo, en el mismo lugar.
+ * 3. Misma curva: los tramos de formas distintas que unen los mismos dos
+ *    nodos compartidos adoptan los MISMOS tiradores Bézier (los del primero
+ *    que sea curvo), para que el borde común sea una sola geometría.
  *
  * Con eso los bordes comunes quedan con los mismos nodos en ambos lados, que
  * es lo que necesitan Move Joined, Trace, Drag, Deform y el suavizado por
@@ -15,7 +18,7 @@
  */
 
 import { allTopShapes, replaceShapes } from './doc.js';
-import { nearestOnPath, splitNodes } from './vector.js';
+import { cubicAt, nearestOnPath, splitNodes } from './vector.js';
 
 const ringsOf = (s) => [{ ring: -1, nodes: s.nodes, closed: !!s.closed }, ...(s.holes || []).map((h, i) => ({ ring: i, nodes: h, closed: true }))];
 const shiftNode = (n, x, y) => {
@@ -46,14 +49,14 @@ function dedupe(nodes, closed, eps) {
 /**
  * @param ids formas a ordenar (solo trazos desbloqueados)
  * @param tol umbral de cercanía (m)
- * @returns {{ doc: object, merged: number, inserted: number }} `merged`: grupos de nodos fusionados; `inserted`: nodos insertados.
+ * @returns {{ doc: object, merged: number, inserted: number, shaped: number }} `merged`: grupos de nodos fusionados; `inserted`: nodos insertados; `shaped`: bordes comunes que adoptaron la misma curva.
  */
 export function tidyShapes(doc, ids, tol) {
   const sel = ids instanceof Set ? ids : new Set(ids);
   const shapes = allTopShapes(doc, { visibleOnly: false })
     .filter(({ layer, shape }) => sel.has(shape.id) && shape.type === 'path' && !shape.locked && !layer.locked)
     .map(({ shape }) => shape);
-  if (shapes.length < 1 || !(tol > 0)) return { doc, merged: 0, inserted: 0 };
+  if (shapes.length < 1 || !(tol > 0)) return { doc, merged: 0, inserted: 0, shaped: 0 };
 
   // anillos de trabajo (copias)
   const rings = [];
@@ -156,6 +159,65 @@ export function tidyShapes(doc, ids, tol) {
     q.touched = true;
   });
 
+  // 3) los tramos que unen los mismos dos nodos compartidos toman los mismos tiradores
+  let shaped = 0;
+  const pk = (n) => `${n.x},${n.y}`;
+  const groups = new Map();
+  rings.forEach((r, ri) => {
+    const cnt = r.nodes.length;
+    const segs = r.closed ? cnt : cnt - 1;
+    for (let i = 0; i < segs; i++) {
+      const j = (i + 1) % cnt;
+      const ka = pk(r.nodes[i]);
+      const kb = pk(r.nodes[j]);
+      if (ka === kb) continue;
+      const fwd = ka < kb;
+      const gk = fwd ? `${ka}|${kb}` : `${kb}|${ka}`;
+      const list = groups.get(gk) || [];
+      list.push({ ri, i, j, fwd });
+      groups.set(gk, list);
+    }
+  });
+  const same = (p, q) => (!p && !q) || (p && q && Math.abs(p.x - q.x) < 1e-9 && Math.abs(p.y - q.y) < 1e-9);
+  for (const list of groups.values()) {
+    if (list.length < 2 || new Set(list.map((m) => m.ri)).size < list.length) continue; // dos tramos del mismo anillo: ambiguo
+    // curva canónica: del nodo "menor" al "mayor"
+    const canon = (m) => {
+      const a = rings[m.ri].nodes[m.i];
+      const b = rings[m.ri].nodes[m.j];
+      return m.fwd ? { lo: a, hi: b, c1: a.hOut, c2: b.hIn } : { lo: b, hi: a, c1: b.hIn, c2: a.hOut };
+    };
+    const ref = list.find((m) => {
+      const c = canon(m);
+      return c.c1 || c.c2;
+    });
+    if (!ref) continue;
+    const rc = canon(ref);
+    const chord = Math.hypot(rc.hi.x - rc.lo.x, rc.hi.y - rc.lo.y);
+    const mid = (c) => cubicAt(c.lo, c.c1 || c.lo, c.c2 || c.hi, c.hi, 0.5);
+    const rm = mid(rc);
+    let changed = false;
+    for (const m of list) {
+      if (m === ref) continue;
+      const c = canon(m);
+      if (same(c.c1, rc.c1) && same(c.c2, rc.c2)) continue;
+      const cm = mid(c);
+      if (Math.hypot(cm[0] - rm[0], cm[1] - rm[1]) > Math.max(tol * 10, chord * 0.2)) continue; // otro borde, no el mismo
+      const r = rings[m.ri];
+      const cp = (p) => (p ? { x: p.x, y: p.y } : null);
+      if (m.fwd) {
+        r.nodes[m.i] = { ...r.nodes[m.i], hOut: cp(rc.c1) };
+        r.nodes[m.j] = { ...r.nodes[m.j], hIn: cp(rc.c2) };
+      } else {
+        r.nodes[m.j] = { ...r.nodes[m.j], hIn: cp(rc.c1) };
+        r.nodes[m.i] = { ...r.nodes[m.i], hOut: cp(rc.c2) };
+      }
+      r.touched = true;
+      changed = true;
+    }
+    if (changed) shaped++;
+  }
+
   // formas nuevas
   const out = new Map();
   const eps = tol * 1e-6;
@@ -166,7 +228,7 @@ export function tidyShapes(doc, ids, tol) {
     if (nodes.length < (r.closed ? 3 : 2)) continue;
     out.set(r.shape.id, r.ring < 0 ? { ...s, nodes } : { ...s, holes: s.holes.map((h, i) => (i === r.ring ? nodes : h)) });
   }
-  return { doc: out.size ? replaceShapes(doc, out) : doc, merged, inserted };
+  return { doc: out.size ? replaceShapes(doc, out) : doc, merged, inserted, shaped };
 }
 
 /**

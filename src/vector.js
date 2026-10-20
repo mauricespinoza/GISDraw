@@ -227,7 +227,7 @@ export function rotateShape(shape, origin, deg) {
 
 /* --------------------------------------------------------- Bézier y aplanado */
 
-function cubicAt(p0, p1, p2, p3, t) {
+export function cubicAt(p0, p1, p2, p3, t) {
   const mt = 1 - t;
   const a = mt * mt * mt;
   const b = 3 * mt * mt * t;
