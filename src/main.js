@@ -919,6 +919,7 @@ class App {
       if (ed.selection.size) {
         items.push(
           b('Duplicar', () => ed.duplicate()),
+          b('Cortar', () => this.cut()),
           b('Copiar', () => this.copy()),
           b('Al frente', () => this.history.commit(arrange(this.history.doc, ed.selection, 'front'))),
           b('Al fondo', () => this.history.commit(arrange(this.history.doc, ed.selection, 'back'))),
