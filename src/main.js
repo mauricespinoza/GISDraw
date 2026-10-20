@@ -1273,6 +1273,7 @@ class App {
       item('Hueco dibujando una forma (Hole)…', () => this.holeByDrawing(), g.canHoleDraw, 'Selecciona un polígono'),
       h('div', { class: 'mh' }, 'Selección'),
       item('Transformar: mover, rotar, escalar…', () => this.transformDialog(), this.editor.selection.size > 0, 'Selecciona uno o más objetos', 'Ctrl+Mayús+M'),
+      item('Unfreeze nodes (descongelar todos)', () => this.editor.unfreezeSelection(), this.editor.selection.size > 0, 'Selecciona los objetos con nodos congelados'),
       h('div', { class: 'mh' }, 'Limpieza'),
       item('Simplificar: menos nodos, misma forma…', () => this.simplifyDialog(), g.lines.length + g.polys.length > 0, 'Selecciona líneas o polígonos'),
       item('Tidy: compartir nodos cercanos…', () => this.tidyDialog(), g.lines.length + g.polys.length > 0, 'Selecciona las líneas o polígonos que deben compartir nodos'),

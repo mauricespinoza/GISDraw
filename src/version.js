@@ -3,13 +3,15 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v42';
+export const APP_VERSION = 'v43';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
-  ['v42', 'Freeze node: nodos fijos ante transformaciones que limitan Deform, Drag y Suavizar; Unfreeze nodes los libera'],
+  ['v43', 'Lápiz: el trazo cae donde se apoya la punta (imán casi nulo y sin guías); Unfreeze nodes en el menú Geometría'],
+  ['v42', 'Tablet: el toque del dedo no cambia la selección con herramientas de dibujo'],
+  ['v41', 'Freeze node: nodos fijos ante transformaciones que limitan Deform, Drag y Suavizar; Unfreeze nodes los libera'],
   ['v40', 'Nueva paleta ámbar con contraste reforzado e iconos propios en la lista de capas'],
   ['v39', 'Paleta de colores cálida e iconos rediseñados (herramientas, barra superior y logo)'],
   ['v38', 'Apartado «Acerca de la app» con autor, contacto y últimos cambios'],
