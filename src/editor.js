@@ -594,14 +594,16 @@ export class Editor {
     // con el dedo, un toque mientras se dibuja con el lápiz no hace nada:
     // evita vértices fantasma al apoyar la mano
     if (this.draft) return;
+    // con una herramienta de dibujo activa el dedo solo desplaza: el toque no toca la selección
+    // (antes parecía que la app saltaba a la herramienta de selección)
     const selectLike = this.tool === 'select' || this.tool === 'node' || this.tool === 'lasso' || this.tool === 'eyedropper' || this.tool === 'pan';
+    if (!selectLike) return;
     const hit = pickShape(this.doc, sp, this.view, this.units(), 14);
     if (this.tool === 'eyedropper' && hit) return this.applyEyedropper(hit.shape, sp);
     if (hit) {
-      // un toque del dedo sobre un elemento lo selecciona, sea cual sea la herramienta activa
       if (this.addMode) this.toggleSel(hit.shape.id);
       else this.setSelection([hit.shape.id]);
-    } else if (selectLike && !this.addMode) this.setSelection([]);
+    } else if (!this.addMode) this.setSelection([]);
   }
 
   cancelDrag() {
