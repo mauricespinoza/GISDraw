@@ -3,12 +3,13 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v43';
+export const APP_VERSION = 'v44';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
+  ['v44', 'Tidy: los bordes comunes comparten también los tiradores de la curva Bézier'],
   ['v43', 'Lápiz: el trazo cae donde se apoya la punta (imán casi nulo y sin guías); Unfreeze nodes en el menú Geometría'],
   ['v42', 'Tablet: el toque del dedo no cambia la selección con herramientas de dibujo'],
   ['v41', 'Freeze node: nodos fijos ante transformaciones que limitan Deform, Drag y Suavizar; Unfreeze nodes los libera'],

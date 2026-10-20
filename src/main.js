@@ -1357,13 +1357,13 @@ class App {
     const run = (v) => {
       const res = tidyShapes(base, ids, Math.max(1e-9, Number(v.tol) * k));
       this.history.preview(res.doc);
-      this.message(`Tidy: ${res.merged} grupo(s) de nodos fusionados, ${res.inserted} nodo(s) insertados en bordes vecinos`, 0);
+      this.message(`Tidy: ${res.merged} grupo(s) de nodos fusionados, ${res.inserted} nodo(s) insertados en bordes vecinos, ${res.shaped} borde(s) con la misma curva`, 0);
       return res;
     };
     const tol0 = round(((this.settings.tidyPx ?? 6) * mpp) / k);
     const asked = askForm({
       title: 'Tidy: compartir nodos cercanos',
-      hint: 'Los nodos de formas distintas a menos del umbral se juntan en uno, y los que caen sobre el borde de una vecina se agregan a ese borde. Las curvas se conservan.',
+      hint: 'Los nodos de formas distintas a menos del umbral se juntan en uno, y los que caen sobre el borde de una vecina se agregan a ese borde. Los bordes comunes comparten también los tiradores de la curva Bézier.',
       fields: [{ key: 'tol', label: `Umbral de cercanía (${unit})`, type: 'number', value: tol0, min: round((0.5 * mpp) / k), max: round((80 * mpp) / k), step: 0.01, unit, log: true }],
       ok: 'Aplicar',
       live: true,

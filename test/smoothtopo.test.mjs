@@ -231,6 +231,25 @@ const onPolyline = (p, pl, e = 1e-6) => {
   ok(tidyShapes(docWith([Z]), [Z.id], 1).doc === docWith([Z]) || get(tidyShapes(docWith([Z]), [Z.id], 1).doc, Z.id).nodes.length === 3, 'no colapsa nodos del mismo trazo');
 }
 
+{
+  // borde común curvo: ambos lados toman los mismos tiradores (aunque se recorran al revés)
+  const mk = (x, y, hi, ho) => makeNode(x, y, hi, ho, true);
+  const P1 = makePath([mk(0, 0), mk(100, 0, null, { x: 110, y: 30 }), mk(100, 100, { x: 110, y: 70 }, null), mk(0, 100)], { closed: true });
+  const P2 = makePath([mk(100.2, 100.1, null, { x: 96, y: 60 }), mk(100, 0.1, { x: 94, y: 40 }, null), mk(200, 0), mk(200, 100)], { closed: true });
+  const r = tidyShapes(docWith([P1, P2]), [P1.id, P2.id], 1);
+  ok(r.shaped === 1, `un borde común con la misma curva: ${r.shaped}`);
+  const a = get(r.doc, P1.id).nodes;
+  const b = get(r.doc, P2.id).nodes;
+  const A1 = a[1];
+  const A2 = a[2];
+  const B1 = b[1];
+  const B0 = b[0];
+  ok(B1.hIn && Math.abs(B1.hIn.x - A1.hOut.x) < 1e-9 && Math.abs(B1.hIn.y - A1.hOut.y) < 1e-9, 'el tirador del nodo superior coincide');
+  ok(B0.hOut && Math.abs(B0.hOut.x - A2.hIn.x) < 1e-9 && Math.abs(B0.hOut.y - A2.hIn.y) < 1e-9, 'el tirador del nodo inferior coincide (sentido contrario)');
+  const again = tidyShapes(r.doc, [P1.id, P2.id], 1);
+  ok(again.shaped === 0, 'idempotente');
+}
+
 /* ================================================================= NODADO AL DIBUJAR */
 {
   const A = line([[0, 0], [100, 0], [200, 0]]);
