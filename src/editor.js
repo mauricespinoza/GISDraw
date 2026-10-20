@@ -79,6 +79,7 @@ export const TOOLS = {
 const DRAW_TOOLS = new Set(['pen', 'polygon', 'pencil', 'line', 'arrow', 'rect', 'ellipse', 'text', 'point']);
 const HANDLE_KEYS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 const SNAP_PX = 12;
+const SNAP_PX_PEN = 3; // el lápiz es preciso: casi sin imán, el trazo cae donde se apoya la punta
 /** Tolerancia de simplificación (px) del pincel de Suavizar para una intensidad. */
 const smoothTolPx = (level) => 0.3 + (Math.max(0, Math.min(100, level)) / 100) * 2.5;
 const GUIDE_PX = 6; // snap ligero a guías de alineación
@@ -266,9 +267,13 @@ export class Editor {
   }
 
   /** Punto de mundo con snapping (a vértices y segmentos, y al propio borrador). */
+  snapTolPx() {
+    return this.inputType === 'pen' ? SNAP_PX_PEN : SNAP_PX;
+  }
+
   snapPoint(wp, { force = false } = {}) {
     if (!this.settings.snap && !force) return { point: this.guidePoint(wp), snap: null };
-    const tol = SNAP_PX * this.view.mpp;
+    const tol = this.snapTolPx() * this.view.mpp;
     // primero el borrador: cerrar el polígono / unir al inicio
     if (this.draft?.nodes.length) {
       const first = this.draft.nodes[0];
@@ -323,7 +328,7 @@ export class Editor {
    */
   guidePoint(wp, { exclude = [] } = {}) {
     this.guides = null;
-    if (this.settings.guides === false) return wp;
+    if (this.settings.guides === false || this.inputType === 'pen') return wp; // con lápiz, sin imán a guías
     const tol = GUIDE_PX * this.view.mpp;
     const { xs, ys } = this.alignIndex();
     const extra = (this.draft?.nodes || []).map((n) => [n.x, n.y]);
@@ -414,6 +419,7 @@ export class Editor {
       else this.tapSession.max = Math.max(this.tapSession.max, n);
     }
     if (e.pointerType === 'pen') this.penSeen = true;
+    this.inputType = e.pointerType;
     this.onPointerStart?.();
 
     // mantener apretado = menú contextual (dedo; lápiz solo con selección y nodos)
@@ -451,6 +457,7 @@ export class Editor {
   }
 
   onMove(e) {
+    if (e.pointerType) this.inputType = e.pointerType;
     const sp = this.screenPoint(e);
     const p = this.pointers.get(e.pointerId);
     if (p) p.sp = sp;
@@ -1397,7 +1404,7 @@ export class Editor {
     if (this.settings.snap) {
       // no engancharse a la propia forma ni a las que se mueven con ella
       const skip = new Set([d.id, ...joined.map((j) => j.id)]);
-      const s = this.snapIndex().query(wp, SNAP_PX * this.view.mpp);
+      const s = this.snapIndex().query(wp, this.snapTolPx() * this.view.mpp);
       if (s && !skip.has(s.meta?.id)) p = s.point;
     }
     this.guides = null;
