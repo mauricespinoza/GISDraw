@@ -580,6 +580,12 @@ export class Editor {
   }
 
   fingerTap(sp) {
+    // Dividir / Reshape: el dedo corta con un toque igual que el lápiz o el ratón
+    if (this.tool === 'split' || this.tool === 'reshape') {
+      const hit = pickShape(this.doc, sp, this.view, this.units(), 14);
+      this.onCutTouch?.({ kind: this.tool, hit: hit?.shape || null, shift: this.addMode });
+      return;
+    }
     // con el dedo, un toque mientras se dibuja con el lápiz no hace nada:
     // evita vértices fantasma al apoyar la mano
     if (this.draft) return;
@@ -930,6 +936,12 @@ export class Editor {
       case 'rotate':
       case 'node':
       case 'bezier':
+        if (d.tapHit && Math.hypot(sp[0] - d.sp0[0], sp[1] - d.sp0[1]) < TAP_MOVE) {
+          this.history.anchor = null;
+          if (e.shiftKey || this.addMode) this.toggleSel(d.tapHit);
+          else this.setSelection([d.tapHit]);
+          return;
+        }
         this.history.end();
         this.snapDirty = true;
         this.guides = null;
@@ -1122,6 +1134,9 @@ export class Editor {
       } else {
         this.drag = { mode: 'scale', handle, box, shapes, base: this.doc };
       }
+      // los extremos de las líneas coinciden con los manejadores: un toque sin arrastrar elige lo que hay debajo
+      this.drag.sp0 = sp;
+      this.drag.tapHit = pickShape(this.doc, sp, this.view, this.units(), e.pointerType === 'mouse' ? 6 : 10)?.shape.id || null;
       return;
     }
     const hit = pickShape(this.doc, sp, this.view, this.units(), e.pointerType === 'mouse' ? 6 : 10);

@@ -1200,6 +1200,11 @@ class App {
     const { splitShapes, cutterFromShape, loadJsts } = await import('./geomOps.js');
     const tol = this.geomTol();
     const r = splitShapes(await loadJsts(), this.history.doc, targets, cutterFromShape(hit, tol), { tol });
+    if (r.error) {
+      // no cruza nada: el toque elige esa línea (si no, con varias seleccionadas no habría forma de quedarse con una)
+      ed.setSelection(shift ? [...sel, hit.id] : [hit.id]);
+      return this.message(r.error, 6000);
+    }
     this.applyGeom(r, `Dividido: ${r.lines ? `${r.lines} línea(s)` : ''}${r.lines && r.polys ? ' y ' : ''}${r.polys ? `${r.polys} polígono(s)` : ''}`);
   }
 
