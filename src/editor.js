@@ -1240,6 +1240,26 @@ export class Editor {
     // varias formas seleccionadas (p. ej. vecinas que comparten borde): insertar en la que está bajo el
     // puntero, y el nodo queda compartido por todas las que tienen ese tramo
     if (!shape && this.selection.size > 1) {
+      // sobre un vértice de cualquiera de las seleccionadas: se mueve (con «Move Joined», junto con los que lo comparten)
+      let best = null;
+      for (const s of this.selectedShapes()) {
+        if (s.type !== 'path' || s.locked) continue;
+        for (const ring of [-1, ...(s.holes || []).map((_, i) => i)]) {
+          this.ringNodes(s, ring).forEach((n, i) => {
+            const [nx, ny] = this.view.toScreen(n.x, n.y);
+            const dist = Math.hypot(sp[0] - nx, sp[1] - ny);
+            if (dist < tol && (!best || dist < best.dist)) best = { dist, s, ring, i };
+          });
+        }
+      }
+      if (best) {
+        const { s, ring, i } = best;
+        if (e.altKey) return this.toggleSmooth(s.id, ring, i);
+        this.history.begin();
+        this.drag = { mode: 'node', id: s.id, ring, index: i, joined: this.settings.moveJoined === false ? [] : this.findJoined(s, ring, i) };
+        this.changed();
+        return;
+      }
       for (const s of this.selectedShapes()) {
         if (s.type !== 'path' || s.locked) continue;
         for (const ring of [-1, ...(s.holes || []).map((_, i) => i)]) {
