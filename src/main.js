@@ -883,6 +883,22 @@ class App {
     document.getElementById('coords').innerHTML = `${formatDMS(lat, true)} ${formatDMS(lon, false)}<br>${Math.round(wp[0])} E ${Math.round(wp[1])} N${z != null ? ` · ${Math.round(z)} m` : ''}`;
   }
 
+  /** Duplicar, cortar, copiar, orden y pegar: lo que se hace con la selección (selección y nodos). */
+  selectionActions(items, b) {
+    const ed = this.editor;
+    if (ed.selection.size) {
+      items.push(
+        b('Duplicar', () => ed.duplicate()),
+        b('Cortar', () => this.cut()),
+        b('Copiar', () => this.copy()),
+        b('Al frente', () => this.history.commit(arrange(this.history.doc, ed.selection, 'front'))),
+        b('Al fondo', () => this.history.commit(arrange(this.history.doc, ed.selection, 'back'))),
+        b('Eliminar', () => ed.deleteSelection()),
+      );
+    }
+    if (this.clipboard.length) items.push(b('Pegar', () => this.paste(false)), b('Pegar en el lugar', () => this.paste(true)));
+  }
+
   updateContextBar() {
     const bar = document.getElementById('contextbar');
     const ed = this.editor;
@@ -896,10 +912,14 @@ class App {
         b(this.settings.trace ? 'Trace ✓' : 'Trace', () => this.saveSettings({ trace: !this.settings.trace }), this.settings.trace ? 'on' : ''),
         b('Cancelar', () => ed.cancelDraft()),
       );
-    } else if (ed.tool === 'node' && ed.nodeTarget()) {
+    } else if (ed.tool === 'node') {
+      if (ed.nodeTarget()) {
+        items.push(
+          b('Borrar nodo', () => ed.deleteActiveNode()),
+          b('Esquina / curva', () => ed.activeNode && ed.toggleSmooth(ed.activeNode.id, ed.activeNode.ring, ed.activeNode.index)),
+        );
+      }
       items.push(
-        b('Borrar nodo', () => ed.deleteActiveNode()),
-        b('Esquina / curva', () => ed.activeNode && ed.toggleSmooth(ed.activeNode.id, ed.activeNode.ring, ed.activeNode.index)),
         b(this.settings.insertOnTap ? 'Insertar al tocar ✓' : 'Insertar al tocar', () => {
           this.saveSettings({ insertOnTap: !this.settings.insertOnTap });
           this.updateContextBar();
@@ -908,25 +928,15 @@ class App {
           this.saveSettings({ moveJoined: this.settings.moveJoined === false });
           this.updateContextBar();
         }, this.settings.moveJoined !== false ? 'on' : ''),
-        b('Abrir / cerrar', () => ed.toggleClosed()),
-        b('Invertir', () => ed.reverseSelected()),
       );
+      if (ed.nodeTarget()) items.push(b('Abrir / cerrar', () => ed.toggleClosed()), b('Invertir', () => ed.reverseSelected()));
+      this.selectionActions(items, b);
     } else if (['select', 'lasso'].includes(ed.tool)) {
       items.push(b(ed.addMode ? 'Añadir a selección ✓' : 'Añadir a selección', () => {
         ed.addMode = !ed.addMode;
         this.updateContextBar();
       }, ed.addMode ? 'on' : ''));
-      if (ed.selection.size) {
-        items.push(
-          b('Duplicar', () => ed.duplicate()),
-          b('Cortar', () => this.cut()),
-          b('Copiar', () => this.copy()),
-          b('Al frente', () => this.history.commit(arrange(this.history.doc, ed.selection, 'front'))),
-          b('Al fondo', () => this.history.commit(arrange(this.history.doc, ed.selection, 'back'))),
-          b('Eliminar', () => ed.deleteSelection()),
-        );
-      }
-      if (this.clipboard.length) items.push(b('Pegar', () => this.paste(false)), b('Pegar en el lugar', () => this.paste(true)));
+      this.selectionActions(items, b);
     }
     bar.replaceChildren(...items);
     bar.hidden = !items.length;
