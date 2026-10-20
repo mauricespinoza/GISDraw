@@ -580,17 +580,17 @@ export class Editor {
   }
 
   fingerTap(sp) {
-    if (this.tool === 'select' || this.tool === 'node' || this.tool === 'lasso' || this.tool === 'eyedropper') {
-      const hit = pickShape(this.doc, sp, this.view, this.units(), 14);
-      if (this.tool === 'eyedropper' && hit) return this.applyEyedropper(hit.shape, sp);
-      if (hit) {
-        if (this.addMode) this.toggleSel(hit.shape.id);
-        else this.setSelection([hit.shape.id]);
-      } else if (!this.addMode) this.setSelection([]);
-    } else if (this.draft) {
-      // con el dedo, un toque mientras se dibuja con el lápiz no hace nada:
-      // evita vértices fantasma al apoyar la mano
-    }
+    // con el dedo, un toque mientras se dibuja con el lápiz no hace nada:
+    // evita vértices fantasma al apoyar la mano
+    if (this.draft) return;
+    const selectLike = this.tool === 'select' || this.tool === 'node' || this.tool === 'lasso' || this.tool === 'eyedropper' || this.tool === 'pan';
+    const hit = pickShape(this.doc, sp, this.view, this.units(), 14);
+    if (this.tool === 'eyedropper' && hit) return this.applyEyedropper(hit.shape, sp);
+    if (hit) {
+      // un toque del dedo sobre un elemento lo selecciona, sea cual sea la herramienta activa
+      if (this.addMode) this.toggleSel(hit.shape.id);
+      else this.setSelection([hit.shape.id]);
+    } else if (selectLike && !this.addMode) this.setSelection([]);
   }
 
   cancelDrag() {
