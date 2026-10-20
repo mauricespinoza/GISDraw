@@ -98,8 +98,10 @@ export function tidyShapes(doc, ids, tol) {
       sx += rings[ri].nodes[i].x;
       sy += rings[ri].nodes[i].y;
     }
-    const x = sx / c.members.length;
-    const y = sy / c.members.length;
+    // un nodo congelado no se mueve: los demás se juntan en él
+    const fixed = c.members.map(({ ri, i }) => rings[ri].nodes[i]).find((nd) => nd.frozen);
+    const x = fixed ? fixed.x : sx / c.members.length;
+    const y = fixed ? fixed.y : sy / c.members.length;
     let moved = false;
     for (const { ri, i } of c.members) {
       const n = rings[ri].nodes[i];

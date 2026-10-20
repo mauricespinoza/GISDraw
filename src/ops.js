@@ -450,6 +450,52 @@ export function resetShapeFlag(doc, flag) {
   return { doc: map.size ? replaceShapes(doc, map) : doc, ids: [...map.keys()] };
 }
 
+/* ------------------------------------------------- congelar nodos */
+
+/**
+ * Freeze / Unfreeze: marca (o desmarca) como congelados los nodos de las
+ * líneas y polígonos que caen a menos de `tol` de alguno de `points`. Se
+ * marcan en TODAS las formas que comparten el lugar, para que el nodo común
+ * quede fijo cualquiera sea la forma que se transforme.
+ * @returns {{ doc: object, count: number }} `count`: nodos que cambiaron.
+ */
+export function setNodesFrozen(doc, points, value, tol = 0.01) {
+  if (!points.length) return { doc, count: 0 };
+  const near = (n) => points.some((p) => Math.hypot(p.x - n.x, p.y - n.y) <= tol);
+  const map = new Map();
+  let count = 0;
+  const ring = (nodes) => {
+    let changed = false;
+    const out = nodes.map((n) => {
+      if (!!n.frozen === value || !near(n)) return n;
+      changed = true;
+      count++;
+      if (value) return { ...n, frozen: true };
+      const { frozen, ...rest } = n;
+      return rest;
+    });
+    return changed ? out : nodes;
+  };
+  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
+    if (shape.type !== 'path' || !shape.nodes) continue;
+    const nodes = ring(shape.nodes);
+    const holes = shape.holes ? shape.holes.map(ring) : shape.holes;
+    if (nodes !== shape.nodes || (holes && holes.some((h, i) => h !== shape.holes[i]))) map.set(shape.id, { ...shape, nodes, holes });
+  }
+  return { doc: map.size ? replaceShapes(doc, map) : doc, count };
+}
+
+/** Posiciones de los nodos congelados de las formas `ids` (para «Unfreeze nodes»). */
+export function frozenPoints(doc, ids) {
+  const set = ids instanceof Set ? ids : new Set(ids);
+  const out = [];
+  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
+    if (!set.has(shape.id) || shape.type !== 'path') continue;
+    for (const nodes of [shape.nodes || [], ...(shape.holes || [])]) for (const n of nodes) if (n.frozen) out.push({ x: n.x, y: n.y });
+  }
+  return out;
+}
+
 /* ------------------------------------------------------- transformar */
 
 /** Escala los grosores de trazo (y de grupos, recursivo) por `k`. */

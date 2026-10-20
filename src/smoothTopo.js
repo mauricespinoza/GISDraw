@@ -91,6 +91,16 @@ export function buildTopology(doc, ids, tol) {
     if (list.some((o) => rings[o.ri].selected) && new Set(list.map((o) => o.ri)).size > 1) sharesNodes = true;
     if (new Set(list.map((o) => o.nb)).size > 1) junction.add(c);
   });
+  // un nodo congelado (Freeze node) también corta el arco: queda como extremo fijo
+  const frozenC = new Set();
+  rings.forEach((r) =>
+    r.nodes.forEach((nd, i) => {
+      if (!nd.frozen) return;
+      frozenC.add(r.cid[i]);
+      centroid[r.cid[i]] = { x: nd.x, y: nd.y };
+    }),
+  );
+  for (const c of frozenC) junction.add(c);
 
   // arcos únicos
   const arcs = new Map();
@@ -146,7 +156,7 @@ export function buildTopology(doc, ids, tol) {
       pieces[ri].push(sp);
     }
   });
-  return { rings, centroid, arcs, pieces, sharesNodes };
+  return { rings, centroid, arcs, pieces, sharesNodes, frozenC };
 }
 
 /**
@@ -155,7 +165,7 @@ export function buildTopology(doc, ids, tol) {
  * mismo `doc` si ningún arco cambió.
  */
 export function smoothTopology(topo, doc, fn) {
-  const { rings, centroid, arcs, pieces } = topo;
+  const { rings, centroid, arcs, pieces, frozenC = new Set() } = topo;
   const done = new Map(); // key → nodos nuevos
   for (const arc of arcs.values()) {
     if (!arc.selected || arc.frozen) continue;
@@ -163,8 +173,8 @@ export function smoothTopology(topo, doc, fn) {
     if (!made || made.length < (arc.closed ? 3 : 2)) continue;
     if (!arc.closed) {
       const [a, b] = arc.ends;
-      made[0] = { ...made[0], x: centroid[a].x, y: centroid[a].y };
-      made[made.length - 1] = { ...made[made.length - 1], x: centroid[b].x, y: centroid[b].y };
+      made[0] = { ...made[0], x: centroid[a].x, y: centroid[a].y, ...(frozenC.has(a) ? { frozen: true } : {}) };
+      made[made.length - 1] = { ...made[made.length - 1], x: centroid[b].x, y: centroid[b].y, ...(frozenC.has(b) ? { frozen: true } : {}) };
     }
     done.set(arc.key, made);
   }
@@ -173,7 +183,7 @@ export function smoothTopology(topo, doc, fn) {
   const mergeJ = (a, aS, b, bS) => {
     if (!aS && !bS) return a;
     const src = aS ? a : b;
-    return { ...a, x: src.x, y: src.y, hIn: a.hIn, hOut: b.hOut, smooth: false };
+    return { ...a, x: src.x, y: src.y, hIn: a.hIn, hOut: b.hOut, smooth: false, ...(a.frozen || b.frozen ? { frozen: true } : {}) };
   };
   const out = new Map(); // id de forma → forma nueva
   const current = (shape) => out.get(shape.id) || shape;

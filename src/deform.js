@@ -63,6 +63,83 @@ function pointSet(points, tol) {
 }
 
 /**
+ * ¿Hay un nodo congelado (Freeze node) en este lugar? En cualquier forma: un
+ * nodo compartido congelado en una de ellas queda fijo en todas.
+ */
+export function frozenTest(doc, tol) {
+  const pts = [];
+  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
+    if (shape.type !== 'path') continue;
+    for (const nodes of [shape.nodes || [], ...(shape.holes || [])]) for (const n of nodes) if (n.frozen) pts.push(n);
+  }
+  if (!pts.length) return () => false;
+  const at = pointSet(pts, tol);
+  return (q) => !!at(q);
+}
+
+/**
+ * Límite de los nodos congelados: a lo largo de cada anillo, desde el nodo que
+ * más se mueve hacia cada lado, el peso cae suavemente hasta 0 en el primer
+ * nodo congelado y vale 0 más allá (la deformación no cruza el nodo fijo).
+ * Los anillos sin nodos congelados quedan como estaban.
+ */
+function limitAtFrozen(base, moves, isFrozen) {
+  const shapes = new Map(allTopShapes(base, { visibleOnly: false }).map(({ shape }) => [shape.id, shape]));
+  const groups = new Map();
+  for (const m of moves) {
+    const k = `${m.id}|${m.ring}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(m);
+  }
+  const out = [];
+  for (const list of groups.values()) {
+    const s = shapes.get(list[0].id);
+    const ring = list[0].ring;
+    const nodes = s && (ring < 0 ? s.nodes : s.holes?.[ring]);
+    const fz = nodes ? nodes.map(isFrozen) : [];
+    if (!fz.some(Boolean)) {
+      out.push(...list);
+      continue;
+    }
+    const closed = ring < 0 ? !!s.closed : true;
+    const n = nodes.length;
+    const w = new Array(n).fill(0);
+    for (const m of list) w[m.index] = m.w;
+    const nw = new Array(n).fill(0);
+    const seen = new Array(n).fill(false);
+    const step = (a, b) => Math.hypot(nodes[b].x - nodes[a].x, nodes[b].y - nodes[a].y);
+    // de mayor a menor peso: cada zona que se mueve se recorre desde su centro
+    for (const peak of list.map((m) => m.index).sort((a, b) => w[b] - w[a])) {
+      if (seen[peak]) continue;
+      seen[peak] = true;
+      if (fz[peak]) continue;
+      nw[peak] = w[peak];
+      for (const dir of [1, -1]) {
+        const walked = [];
+        let acc = 0;
+        let stop = -1;
+        let prev = peak;
+        for (let k = 1; k < n; k++) {
+          let j = peak + dir * k;
+          if (closed) j = ((j % n) + n) % n;
+          else if (j < 0 || j >= n) break;
+          if (w[j] <= 0 || seen[j]) break;
+          seen[j] = true;
+          acc += step(prev, j);
+          prev = j;
+          if (stop >= 0) continue; // más allá del nodo congelado: quieto
+          if (fz[j]) stop = acc;
+          else walked.push([j, acc]);
+        }
+        for (const [j, a] of walked) nw[j] = stop > 0 ? w[j] * dragWeight(a / stop) : w[j];
+      }
+    }
+    for (const m of list) if (nw[m.index] > 1e-4) out.push({ ...m, w: nw[m.index] });
+  }
+  return out;
+}
+
+/**
  * Subdivide los tramos de un anillo que pasan a menos de `radius` del centro y
  * son más largos que `step`, en partes iguales (en el parámetro de la curva:
  * el mismo tramo recorrido al revés queda dividido en los mismos puntos).
@@ -181,7 +258,8 @@ export function prepareDeform(doc, ids, center, radius, { joined = true, tol = 0
       }
     });
   }
-  return { base, moves, count: moves.length };
+  const limited = limitAtFrozen(base, moves, frozenTest(base, tol));
+  return { base, moves: limited, count: limited.length };
 }
 
 /** Documento con el arrastre (`dx`, `dy`, en metros) aplicado a una deformación preparada. */
@@ -235,10 +313,40 @@ export function prepareDrag(doc, { id, ring, index }, { reach = 1, ids = [], joi
   const n = nodes.length;
   const seg = (i) => Math.hypot(nodes[(i + 1) % n].x - nodes[i].x, nodes[(i + 1) % n].y - nodes[i].y);
   const r = Math.max(1e-6, Math.min(1, reach));
+  const isFrozen = frozenTest(doc, tol);
+  const fz = nodes.map(isFrozen);
+  if (fz[index]) return { base: doc, moves: [], count: 0, frozen: true };
   const moves = [];
   const put = (j, w) => w > 1e-4 && moves.push({ id, ring, index: j, w, x: nodes[j].x, y: nodes[j].y });
   put(index, 1);
-  if (closed) {
+  if (fz.some(Boolean)) {
+    const done = new Set([index]);
+    // con nodos congelados, el primero hacia cada lado hace de extremo fijo: el gradiente llega a 0 en él
+    for (const dir of [1, -1]) {
+      const walked = [];
+      let acc = 0;
+      let stop = -1;
+      for (let k = 1; k < n; k++) {
+        let j = index + dir * k;
+        if (closed) j = ((j % n) + n) % n;
+        else if (j < 0 || j >= n) break;
+        if (j === index) break;
+        acc += seg(dir > 0 ? (j - 1 + n) % n : j);
+        if (fz[j]) {
+          stop = acc;
+          break;
+        }
+        walked.push([j, acc]);
+      }
+      // sin congelado hacia este lado: hasta el extremo (o, en un anillo, hasta donde lo alcance el otro lado)
+      const end = stop > 0 ? stop : acc;
+      for (const [j, a] of walked) {
+        if (done.has(j)) continue;
+        done.add(j);
+        put(j, end ? dragWeight(a / (end * r)) : 0);
+      }
+    }
+  } else if (closed) {
     // recorrido acumulado hacia adelante desde el nodo tomado
     const per = Array.from({ length: n }, (_, i) => seg(i)).reduce((a, b) => a + b, 0);
     const half = per / 2;

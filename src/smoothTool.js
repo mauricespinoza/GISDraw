@@ -80,8 +80,12 @@ export function smoothAlong(nodes, closed, brush, { radius, tol, level, flat = t
   if (!hit.some(Boolean)) return null;
   const { tension } = smoothParams(level);
 
+  // los nodos congelados (Freeze node) no se mueven: cortan las corridas y las rematan
+  const fz = (k) => !!nodes[k % n].frozen;
+  const anyFrozen = nodes.some((nd) => nd.frozen);
+
   // anillo cerrado tocado por todas partes: se suaviza entero
-  if (closed && hit.every(Boolean)) {
+  if (closed && hit.every(Boolean) && !anyFrozen) {
     const pts = flatPts(nodes, true, flat);
     pts.pop(); // cierre duplicado
     const out = curveThrough(simplify(blend(pts, brush, radius, level, true), tol), tension, true);
@@ -91,7 +95,7 @@ export function smoothAlong(nodes, closed, brush, { radius, tol, level, flat = t
   // corridas de tramos seguidos (en un anillo, la que cruza el nodo 0 se junta con la del final)
   const runs = [];
   let i = 0;
-  const start = closed ? hit.findIndex((h, k) => h && !hit[(k - 1 + segs) % segs]) : 0;
+  const start = closed ? hit.findIndex((h, k) => h && (!hit[(k - 1 + segs) % segs] || fz(k))) : 0;
   const order = closed ? Array.from({ length: segs }, (_, k) => (start + k) % segs) : Array.from({ length: segs }, (_, k) => k);
   while (i < order.length) {
     if (!hit[order[i]]) {
@@ -99,7 +103,7 @@ export function smoothAlong(nodes, closed, brush, { radius, tol, level, flat = t
       continue;
     }
     let j = i;
-    while (j + 1 < order.length && hit[order[j + 1]]) j++;
+    while (j + 1 < order.length && hit[order[j + 1]] && !fz(order[j + 1])) j++;
     runs.push({ a: order[i], b: (order[j] + 1) % n, len: j - i + 1 });
     i = j + 1;
   }
@@ -111,11 +115,12 @@ export function smoothAlong(nodes, closed, brush, { radius, tol, level, flat = t
   for (const r of runs) {
     let a = r.a;
     let len = r.len;
-    if (closed || a > 0) {
+    if ((closed || a > 0) && !fz(r.a)) {
       a = (a - 1 + n) % n;
       len++;
     }
-    if (closed || r.a + r.len < n - 1) len++;
+    const keepEnd = fz(r.a + r.len);
+    if ((closed || r.a + r.len < n - 1) && !keepEnd) len++;
     if (closed && len >= n) continue; // (esto lo cubre el caso del anillo entero)
     const sub = [];
     for (let k = 0; k <= len; k++) sub.push(nodes[(a + k) % n]);
@@ -124,14 +129,18 @@ export function smoothAlong(nodes, closed, brush, { radius, tol, level, flat = t
     if (made.length < 2) continue;
     made[0] = { ...made[0], hIn: sub[0].hIn ? { ...sub[0].hIn } : null };
     made[made.length - 1] = { ...made[made.length - 1], hOut: sub[sub.length - 1].hOut ? { ...sub[sub.length - 1].hOut } : null };
-    replace.set(a, { len, made });
+    // un extremo congelado queda en su lugar; el del final lo pone el anillo (o la corrida que sigue)
+    if (sub[0].frozen) made[0] = { ...made[0], x: sub[0].x, y: sub[0].y, frozen: true };
+    if (keepEnd) made.pop();
+    if (made.length < 1) continue;
+    replace.set(a, { len, made, keepEnd });
   }
   if (!replace.size) return null;
 
   // se arma el resultado recorriendo los nodos: cada corrida entra donde empezaba y sus nodos viejos se saltan
   const out = [];
   const skip = new Set();
-  for (const [a, { len }] of replace) for (let k = 1; k <= len; k++) skip.add((a + k) % n);
+  for (const [a, { len, keepEnd }] of replace) for (let k = 1; k <= (keepEnd ? len - 1 : len); k++) skip.add((a + k) % n);
   for (let k = 0; k < n; k++) {
     if (replace.has(k)) {
       out.push(...replace.get(k).made);

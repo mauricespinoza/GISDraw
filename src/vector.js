@@ -139,15 +139,19 @@ export function cloneNode(n) {
     hIn: n.hIn ? { ...n.hIn } : null,
     hOut: n.hOut ? { ...n.hOut } : null,
     smooth: !!n.smooth,
+    ...(n.frozen ? { frozen: true } : {}),
   };
 }
 
-/** Copia profunda con ids nuevos (pegar, duplicar). */
+/** Copia profunda con ids nuevos (pegar, duplicar). La copia no hereda los nodos congelados. */
 export function cloneShape(shape) {
   const base = JSON.parse(JSON.stringify(shape));
+  const thaw = (nodes) => nodes?.forEach((n) => delete n.frozen);
   const reid = (s) => {
     s.id = newId(s.type === 'group' ? 'g' : s.id?.[0] || 's');
     if (s.type === 'group') s.children.forEach(reid);
+    thaw(s.nodes);
+    s.holes?.forEach(thaw);
     return s;
   };
   return reid(base);
@@ -155,7 +159,10 @@ export function cloneShape(shape) {
 
 /* ------------------------------------------------------- transformaciones */
 
-/** Aplica `f({x,y}) -> {x,y}` a todos los puntos de la forma (nodos, manejadores, anclas). */
+/**
+ * Aplica `f({x,y}) -> {x,y}` a todos los puntos de la forma (nodos, manejadores, anclas).
+ * Los nodos congelados (Freeze node) no se transforman: quedan donde están, con sus manijas.
+ */
 export function mapPoints(shape, f) {
   switch (shape.type) {
     case 'text':
@@ -168,6 +175,7 @@ export function mapPoints(shape, f) {
     default: {
       const mapNodes = (nodes) =>
         nodes.map((n) => {
+          if (n.frozen) return n;
           const p = f(n);
           return {
             x: p.x,
