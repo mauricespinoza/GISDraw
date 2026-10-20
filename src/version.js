@@ -3,12 +3,13 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v39';
+export const APP_VERSION = 'v40';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
+  ['v40', 'Nueva paleta ámbar con contraste reforzado e iconos propios en la lista de capas'],
   ['v39', 'Paleta de colores cálida e iconos rediseñados (herramientas, barra superior y logo)'],
   ['v38', 'Apartado «Acerca de la app» con autor, contacto y últimos cambios'],
   ['v37', 'Split de líneas y polígonos (toque o arrastre) y herramienta Reshape'],

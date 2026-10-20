@@ -3,8 +3,8 @@
        con dientes y la plumilla que dibuja el contacto -->
   <defs>
     <linearGradient id="gd-bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#a3461b"/>
-      <stop offset="1" stop-color="#1d1611"/>
+      <stop offset="0" stop-color="#b45309"/>
+      <stop offset="1" stop-color="#24170f"/>
     </linearGradient>
     <linearGradient id="gd-nib" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#fde68a"/>
@@ -31,13 +31,13 @@
     <path d="M32.55 62.54 34.45 59.96 35.92 63.03zM36.05 57.79 37.95 55.21 39.42 58.28zM39.55 53.04 41.45 50.46 42.92 53.53z" fill="#2563eb" stroke="#2563eb" stroke-width=".6" stroke-linejoin="round"/>
   </g>
   <!-- contacto que se está dibujando -->
-  <path d="M-2 47c7-4 13-1 19-4s10-11 17-14" fill="none" stroke="#1d1611" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M-2 47c7-4 13-1 19-4s10-11 17-14" fill="none" stroke="#24170f" stroke-width="2.6" stroke-linecap="round"/>
   <!-- plumilla -->
   <g transform="translate(34 29) rotate(38) scale(1.18)">
-    <path d="M0 0-6.2-13.5q-.4-2.6 2-3.6h8.4q2.4 1 2 3.6z" fill="url(#gd-nib)" stroke="#1d1611" stroke-width="1" stroke-linejoin="round"/>
-    <path d="M0-1.2v-8.2" stroke="#1d1611" stroke-width="1" stroke-linecap="round"/>
-    <circle cx="0" cy="-10.6" r="1.5" fill="#1d1611"/>
-    <rect x="-5.4" y="-26" width="10.8" height="9.6" rx="2.2" fill="#e7e5e4" stroke="#1d1611" stroke-width="1"/>
-    <path d="M-5.4-21.5h10.8" stroke="#a8a29e" stroke-width="1"/>
+    <path d="M0 0-6.2-13.5q-.4-2.6 2-3.6h8.4q2.4 1 2 3.6z" fill="url(#gd-nib)" stroke="#24170f" stroke-width="1" stroke-linejoin="round"/>
+    <path d="M0-1.2v-8.2" stroke="#24170f" stroke-width="1" stroke-linecap="round"/>
+    <circle cx="0" cy="-10.6" r="1.5" fill="#24170f"/>
+    <rect x="-5.4" y="-26" width="10.8" height="9.6" rx="2.2" fill="#f3ebdc" stroke="#24170f" stroke-width="1"/>
+    <path d="M-5.4-21.5h10.8" stroke="#cdbda6" stroke-width="1"/>
   </g>
 </svg>
