@@ -1983,3 +1983,117 @@ body {
   margin: 0;
   padding-left: 18px;
 }
+
+/* ------------------------------------------------ celulares: todo a mano del pulgar */
+
+/* celular vertical: herramientas en una franja abajo (se desliza de lado) y el lienzo a todo el ancho */
+@media (max-width: 600px) {
+  :root {
+    --top-h: 50px;
+    --tool-h: calc(56px + env(safe-area-inset-bottom));
+  }
+
+  #app,
+  #app.panel-hidden {
+    grid-template-columns: 1fr;
+    grid-template-rows: var(--top-h) 1fr var(--tool-h);
+    grid-template-areas: 'top' 'view' 'tools';
+  }
+
+  #toolbar {
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 6px env(safe-area-inset-bottom);
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-top: 1px solid #33231a;
+  }
+
+  #toolbar button {
+    width: 44px;
+    height: 44px;
+  }
+
+  #toolbar .tsep {
+    width: 1px;
+    height: 28px;
+    margin: 0 4px;
+  }
+
+  #toolbar .swatch {
+    flex-direction: row;
+    margin: 0 4px;
+  }
+
+  #toolbar .sw-chips {
+    width: 40px;
+    height: 40px;
+  }
+
+  #toolbar .sw-chip {
+    width: 27px;
+    height: 27px;
+  }
+
+  #panel {
+    top: calc(var(--top-h) + env(safe-area-inset-top));
+    bottom: var(--tool-h);
+    width: 100vw;
+  }
+
+  #topbar .tb {
+    height: 38px;
+    min-width: 38px;
+  }
+
+  #topbar .scale-box input {
+    width: 54px;
+  }
+
+  #menu-file,
+  #menu-geom {
+    left: 8px !important;
+    right: 8px;
+    min-width: 0;
+    max-height: calc(100dvh - var(--top-h) - var(--tool-h) - 24px);
+  }
+
+  #contextbar {
+    bottom: 10px;
+  }
+}
+
+/* celulares (vertical u horizontal): la barra de propiedades baja junto al pulgar y solo aparece con algo seleccionado */
+@media (max-width: 600px), (max-height: 500px) and (pointer: coarse) {
+  #propbar {
+    top: auto;
+    bottom: 10px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: none;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  #app:not(.has-sel) #propbar {
+    display: none;
+  }
+
+  /* la barra contextual (Terminar, Borrar nodo…) se apila encima de la de propiedades */
+  #app.has-sel #contextbar {
+    bottom: 66px;
+  }
+
+  #propbar .pb-btn,
+  #propbar .pb-sel,
+  #propbar .pb-num {
+    min-height: 36px;
+  }
+
+  #status {
+    top: 10px;
+  }
+}

@@ -240,10 +240,15 @@ class App {
     this.renderer.request();
     this.syncToggles();
     this.updateContextBar();
-    for (const b of this.toolbarEl.querySelectorAll('button[data-tool]')) b.classList.toggle('on', b.dataset.tool === this.editor.tool);
+    if (this.lastTool !== this.editor.tool) {
+      this.lastTool = this.editor.tool;
+      for (const b of this.toolbarEl.querySelectorAll('button[data-tool]')) b.classList.toggle('on', b.dataset.tool === this.editor.tool);
+    }
     const sig = `${[...this.editor.selection].join(',')}|${this.editor.tool}`;
     if (sig !== this.lastSelSig) {
       this.lastSelSig = sig;
+      // en celulares la barra de propiedades solo aparece con algo seleccionado
+      document.getElementById('app').classList.toggle('has-sel', this.editor.selection.size > 0);
       if (['style', 'geology', 'attrs', 'arrange'].includes(this.panels.tab)) this.panels.render();
       this.renderPropbar();
     }
@@ -884,11 +889,11 @@ class App {
   }
 
   /** Duplicar, cortar, copiar, orden y pegar: lo que se hace con la selección (selección y nodos). */
-  selectionActions(items, b) {
+  selectionActions(items, b, { duplicate = true } = {}) {
     const ed = this.editor;
     if (ed.selection.size) {
       items.push(
-        b('Duplicar', () => ed.duplicate()),
+        duplicate ? b('Duplicar', () => ed.duplicate()) : null,
         b('Cortar', () => this.cut()),
         b('Copiar', () => this.copy()),
         b('Al frente', () => this.history.commit(arrange(this.history.doc, ed.selection, 'front'))),
@@ -896,12 +901,23 @@ class App {
         b('Eliminar', () => ed.deleteSelection()),
       );
     }
+    for (let i = items.length - 1; i >= 0; i--) if (!items[i]) items.splice(i, 1);
     if (this.clipboard.length) items.push(b('Pegar', () => this.paste(false)), b('Pegar en el lugar', () => this.paste(true)));
+  }
+
+  /** Tablet o celular: pantalla táctil (o ya se usó un lápiz). */
+  isTouchUI() {
+    return this.editor.penSeen || !!window.matchMedia?.('(pointer: coarse)').matches;
   }
 
   updateContextBar() {
     const bar = document.getElementById('contextbar');
     const ed = this.editor;
+    // se llama en cada movimiento del puntero: rehacer los botones solo si cambia lo que muestran
+    const sig = [ed.tool, !!ed.draft, ed.nodeTarget()?.id, ed.selection.size, this.clipboard.length, ed.addMode, this.settings.trace, this.settings.insertOnTap, this.settings.moveJoined, this.isTouchUI()].join('|');
+    if (sig === this.ctxBarSig) return;
+    this.ctxBarSig = sig;
+    const touch = this.isTouchUI();
     const b = (label, f, cls = '') => h('button', { class: cls, onclick: f }, label);
     const items = [];
     if (ed.draft) {
@@ -924,13 +940,19 @@ class App {
           this.saveSettings({ insertOnTap: !this.settings.insertOnTap });
           this.updateContextBar();
         }, this.settings.insertOnTap ? 'on' : ''),
-        b(this.settings.moveJoined !== false ? 'Move Joined ✓' : 'Move Joined', () => {
+      );
+      // en tablet, una barra más despejada: Move Joined sigue en la barra superior y Duplicar en el menú contextual (mantener apretado)
+      if (!touch) {
+        items.push(b(this.settings.moveJoined !== false ? 'Move Joined ✓' : 'Move Joined', () => {
           this.saveSettings({ moveJoined: this.settings.moveJoined === false });
           this.updateContextBar();
-        }, this.settings.moveJoined !== false ? 'on' : ''),
-      );
-      if (ed.nodeTarget()) items.push(b('Abrir / cerrar', () => ed.toggleClosed()), b('Invertir', () => ed.reverseSelected()));
-      this.selectionActions(items, b);
+        }, this.settings.moveJoined !== false ? 'on' : ''));
+      }
+      if (ed.nodeTarget()) {
+        if (!touch) items.push(b('Abrir / cerrar', () => ed.toggleClosed()));
+        items.push(b('Invertir', () => ed.reverseSelected()));
+      }
+      this.selectionActions(items, b, { duplicate: !touch });
     } else if (['select', 'lasso'].includes(ed.tool)) {
       items.push(b(ed.addMode ? 'Añadir a selección ✓' : 'Añadir a selección', () => {
         ed.addMode = !ed.addMode;
