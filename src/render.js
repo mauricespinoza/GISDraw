@@ -75,6 +75,32 @@ export class StageRenderer {
       this.vectorCache.clear();
     }
 
+    // Al desplazar o hacer zoom (el documento no cambió) no se regenera el SVG en cada cuadro:
+    // se mueve lo ya dibujado con una transformación CSS, que es exacta porque los grosores y
+    // los textos van en unidades de papel (escalan con la vista). Al quedar quieta la vista se
+    // redibuja nítido; también antes si la vista sale de lo dibujado (que incluye un margen).
+    const full = this.forceFull;
+    this.forceFull = false;
+    let warped = false;
+    const shot = () => {
+      const [ox, oy] = v.toWorld(0, 0);
+      return { viewKey, ox, oy, mpp: v.mpp, w: v.w, h: v.h, ext: v.extent(Math.max(v.w, v.h)) };
+    };
+    const place = (el, c) => {
+      if (c.viewKey === viewKey) {
+        el.style.transform = '';
+        return true;
+      }
+      const k = c.mpp / v.mpp;
+      const e = v.extent(0);
+      if (full || c.w !== v.w || c.h !== v.h || k > 3 || e.minX < c.ext.minX || e.maxX > c.ext.maxX || e.minY < c.ext.minY || e.maxY > c.ext.maxY) return false;
+      const [tx, ty] = v.toScreen(c.ox, c.oy);
+      el.style.transformOrigin = '0 0';
+      el.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
+      warped = true;
+      return true;
+    };
+
     for (const l of doc.layers) {
       if (l.kind === 'vector') {
         const el = this.vectorEl(l);
@@ -82,12 +108,13 @@ export class StageRenderer {
         el.style.opacity = l.opacity;
         el.style.mixBlendMode = l.blend || 'normal';
         const cached = this.vectorCache.get(l.id);
-        if (l.visible && (!cached || cached.layer !== l || cached.viewKey !== viewKey)) {
+        if (l.visible && !(cached && cached.layer === l && place(el, cached))) {
           const ctx = this.ctxFor(`${l.id}_`);
           const ext = v.extent(Math.max(v.w, v.h));
           const body = l.items.map((s) => (visibleIn(s, ext) ? shapeToSvg(s, ctx) : '')).join('');
           el.innerHTML = `<defs>${ctx.defs.join('')}</defs>${body}`;
-          this.vectorCache.set(l.id, { layer: l, viewKey });
+          el.style.transform = '';
+          this.vectorCache.set(l.id, { layer: l, ...shot() });
         }
       } else {
         this.raster.draw(l, { settled });
@@ -95,12 +122,20 @@ export class StageRenderer {
     }
 
     const vectors = doc.layers.filter((l) => l.kind === 'vector');
-    const labelKey = `${viewKey}|${vectors.map((l) => l.items.length).join(',')}`;
-    if (labelKey !== this.lastLabelKey || vectors !== this.lastLabelLayers || this.labelsDirty || !sameRefs(vectors, this.lastLabelLayers)) {
+    const sameLabels = !this.labelsDirty && sameRefs(vectors, this.lastLabelLayers);
+    if (!(sameLabels && this.labelShot && place(this.labelsEl, this.labelShot))) {
       this.labelsEl.innerHTML = renderLabels(vectors, this.ctxFor('lbl_'));
-      this.lastLabelKey = labelKey;
+      this.labelsEl.style.transform = '';
+      this.labelShot = shot();
       this.lastLabelLayers = vectors;
       this.labelsDirty = false;
+    }
+    if (warped) {
+      clearTimeout(this.settleT);
+      this.settleT = setTimeout(() => {
+        this.forceFull = true;
+        this.request();
+      }, 160);
     }
     this.overlayEl.innerHTML = this.editor ? this.editor.overlay() : '';
   }

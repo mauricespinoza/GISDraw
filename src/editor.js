@@ -7,7 +7,8 @@
  *    hover (iPad recientes) mueve el cursor de snapping y la línea elástica
  *    sin tocar la pantalla.
  *  - Dedo: un dedo desplaza, dos dedos hacen zoom y desplazan. Un toque corto
- *    con el dedo selecciona (con selección / nodos). Así la palma o un dedo
+ *    con el dedo selecciona; fuera de lo seleccionado, además, anula la
+ *    herramienta activa y vuelve a Selección. Así la palma o un dedo
  *    apoyado nunca dibujan por error. Para pantallas táctiles sin lápiz hay un
  *    ajuste "el dedo dibuja".
  *  - Ratón: botón izquierdo = herramienta, central o barra espaciadora =
@@ -492,6 +493,12 @@ export class Editor {
       }
       return;
     }
+    // trazo libre: el navegador junta varias muestras del lápiz por cuadro; usarlas todas
+    // da un trazo fiel aunque se dibuje rápido
+    if (d.mode === 'pencil' && e.getCoalescedEvents) {
+      const evs = e.getCoalescedEvents();
+      for (let i = 0; i < evs.length - 1; i++) this.toolMove(evs[i], this.screenPoint(evs[i]));
+    }
     this.toolMove(e, sp);
   }
 
@@ -601,12 +608,10 @@ export class Editor {
     // con el dedo, un toque mientras se dibuja con el lápiz no hace nada:
     // evita vértices fantasma al apoyar la mano
     if (this.draft) return;
-    // con una herramienta de dibujo activa el dedo solo desplaza: el toque no toca la selección
-    // (antes parecía que la app saltaba a la herramienta de selección)
-    const selectLike = this.tool === 'select' || this.tool === 'node' || this.tool === 'lasso' || this.tool === 'eyedropper' || this.tool === 'pan';
-    if (!selectLike) return;
     const hit = pickShape(this.doc, sp, this.view, this.units(), 14);
     if (this.tool === 'eyedropper' && hit) return this.applyEyedropper(hit.shape, sp);
+    // tocar con el dedo fuera de lo seleccionado anula la herramienta activa y vuelve a Selección
+    if (this.tool !== 'select' && !(hit && this.selection.has(hit.shape.id))) this.setTool('select');
     if (hit) {
       if (this.addMode) this.toggleSel(hit.shape.id);
       else this.setSelection([hit.shape.id]);
