@@ -16,7 +16,7 @@ import { ICONS } from './ui/icons.js';
 import { h, popSlider, popSliderOpen } from './ui/dom.js';
 import { askChoice, askConfirm, askForm, askText } from './ui/dialog.js';
 import { DASHES, defaultStyle } from './style.js';
-import { copyShapes, pasteShapes, arrange, group, ungroup, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
+import { copyShapes, frozenPoints, pasteShapes, arrange, group, ungroup, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
 import { coordPreview, formatDMS, parseCoordText, toLonLat } from './proj.js';
 import { shapeBBox, unionBBox, walkShapes, newId, DEFAULT_SMOOTH, canResmooth, canSmooth, adoptFreehand, resmooth } from './vector.js';
 import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles, getDocKey, putDocKey } from './io/store.js';
@@ -1296,6 +1296,7 @@ class App {
       h('div', { class: 'mh' }, 'Selección'),
       item('Transformar: mover, rotar, escalar…', () => this.transformDialog(), this.editor.selection.size > 0, 'Selecciona uno o más objetos', 'Ctrl+Mayús+M'),
       item('Unfreeze nodes (descongelar todos)', () => this.editor.unfreezeSelection(), this.editor.selection.size > 0, 'Selecciona los objetos con nodos congelados'),
+      item('Unfreeze all nodes (todo el documento)', () => this.editor.unfreezeAll(), frozenPoints(this.history.doc).length > 0, 'No hay nodos congelados en el documento'),
       h('div', { class: 'mh' }, 'Limpieza'),
       item('Simplificar: menos nodos, misma forma…', () => this.simplifyDialog(), g.lines.length + g.polys.length > 0, 'Selecciona líneas o polígonos'),
       item('Tidy: compartir nodos cercanos…', () => this.tidyDialog(), g.lines.length + g.polys.length > 0, 'Selecciona las líneas o polígonos que deben compartir nodos'),
@@ -1767,6 +1768,11 @@ class App {
           const img = item.types.find((t) => /^image\//.test(t) && t !== 'image/svg+xml');
           if (item.types.includes('image/svg+xml')) text = await (await item.getType('image/svg+xml')).text();
           else if (item.types.includes('text/plain')) text = await (await item.getType('text/plain')).text();
+          // el código SVG puede llegar solo como HTML (algunas versiones de Illustrator y navegadores)
+          if (!/<svg[\s>]/i.test(text) && item.types.includes('text/html')) {
+            const html = await (await item.getType('text/html')).text();
+            if (/<svg[\s>]/i.test(html)) text = html;
+          }
           if (img && !/<svg[\s>]/i.test(text)) return this.pasteImage(await item.getType(img));
         }
       } else text = (await navigator.clipboard?.readText()) || '';
@@ -2765,7 +2771,7 @@ const SHORTCUTS = [
     ['Ctrl+7 / Ctrl+Alt+7', 'Máscara de recorte / liberar'], ['Ctrl+] / Ctrl+[', 'Adelante / atrás (Mayús: al frente / al fondo)'],
     ['Ctrl+2 / Ctrl+Alt+2', 'Bloquear / desbloquear todo'], ['Ctrl+3 / Ctrl+Alt+3', 'Ocultar / mostrar todo'], ['Mayús+C', 'Nodo esquina ↔ curva'],
   ]],
-  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón de eslabones)'], ['Freeze node', 'Menú contextual sobre un nodo: queda fijo ante transformaciones y frena Deform, Drag y Suavizar (Unfreeze nodes lo libera)'], ['Guías', 'Alinear con el nivel o la vertical de otros vértices, aunque estén lejos'], ['Mayús', 'Restringir ángulo o proporción']]],
+  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón de eslabones)'], ['Freeze node', 'Menú contextual sobre un nodo: queda fijo ante transformaciones y frena Deform, Drag y Suavizar (Unfreeze nodes lo libera; Geometría → Unfreeze all nodes, todos los del documento)'], ['Guías', 'Alinear con el nivel o la vertical de otros vértices, aunque estén lejos'], ['Mayús', 'Restringir ángulo o proporción']]],
   ['Tablet (táctil)', [['Dos dedos, dos toques', 'Deshacer'], ['Tres dedos, dos toques', 'Rehacer'], ['Mantener el dedo', 'Menú contextual (Join, Merge, Split, Hole…)'], ['Dos dedos arrastrar / pellizcar', 'Desplazar / zoom']]],
   ['Vista y archivo', [
     ['Ctrl+0', 'Zoom a todo'], ['Ctrl+1', 'Escala de referencia'], ['Ctrl++ / Ctrl+−', 'Acercar / alejar'], ['Rueda del mouse', 'Zoom (Archivo → Vista: cambiar a desplazar)'], ['Trackpad', 'Dos dedos desplazan, pellizco = zoom'],

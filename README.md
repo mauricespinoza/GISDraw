@@ -673,7 +673,13 @@ Inkscape) se pega como dibujo.
   y esquinas, opacidades, degradados, polígonos con huecos, grupos, máscaras
   de recorte y textos (fuente, tamaño, negrita, cursiva, rotación, varias
   líneas). Las medidas se conservan en el papel: 1 pt de Illustrator es 1 pt
-  a la escala de referencia, y el dibujo cae centrado en la vista.
+  a la escala de referencia, y el dibujo cae centrado en la vista (se
+  reconoce el código de Illustrator aunque venga sin el comentario
+  «Generator», por el límite de esquina 10, el id `Capa_1`/`Layer_1` o sus
+  clases cortas). Sin esa preferencia Illustrator copia solo en sus formatos
+  propios (PDF/AICB), que un navegador no puede leer: entonces se pega nada o,
+  a lo más, una imagen. Alternativa sin portapapeles: guardar el .ai (o .svg)
+  y abrirlo con Archivo → Importar.
 - *Copiar en GISDrawer y pegar en Illustrator*: Ctrl+C deja en el
   portapapeles un SVG en puntos con la simbología ya dibujada (ornamentos,
   tramas, halos, ondas). Si se vuelve a pegar en GISDrawer, vuelve exacto y

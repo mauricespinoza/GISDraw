@@ -43,6 +43,18 @@ const at = (nodes, x) => nodes.find((n) => Math.abs(n.x - x) < 1e-9);
   ok(u.count === 2 && !get(u.doc, B.id).nodes[0].frozen && !('frozen' in get(u.doc, A.id).nodes[1]), 'Unfreeze nodes lo descongela en todas');
 }
 
+/* Unfreeze all nodes: todo el documento, sin selección */
+{
+  const A = line([[0, 0], [10, 0], [20, 0]]);
+  const B = line([[50, 0], [60, 0]]);
+  A.nodes[1] = { ...A.nodes[1], frozen: true };
+  B.nodes[0] = { ...B.nodes[0], frozen: true };
+  const doc = docWith([A, B]);
+  ok(frozenPoints(doc).length === 2, 'frozenPoints sin ids: todos los del documento');
+  const u = setNodesFrozen(doc, frozenPoints(doc), false, 0);
+  ok(u.count === 2 && frozenPoints(u.doc).length === 0, 'Unfreeze all nodes los descongela todos');
+}
+
 /* transformaciones: el nodo congelado queda donde está */
 {
   const L = line([[0, 0], [10, 0], [20, 0]]);
