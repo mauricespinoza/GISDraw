@@ -215,8 +215,22 @@ export class Panels {
         this.show('relief');
       }), 'Relieve sombreado de un modelo de elevación, bajo el dibujo'),
     );
+    // mostrar / ocultar / bloquear / desbloquear todas las capas visibles en la lista (las del otro modo no se tocan)
+    const setAll = (key, value, msg) => {
+      const shown = new Set(this.doc.layers.filter((l) => app.mode === 'gis' || !isGisLayer(l)).map((l) => l.id));
+      if (!this.doc.layers.some((l) => shown.has(l.id) && !!l[key] !== value)) return app.message(msg);
+      app.history.commit({ ...this.doc, layers: this.doc.layers.map((l) => (shown.has(l.id) ? { ...l, [key]: value } : l)) });
+    };
+    const all = h(
+      'div',
+      { class: 'grid-btns two' },
+      tip(btn('Show all', () => setAll('visible', true, 'Todas las capas ya están visibles')), 'Mostrar todas las capas'),
+      tip(btn('Hide all', () => setAll('visible', false, 'Todas las capas ya están ocultas')), 'Ocultar todas las capas'),
+      tip(btn('Lock all', () => setAll('locked', true, 'Todas las capas ya están bloqueadas')), 'Bloquear todas las capas'),
+      tip(btn('Unlock all', () => setAll('locked', false, 'Ninguna capa está bloqueada')), 'Desbloquear todas las capas'),
+    );
     return [
-      sec('Capas', list, add),
+      sec('Capas', list, all, add),
       sec(
         'Documento',
         app.mode === 'gis' && row('Escala ref. 1:', num(doc.refScale, (v) => v > 0 && app.history.commit({ ...this.doc, refScale: v }), { step: 500 })),
