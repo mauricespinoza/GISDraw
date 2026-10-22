@@ -29,7 +29,7 @@ import { smoothAlong } from './smoothTool.js';
 import { buildTopology, smoothTopology } from './smoothTopo.js';
 import { applyDeform, frozenTest, prepareDeform, prepareDrag } from './deform.js';
 import { nodeInto } from './tidy.js';
-import { defaultStyle, nodesD, shapeD, esc, textMeasurer } from './style.js';
+import { defaultStyle, defaultTextStyle, nodesD, shapeD, esc, textMeasurer } from './style.js';
 import { paperUnits } from './view.js';
 import {
   makeEllipsePath,
@@ -47,12 +47,16 @@ import {
   splitNodes,
   translateShape,
   unionBBox,
+  walkShapes,
   cloneNode,
   flattenNodes,
   DEFAULT_SMOOTH,
   freehandToNodes,
   nodesSignature,
 } from './vector.js';
+
+/** Formato de un texto que toma el cuentagotas (no el contenido, la posición, la rotación ni el ancho del cuadro). */
+const TEXT_PICK_KEYS = ['fontSize', 'fontFamily', 'fontWeight', 'italic', 'anchor', 'align', 'lineHeight', 'letterSpacing', 'wordSpacing', 'halo', 'haloColor', 'haloWidth'];
 
 export const TOOLS = {
   select: { label: 'Selección', key: 'v' },
@@ -2086,7 +2090,9 @@ export class Editor {
       return;
     }
     const st = this.getCurrentStyle();
-    const t = makeText(wp[0], wp[1], '', { ...st, fill: st.stroke !== 'none' ? st.stroke : '#111827', fillOpacity: 1, fillType: 'solid', stroke: 'none' }, this.newTextSize());
+    const pt = this.pickedText;
+    const t = makeText(wp[0], wp[1], '', pt ? { ...st, ...pt.style } : { ...st, fill: st.stroke !== 'none' ? st.stroke : '#111827', fillOpacity: 1, fillType: 'solid', stroke: 'none' }, this.newTextSize());
+    if (pt) Object.assign(t, pt.props);
     t.text = '';
     this.history.commit(addShapes(this.doc, l.id, [t]));
     this.setSelection([t.id]);
@@ -2122,21 +2128,62 @@ export class Editor {
     let leaf = shape;
     while (leaf?.type === 'group' && leaf.children?.length) {
       const kids = leaf.clip ? leaf.children.slice(1) : leaf.children;
+      if (!kids.length) break;
       leaf = sp ? kids.reduce((a, c) => (shapeDistance(c, sp, this.view, this.units()) < shapeDistance(a, sp, this.view, this.units()) ? c : a)) : kids[kids.length - 1];
     }
     if (!leaf?.style) return;
+    if (leaf.type === 'text') return this.eyedropText(leaf, shape);
     // todas las claves (las que el elemento no trae explícitas son las por defecto): así el grosor y el trazo siempre viajan
     const style = { ...defaultStyle(), ...leaf.style };
     this.pickedStyle = style;
+    let applied = 0;
     if (this.selection.size) {
-      const apply = (s) => (s.type === 'group' ? { ...s, children: s.children.map((c, i) => (s.clip && i === 0 ? c : apply(c))) } : { ...s, style: { ...s.style, ...style } });
-      const ids = this.selectedShapes().filter((s) => s.id !== shape.id && !s.locked).map((s) => s.id);
-      if (ids.length) this.history.commit(mapShapes(this.doc, ids, apply));
+      // un estilo de trazado no se aplica a un texto (le pondría trazo y relleno de forma): los textos se saltan
+      const apply = (s) => (s.type === 'group' ? { ...s, children: s.children.map((c, i) => (s.clip && i === 0 ? c : apply(c))) } : s.type === 'text' ? s : { ...s, style: { ...s.style, ...style } });
+      const ids = this.selectedShapes().filter((s) => s.id !== shape.id && !s.locked && !layerOfShape(this.doc, s.id)?.locked).map((s) => s.id);
+      if (ids.length) {
+        this.history.commit(mapShapes(this.doc, ids, apply));
+        applied = ids.length;
+      }
     }
     const stroke = style.stroke && style.stroke !== 'none' ? `trazo ${style.stroke} de ${Number(style.strokeWidth || 0).toFixed(2)} mm` : 'sin trazo';
     const fill = style.fill && style.fill !== 'none' ? `relleno ${style.fill}` : 'sin relleno';
-    this.onMessage(`Estilo tomado: ${stroke}, ${fill}${this.selection.size ? ' → aplicado a la selección' : ' → para lo próximo que dibujes'}`);
+    this.onMessage(`Estilo tomado: ${stroke}, ${fill}${applied ? ' → aplicado a la selección' : ' → para lo próximo que dibujes'}`);
     this.onStylePicked?.(style);
+    this.changed();
+  }
+
+  /**
+   * Cuentagotas sobre un texto: toma el formato del texto (fuente, tamaño, negrita, cursiva,
+   * alineación, interlineado, espaciados, halo y color) y lo aplica a los textos de la selección
+   * o, sin selección, a lo próximo que se escriba. No toca el contenido, la posición, la rotación
+   * ni el ancho del cuadro. El formato por tramos del destino se quita: si no, taparía lo tomado.
+   */
+  eyedropText(src, picked) {
+    const props = {};
+    for (const k of TEXT_PICK_KEYS) if (src[k] !== undefined) props[k] = src[k];
+    const style = { ...defaultTextStyle(), ...src.style };
+    this.pickedText = { props, style };
+    const apply = (s) => {
+      if (s.type === 'group') return { ...s, children: s.children.map((c, i) => (s.clip && i === 0 ? c : apply(c))) };
+      if (s.type !== 'text') return s;
+      return { ...s, ...props, style: { ...s.style, ...style }, runs: [] };
+    };
+    let applied = 0;
+    if (this.selection.size) {
+      const ids = this.selectedShapes().filter((s) => s.id !== picked.id && !s.locked && !layerOfShape(this.doc, s.id)?.locked).map((s) => s.id);
+      const texts = ids.filter((id) => {
+        let any = false;
+        walkShapes([findTopShape(this.doc, id)?.shape].filter(Boolean), (x) => x.type === 'text' && (any = true));
+        return any;
+      });
+      if (texts.length) {
+        this.history.commit(mapShapes(this.doc, texts, apply));
+        applied = texts.length;
+      }
+    }
+    const fam = String(props.fontFamily || '').split(',')[0].replace(/["']/g, '').trim();
+    this.onMessage(`Texto tomado: ${fam || 'fuente'} ${props.fontSize ?? ''} pt${props.fontWeight >= 600 ? ' negrita' : ''}${props.italic ? ' cursiva' : ''}, color ${style.fill}${applied ? ` → aplicado a ${applied} texto(s)` : ' → para el próximo texto'}`);
     this.changed();
   }
 

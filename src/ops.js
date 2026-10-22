@@ -194,6 +194,77 @@ export function ungroup(doc, ids) {
   return { doc: next, ids: released };
 }
 
+/**
+ * Desagrupar todo: deshace TODOS los grupos de TODAS las capas, también los
+ * anidados, los de capas ocultas o bloqueadas y los de máscara de recorte (la
+ * máscara vuelve a ser una forma, arriba de lo que recortaba).
+ * @returns {{ doc: object, count: number }} `count`: grupos deshechos.
+ */
+export function ungroupAll(doc) {
+  let count = 0;
+  const flat = (shapes) => {
+    const out = [];
+    for (const s of shapes) {
+      if (s.type !== 'group') {
+        out.push(s);
+        continue;
+      }
+      count++;
+      const kids = s.clip ? [...s.children.slice(1), s.children[0]] : s.children;
+      out.push(...flat(kids));
+    }
+    return out;
+  };
+  const layers = doc.layers.map((l) => (l.kind === 'vector' && l.items.some((s) => s.type === 'group') ? { ...l, items: flat(l.items) } : l));
+  return { doc: count ? { ...doc, layers } : doc, count };
+}
+
+/** ¿Se ve algo de este trazado? Polígono: relleno (color, degradado o trama) o trazo; línea: trazo. */
+export function isEmptyPath(shape) {
+  if (shape.type !== 'path') return false;
+  const st = shape.style || {};
+  const none = (c) => !c || c === 'none' || c === 'transparent';
+  if (!none(st.stroke)) return false;
+  if (!shape.closed) return true;
+  if (!none(st.fill)) return false;
+  if (st.fillType && st.fillType !== 'solid') return false; // degradado
+  if (st.pattern && st.pattern !== 'none') return false; // trama
+  return true;
+}
+
+/**
+ * Borrar vacíos: quita las líneas sin color de trazo y los polígonos sin color
+ * de relleno ni de trazo (en todos los niveles de grupo; un grupo que queda
+ * vacío también se va). No toca capas ni formas bloqueadas, ni la máscara de
+ * un grupo de recorte (suele ser invisible a propósito).
+ * @returns {{ doc: object, count: number }}
+ */
+export function deleteEmpty(doc) {
+  let count = 0;
+  const clean = (shapes, clip = false) => {
+    const out = [];
+    shapes.forEach((s, i) => {
+      if (s.locked) return void out.push(s);
+      if (s.type === 'group') {
+        const kids = clean(s.children, !!s.clip);
+        const left = s.clip ? kids.length > 1 : kids.length > 0;
+        if (left) out.push(kids.length === s.children.length && kids.every((k, j) => k === s.children[j]) ? s : { ...s, children: kids });
+        else count++;
+        return;
+      }
+      if (!(clip && i === 0) && isEmptyPath(s)) count++;
+      else out.push(s);
+    });
+    return out;
+  };
+  const layers = doc.layers.map((l) => {
+    if (l.kind !== 'vector' || l.locked) return l;
+    const items = clean(l.items);
+    return items.length === l.items.length && items.every((k, j) => k === l.items[j]) ? l : { ...l, items };
+  });
+  return { doc: count ? { ...doc, layers } : doc, count };
+}
+
 /** Mueve la selección a otra capa (arriba de todo en esa capa). */
 export function moveToLayer(doc, ids, layerId) {
   const target = doc.layers.find((l) => l.id === layerId);
