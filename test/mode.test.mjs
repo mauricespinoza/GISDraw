@@ -4,7 +4,7 @@
  *   node test/mode.test.mjs
  */
 
-import { CANVAS_SIZES, CANVAS_CENTER, canvasDefaults, canvasFromMm, canvasMm, canvasRect, defaultCanvas, isGisLayer, modeOf, normalizeCanvas } from '../src/mode.js';
+import { CANVAS_SIZES, CANVAS_CENTER, canvasCovering, canvasDefaults, canvasFromMm, canvasMm, canvasRect, defaultCanvas, isGisLayer, modeOf, normalizeCanvas } from '../src/mode.js';
 import { newDocument, normalizeDoc } from '../src/doc.js';
 
 let pass = 0;
@@ -59,6 +59,21 @@ const d3 = canvasDefaults({ size: 'A3' });
 ok(Math.abs(d3.fontSize - 9 * Math.SQRT2) <= 0.5 && d3.strokeWidth > 0.45 && d3.strokeWidth < 0.55, `A3 crece con la hoja: ${d3.strokeWidth} mm, ${d3.fontSize} pt`);
 ok(canvasDefaults({ size: 'A0' }).fontSize > canvasDefaults({ size: 'A1' }).fontSize, 'A0 > A1');
 ok(Math.abs(canvasDefaults({ size: 'Carta' }).fontSize - 9) <= 0.5, 'Letter ≈ A4');
+
+/* hoja personalizada con posición propia y «Encajar a objetos» */
+{
+  const doc = { ...newDocument(), refScale: 25000 };
+  const box = { x: 1000, y: 2000, w: 500, h: 250 }; // 20 × 10 mm de papel a 1:25.000
+  const c = canvasCovering(box, 25000);
+  ok(c.size === 'custom' && c.w === 20 && c.h === 10 && c.orientation === 'landscape', 'canvasCovering: medidas en mm de papel');
+  const r = canvasRect({ ...doc, canvas: c });
+  ok(Math.abs(r.x - 1000) < 1e-6 && Math.abs(r.y - 2000) < 1e-6 && Math.abs(r.w - 500) < 1e-6 && Math.abs(r.h - 250) < 1e-6, 'la hoja cubre exactamente la caja');
+  ok(normalizeDoc({ ...doc, canvas: c }).canvas.cx === 1250, 'la posición sobrevive a normalizeDoc (guardar/abrir)');
+  ok(canvasRect(doc).x === CANVAS_CENTER[0] - canvasRect(doc).w / 2, 'sin posición: centrada en la vista inicial');
+  const tiny = canvasCovering({ x: 0, y: 0, w: 1, h: 1 }, 25000);
+  ok(tiny.w === 10 && tiny.h === 10, 'no baja de 10 mm');
+  ok(normalizeCanvas({ size: 'A4', cx: 'x', cy: 1 }).cx === undefined, 'posición inválida se descarta');
+}
 
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLOS` : ''}`);
 if (fail) process.exit(1);
