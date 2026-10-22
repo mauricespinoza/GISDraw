@@ -1356,6 +1356,15 @@ export class Editor {
     this.onMessage(`${pts.length} nodo(s) descongelado(s)`);
   }
 
+  /** Unfreeze all nodes: descongela todos los nodos del documento, en todas las capas (también ocultas o bloqueadas). */
+  unfreezeAll() {
+    const pts = frozenPoints(this.doc);
+    if (!pts.length) return this.onMessage('No hay nodos congelados en el documento');
+    const r = setNodesFrozen(this.doc, pts, false, 0);
+    if (r.count) this.history.commit(r.doc);
+    this.onMessage(`${r.count} nodo(s) descongelado(s) en todo el documento`);
+  }
+
   updateRing(shape, ring, f) {
     if (ring < 0) return { ...shape, nodes: f(shape.nodes) };
     const holes = shape.holes.slice();

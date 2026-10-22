@@ -485,12 +485,15 @@ export function setNodesFrozen(doc, points, value, tol = 0.01) {
   return { doc: map.size ? replaceShapes(doc, map) : doc, count };
 }
 
-/** Posiciones de los nodos congelados de las formas `ids` (para «Unfreeze nodes»). */
-export function frozenPoints(doc, ids) {
-  const set = ids instanceof Set ? ids : new Set(ids);
+/**
+ * Posiciones de los nodos congelados de las formas `ids` (para «Unfreeze
+ * nodes»); con `ids` nulo, las de todo el documento («Unfreeze all nodes»).
+ */
+export function frozenPoints(doc, ids = null) {
+  const set = ids == null ? null : ids instanceof Set ? ids : new Set(ids);
   const out = [];
   for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
-    if (!set.has(shape.id) || shape.type !== 'path') continue;
+    if ((set && !set.has(shape.id)) || shape.type !== 'path') continue;
     for (const nodes of [shape.nodes || [], ...(shape.holes || [])]) for (const n of nodes) if (n.frozen) out.push({ x: n.x, y: n.y });
   }
   return out;

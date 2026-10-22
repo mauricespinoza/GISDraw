@@ -560,11 +560,21 @@ function lengthMm(v) {
   return { n, unit: u, mm: u === 'mm' ? n : u === 'cm' ? n * 10 : u === 'in' ? n * 25.4 : u === 'pt' ? n * PT_MM : u === 'pc' ? n * 12 * PT_MM : null };
 }
 
+/**
+ * Huellas de Illustrator. Lo copiado como código SVG suele venir sin el
+ * comentario «Generator» ni `data-name`: lo delatan el límite de esquina 10
+ * que Illustrator escribe en cada trazo, el id de la capa (Layer_1, Capa_1…),
+ * las clases cortas de «Copiar como SVG» (`.a{…}`) o el `x="0px" y="0px"` de
+ * «Guardar como SVG». Sin esto, un SVG sin unidades se lee a 96 px/pulgada y
+ * lo pegado de Illustrator queda al 75 % de su tamaño.
+ */
+const ILLUSTRATOR_RE = /Adobe Illustrator|data-name=|class="cls-\d|stroke-miterlimit\s*(?::\s*|=\s*["'])10(?![\d.])|id="(?:Layer|Capa|Calque|Ebene|Livello|Camada)_\d+"|<style[^>]*>\s*\.[a-z]{1,2}\s*\{|\bx="0px"\s+y="0px"/;
+
 /** mm de papel por unidad del SVG. */
 export function unitMmOf(svgEl, text, fallback = null) {
   const vb = (svgEl.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
   const w = lengthMm(svgEl.getAttribute('width'));
-  const illustrator = /Adobe Illustrator|data-name=|class="cls-\d/.test(text);
+  const illustrator = ILLUSTRATOR_RE.test(text);
   const base = fallback ?? (illustrator ? PT_MM : PX_MM);
   if (w && w.mm != null) return vb.length === 4 && vb[2] > 0 ? w.mm / vb[2] : w.mm / w.n;
   if (w && vb.length === 4 && vb[2] > 0 && w.n > 0) return (w.n * base) / vb[2];

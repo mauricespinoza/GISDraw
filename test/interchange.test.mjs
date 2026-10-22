@@ -5,7 +5,7 @@
  *   node test/interchange.test.mjs
  */
 
-import { importSvg, parsePathD, parseColor, parseTransform, unitMmOf, parseXml, PT_MM } from '../src/io/svgImport.js';
+import { importSvg, parsePathD, parseColor, parseTransform, unitMmOf, parseXml, PT_MM, PX_MM } from '../src/io/svgImport.js';
 import { selectionSvg, illustratorJsx, xmlId } from '../src/io/illustrator.js';
 import { importFieldDraw, fieldDrawLineStyle, readZip } from '../src/io/fielddraw.js';
 import { composeLayout, defaultLayout, symbolFactor, pageGeometry, pageToGround, fitFrame, niceScale, frameExtent } from '../src/layout/compose.js';
@@ -41,6 +41,12 @@ const near = (a, b, tol, msg) => ok(Math.abs(a - b) <= tol, `${msg}: ${a} ≠ ${
   const root = parseXml('<svg xmlns="http://www.w3.org/2000/svg" width="210mm" height="297mm" viewBox="0 0 210 297"/>');
   near(unitMmOf(root, ''), 1, 1e-9, 'unidad mm por viewBox');
   near(unitMmOf(parseXml('<svg viewBox="0 0 100 100"/>'), '<!-- Generator: Adobe Illustrator -->'), PT_MM, 1e-9, 'Illustrator mide en puntos');
+  // «Copiar como código SVG» de Illustrator: sin comentario Generator ni data-name
+  const ai = (t) => unitMmOf(parseXml(t), t);
+  near(ai('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 100 50"><path d="M0,0H100" stroke="#000" stroke-miterlimit="10"/></svg>'), PT_MM, 1e-9, 'copiado de Illustrator (miterlimit 10) en puntos');
+  near(ai('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><defs><style>.a{fill:#c00;}</style></defs><path class="a" d="M0,0H100"/></svg>'), PT_MM, 1e-9, 'clases cortas de Illustrator en puntos');
+  near(ai('<svg id="Capa_1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"/>'), PT_MM, 1e-9, 'id Capa_1 en puntos');
+  near(ai('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><path d="M0,0H100" style="stroke-miterlimit:4"/></svg>'), PX_MM, 1e-9, 'SVG genérico a 96 px/pulgada');
 }
 
 /* ---------------------------------------------- pegar desde Illustrator */
