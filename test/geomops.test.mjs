@@ -6,9 +6,9 @@
  */
 
 import { createRequire } from 'node:module';
-import { joinPaths } from '../src/ops.js';
+import { joinPaths, ungroupAll, deleteEmpty } from '../src/ops.js';
 import { mergePolygons, splitPolygons, holePolygons, holeWithPoints, selectedLines } from '../src/geomOps.js';
-import { makeNode, makePath, makeRectPath } from '../src/vector.js';
+import { makeGroup, makeNode, makePath, makeRectPath, makeText } from '../src/vector.js';
 import { defaultStyle } from '../src/style.js';
 import { newDocument, addShapes } from '../src/doc.js';
 
@@ -169,6 +169,45 @@ const rect = (x0, y0, x1, y1, st = {}) => {
   const h2 = rect(70, 10, 90, 30);
   const r5 = holePolygons(J, docWith([big, small, h2]), new Set([big.id, small.id, h2.id]));
   ok(items(r5.doc)[0].holes?.length === 2, 'dos formas → dos huecos');
+}
+
+/* ------------------------------------------- Desagrupar todo y Borrar vacíos */
+{
+  const st = (o) => ({ ...defaultStyle(), ...o });
+  const a = makeRectPath(0, 0, 10, 10, st({ fill: '#ff0000', stroke: 'none' }));
+  const b = makeRectPath(20, 0, 30, 10, st({ fill: 'none', stroke: 'none' }));
+  const c = makePath([makeNode(0, 0), makeNode(5, 5)], { style: st({ stroke: 'none' }) });
+  const d = makePath([makeNode(0, 0), makeNode(5, 5)], { style: st({ stroke: '#000000' }) });
+  const e = makeRectPath(40, 0, 50, 10, st({ fill: 'none', stroke: '#000000' }));
+  const g = makeRectPath(60, 0, 70, 10, st({ fill: 'none', stroke: 'none', pattern: 'dots' }));
+  const t = makeText(0, 0, 'x');
+  const inner = makeGroup([a, makeGroup([b, c])]);
+  const outer = makeGroup([inner, d, e, g, t]);
+  const nd = newDocument();
+  let doc = addShapes(nd, nd.activeLayerId, [outer, makeGroup([makeGroup([makeRectPath(80, 0, 90, 10, st({ fill: 'none', stroke: 'none' }))])])]);
+
+  const lay = (dd) => dd.layers.find((l) => l.kind === 'vector').items;
+  const e1 = deleteEmpty(doc);
+  ok(e1.count === 6, 'Borrar vacíos: 2 polígonos, 1 línea y 3 grupos que quedan vacíos → ' + e1.count);
+  const left = [];
+  const walk = (x) => (x.type === 'group' ? x.children.forEach(walk) : left.push(x));
+  lay(e1.doc).forEach(walk);
+  ok(left.length === 5 && left.includes(a) && left.includes(d) && left.includes(e) && left.includes(g) && left.includes(t), 'quedan relleno, línea con trazo, polígono con trazo, trama y texto');
+
+  const u = ungroupAll(doc);
+  ok(u.count === 5, 'Desagrupar todo cuenta 5 grupos (anidados incluidos) → ' + u.count);
+  ok(lay(u.doc).every((x) => x.type !== 'group') && lay(u.doc).length === 8, 'no queda ningún grupo; 7 formas + 1 vacía');
+  ok(ungroupAll(u.doc).count === 0 && ungroupAll(u.doc).doc === u.doc, 'sin grupos: no cambia nada');
+
+  // capa bloqueada: Desagrupar la incluye, Borrar vacíos no
+  const locked = { ...doc, layers: doc.layers.map((l) => (l.kind === 'vector' ? { ...l, locked: true } : l)) };
+  ok(ungroupAll(locked).count === 5 && deleteEmpty(locked).count === 0, 'capa bloqueada: se desagrupa pero no se borra');
+
+  // máscara de recorte sin relleno ni trazo: no se borra
+  const mask = makeRectPath(0, 0, 5, 5, st({ fill: 'none', stroke: 'none' }));
+  const clip = makeGroup([mask, a], { clip: true });
+  const dc = addShapes(nd, nd.activeLayerId, [clip]);
+  ok(deleteEmpty(dc).count === 0, 'la máscara de un grupo de recorte se respeta');
 }
 
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLOS` : ''}`);

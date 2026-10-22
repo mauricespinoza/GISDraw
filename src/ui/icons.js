@@ -65,3 +65,20 @@ export const LAYER_ICONS = {
   hillshade: s('<path d="M2.5 20 9 8.5l4 6.5 2.8-4L21.5 20z"/><path d="M7.4 11.3 9 12.4l1.6-1.1"/>'),
   image: s('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m3.5 17 5-4.5 3.5 3 3-2.5 5.5 4.5"/>'),
 };
+
+/** Iconos de alinear y distribuir (barra flotante). Cajas de 24×24 con la línea de referencia y dos o tres objetos. */
+const box = (x, y, w, h) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx=".8"/>`;
+export const ALIGN_ICONS = {
+  left: s(`<path d="M4 3v18"/>${box(7, 6, 13, 4.5)}${box(7, 13.5, 8, 4.5)}`),
+  hcenter: s(`<path d="M12 3v18"/>${box(5, 6, 14, 4.5)}${box(8, 13.5, 8, 4.5)}`),
+  right: s(`<path d="M20 3v18"/>${box(4, 6, 13, 4.5)}${box(9, 13.5, 8, 4.5)}`),
+  top: s(`<path d="M3 4h18"/>${box(6, 7, 4.5, 13)}${box(13.5, 7, 4.5, 8)}`),
+  vcenter: s(`<path d="M3 12h18"/>${box(6, 5, 4.5, 14)}${box(13.5, 8, 4.5, 8)}`),
+  bottom: s(`<path d="M3 20h18"/>${box(6, 4, 4.5, 13)}${box(13.5, 9, 4.5, 8)}`),
+  // distribuir centros: tres objetos con sus centros alineados sobre una regla
+  distHCenters: s(`${box(2.5, 5, 4, 11)}${box(9.5, 3, 5, 15)}${box(17.5, 6, 4, 9)}<path d="M4.5 21h15" stroke-dasharray="1.4 2.2"/>`),
+  distVCenters: s(`${box(5, 2.5, 11, 4)}${box(3, 9.5, 15, 5)}${box(6, 17.5, 9, 4)}<path d="M21 4.5v15" stroke-dasharray="1.4 2.2"/>`),
+  // distribuir espacios: los huecos entre objetos quedan iguales
+  distHSpace: s(`<path d="M3 3v18M21 3v18"/>${box(7, 7, 3.5, 10)}${box(13.5, 7, 3.5, 10)}`),
+  distVSpace: s(`<path d="M3 3h18M3 21h18"/>${box(7, 7, 10, 3.5)}${box(7, 13.5, 10, 3.5)}`),
+};

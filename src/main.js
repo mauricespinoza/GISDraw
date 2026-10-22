@@ -12,11 +12,11 @@ import { RasterView, demFiles, imageFiles, imageRect } from './raster/rasterView
 import { BASEMAPS } from './raster/basemap.js';
 import { Panels } from './ui/panels.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
-import { ICONS } from './ui/icons.js';
+import { ALIGN_ICONS, ICONS } from './ui/icons.js';
 import { h, popSlider, popSliderOpen } from './ui/dom.js';
 import { askChoice, askConfirm, askForm, askText } from './ui/dialog.js';
 import { DASHES, defaultStyle } from './style.js';
-import { copyShapes, frozenPoints, pasteShapes, arrange, group, ungroup, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
+import { align, copyShapes, deleteEmpty, distribute, frozenPoints, pasteShapes, arrange, group, ungroup, ungroupAll, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
 import { coordPreview, formatDMS, parseCoordText, toLonLat } from './proj.js';
 import { shapeBBox, unionBBox, walkShapes, newId, DEFAULT_SMOOTH, canResmooth, canSmooth, adoptFreehand, resmooth } from './vector.js';
 import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles, getDocKey, putDocKey } from './io/store.js';
@@ -902,7 +902,41 @@ class App {
       );
     }
     for (let i = items.length - 1; i >= 0; i--) if (!items[i]) items.splice(i, 1);
+    if (ed.selection.size >= 2) items.push(...this.alignIcons());
     if (this.clipboard.length) items.push(b('Pegar', () => this.paste(false)), b('Pegar en el lugar', () => this.paste(true)));
+  }
+
+  /**
+   * Alinear (≥ 2 objetos) y distribuir (≥ 3) como iconos de la barra flotante. Alinean a la caja de la
+   * selección; «distribuir» reparte centros o espacios entre los dos extremos.
+   */
+  alignIcons() {
+    const ed = this.editor;
+    const n = ed.selection.size;
+    const run = (f) => () => {
+      const next = f(this.history.doc, ed.selection, ed.est());
+      if (next !== this.history.doc) this.history.commit(next);
+    };
+    const ib = (key, tip, f, min = 2) => {
+      const el = h('button', { class: 'ico', title: tip, 'data-tip': tip, 'aria-label': tip, html: ALIGN_ICONS[key], onclick: run(f) });
+      if (n < min) el.disabled = true;
+      return el;
+    };
+    const sep = () => h('span', { class: 'sep' });
+    return [
+      sep(),
+      ib('left', 'Alinear a la izquierda', (d, ids, est) => align(d, ids, 'left', est)),
+      ib('hcenter', 'Centrar horizontalmente', (d, ids, est) => align(d, ids, 'hcenter', est)),
+      ib('right', 'Alinear a la derecha', (d, ids, est) => align(d, ids, 'right', est)),
+      ib('top', 'Alinear arriba', (d, ids, est) => align(d, ids, 'top', est)),
+      ib('vcenter', 'Centrar verticalmente', (d, ids, est) => align(d, ids, 'vcenter', est)),
+      ib('bottom', 'Alinear abajo', (d, ids, est) => align(d, ids, 'bottom', est)),
+      sep(),
+      ib('distHCenters', 'Distribuir centros horizontalmente (3 o más)', (d, ids, est) => distribute(d, ids, 'h', est), 3),
+      ib('distVCenters', 'Distribuir centros verticalmente (3 o más)', (d, ids, est) => distribute(d, ids, 'v', est), 3),
+      ib('distHSpace', 'Distribuir espacio horizontal igual (3 o más)', (d, ids, est) => distribute(d, ids, 'h', est, { spacing: true }), 3),
+      ib('distVSpace', 'Distribuir espacio vertical igual (3 o más)', (d, ids, est) => distribute(d, ids, 'v', est, { spacing: true }), 3),
+    ];
   }
 
   /** Tablet o celular: pantalla táctil (o ya se usó un lápiz). */
@@ -1296,11 +1330,33 @@ class App {
       h('div', { class: 'mh' }, 'Selección'),
       item('Transformar: mover, rotar, escalar…', () => this.transformDialog(), this.editor.selection.size > 0, 'Selecciona uno o más objetos', 'Ctrl+Mayús+M'),
       item('Unfreeze nodes (descongelar todos)', () => this.editor.unfreezeSelection(), this.editor.selection.size > 0, 'Selecciona los objetos con nodos congelados'),
+      item('Desagrupar todo (todos los niveles)', () => this.ungroupEverything(), this.history.doc.layers.some((l) => l.kind === 'vector' && l.items.some((x) => x.type === 'group')), 'No hay grupos en el documento'),
+      item('Borrar vacíos (sin relleno ni trazo)', () => this.deleteEmptyShapes(), true, ''),
       item('Unfreeze all nodes (todo el documento)', () => this.editor.unfreezeAll(), frozenPoints(this.history.doc).length > 0, 'No hay nodos congelados en el documento'),
       h('div', { class: 'mh' }, 'Limpieza'),
       item('Simplificar: menos nodos, misma forma…', () => this.simplifyDialog(), g.lines.length + g.polys.length > 0, 'Selecciona líneas o polígonos'),
       item('Tidy: compartir nodos cercanos…', () => this.tidyDialog(), g.lines.length + g.polys.length > 0, 'Selecciona las líneas o polígonos que deben compartir nodos'),
     ];
+  }
+
+  /** Geometría → Desagrupar todo: deshace todos los grupos, anidados incluidos, de todas las capas. */
+  ungroupEverything() {
+    const r = ungroupAll(this.history.doc);
+    if (!r.count) return this.message('No hay grupos en el documento');
+    this.history.commit(r.doc);
+    this.editor.setSelection([]);
+    this.editor.snapDirty = true;
+    this.message(`${r.count} grupo(s) deshecho(s), en todos los niveles`);
+  }
+
+  /** Geometría → Borrar vacíos: líneas sin trazo y polígonos sin relleno ni trazo. */
+  deleteEmptyShapes() {
+    const r = deleteEmpty(this.history.doc);
+    if (!r.count) return this.message('No hay líneas ni polígonos vacíos (las capas y formas bloqueadas no se tocan)');
+    this.history.commit(r.doc);
+    this.editor.setSelection([]);
+    this.editor.snapDirty = true;
+    this.message(`${r.count} objeto(s) vacío(s) borrado(s)`);
   }
 
   /** Unidad de las distancias de los diálogos: mm de papel en Canvas, metros en GIS. */

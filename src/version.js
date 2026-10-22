@@ -3,12 +3,13 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v50';
+export const APP_VERSION = 'v51';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
+  ['v51', 'Cuentagotas de texto (fuente, tamaño, estilo, color, halo); Geometría: Desagrupar todo y Borrar vacíos; alinear y distribuir como iconos en la barra flotante'],
   ['v50', 'Capas: Show all, Hide all, Lock all y Unlock all'],
   ['v49', 'Pegar desde Illustrator: si solo llega una imagen, se explica y se ofrece importar el .svg/.ai en vez de crear una capa de imagen fija'],
   ['v48', 'Escalar desde los tiradores (y Transformar) escala también grosores, halos, tramas, ornamentos, ondas, puntos y letras, incluso dentro de grupos'],
