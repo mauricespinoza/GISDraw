@@ -3,12 +3,13 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v56';
+export const APP_VERSION = 'v57';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
+  ['v57', 'Barra flotante: botón Simplificar al seleccionar líneas o polígonos'],
   ['v56', 'Barra flotante: Freeze node / Unfreeze node al elegir un nodo con la herramienta Nodos'],
   ['v55', 'Exportar imagen y lámina: ornamentos, puntos, tramas y textos chicos ya no desaparecen (los mínimos de tamaño se miden en píxeles de pantalla, no en mm de papel)'],
   ['v54', 'Republicación: fuerza un despliegue nuevo en GitHub Pages (sin cambios funcionales)'],
