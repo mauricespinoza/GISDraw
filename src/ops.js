@@ -8,7 +8,7 @@
  */
 
 import { allTopShapes, findTopShape, replaceShapes } from './doc.js';
-import { cloneNode, cloneShape, makeGroup, newId, rotateShape, scaleShape, shapeBBox, splitNodes, translateShape, unionBBox } from './vector.js';
+import { cloneNode, cloneShape, makeGroup, newId, rotateShape, scaleShape, shapeBBox, splitNodes, translateShape, unionBBox, walkShapes } from './vector.js';
 
 /* ------------------------------------------------------------ portapapeles */
 
@@ -476,13 +476,22 @@ export function setNodesFrozen(doc, points, value, tol = 0.01) {
     });
     return changed ? out : nodes;
   };
-  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
-    if (shape.type !== 'path' || !shape.nodes) continue;
+  // también dentro de los grupos (lo importado de Illustrator llega agrupado)
+  const visit = (shape) => {
+    if (shape.type === 'group' && shape.children) {
+      const kids = shape.children.map(visit);
+      return kids.some((k, i) => k !== shape.children[i]) ? { ...shape, children: kids } : shape;
+    }
+    if (shape.type !== 'path' || !shape.nodes) return shape;
     const nodes = ring(shape.nodes);
     const holes = shape.holes ? shape.holes.map(ring) : shape.holes;
-    if (nodes !== shape.nodes || (holes && holes.some((h, i) => h !== shape.holes[i]))) map.set(shape.id, { ...shape, nodes, holes });
+    return nodes !== shape.nodes || (holes && holes.some((h, i) => h !== shape.holes[i])) ? { ...shape, nodes, holes } : shape;
+  };
+  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
+    const next = visit(shape);
+    if (next !== shape) map.set(shape.id, next);
   }
-  return { doc: map.size ? replaceShapes(doc, map) : doc, count };
+  return { doc: map.size ? replaceShapes(doc, map, { includeLocked: true }) : doc, count };
 }
 
 /**
@@ -492,9 +501,12 @@ export function setNodesFrozen(doc, points, value, tol = 0.01) {
 export function frozenPoints(doc, ids = null) {
   const set = ids == null ? null : ids instanceof Set ? ids : new Set(ids);
   const out = [];
-  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
-    if ((set && !set.has(shape.id)) || shape.type !== 'path') continue;
-    for (const nodes of [shape.nodes || [], ...(shape.holes || [])]) for (const n of nodes) if (n.frozen) out.push({ x: n.x, y: n.y });
+  for (const { shape: top } of allTopShapes(doc, { visibleOnly: false })) {
+    if (set && !set.has(top.id)) continue;
+    walkShapes([top], (shape) => {
+      if (shape.type !== 'path') return;
+      for (const nodes of [shape.nodes || [], ...(shape.holes || [])]) for (const n of nodes) if (n.frozen) out.push({ x: n.x, y: n.y });
+    });
   }
   return out;
 }

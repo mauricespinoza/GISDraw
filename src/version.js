@@ -3,12 +3,13 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v46';
+export const APP_VERSION = 'v47';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
+  ['v47', 'Unfreeze all nodes también dentro de grupos; pegar desde Illustrator busca el SVG en todos los formatos y avisa si solo llega una imagen'],
   ['v46', 'Unfreeze all nodes en el menú Geometría (todo el documento); lo pegado desde Illustrator como código SVG llega a su tamaño real'],
   ['v45', 'Celulares: herramientas y propiedades abajo (solo con selección); el dedo fuera de lo seleccionado vuelve a Selección; desplazar y hacer zoom más fluidos'],
   ['v44', 'Tidy: los bordes comunes comparten también los tiradores de la curva Bézier'],

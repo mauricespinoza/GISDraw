@@ -9,7 +9,7 @@ import { applyDeform, prepareDeform, prepareDrag } from '../src/deform.js';
 import { frozenPoints, setNodesFrozen, transformShapes } from '../src/ops.js';
 import { smoothAlong } from '../src/smoothTool.js';
 import { buildTopology, simplifyArc, smoothTopology } from '../src/smoothTopo.js';
-import { cloneShape, makeNode, makePath, rotateShape, translateShape } from '../src/vector.js';
+import { cloneShape, makeGroup, makeNode, makePath, rotateShape, translateShape } from '../src/vector.js';
 import { addShapes, allTopShapes, newDocument } from '../src/doc.js';
 
 let pass = 0;
@@ -53,6 +53,19 @@ const at = (nodes, x) => nodes.find((n) => Math.abs(n.x - x) < 1e-9);
   ok(frozenPoints(doc).length === 2, 'frozenPoints sin ids: todos los del documento');
   const u = setNodesFrozen(doc, frozenPoints(doc), false, 0);
   ok(u.count === 2 && frozenPoints(u.doc).length === 0, 'Unfreeze all nodes los descongela todos');
+}
+
+/* Unfreeze all nodes alcanza los nodos dentro de grupos (lo de Illustrator llega agrupado) */
+{
+  const A = line([[0, 0], [10, 0], [20, 0]]);
+  const B = poly([[0, 5], [5, 5], [5, 9]]);
+  A.nodes[1] = { ...A.nodes[1], frozen: true };
+  B.nodes[2] = { ...B.nodes[2], frozen: true };
+  const G = makeGroup([A, makeGroup([B])]);
+  const doc = docWith([G]);
+  ok(frozenPoints(doc).length === 2, 'frozenPoints ve los nodos dentro de grupos anidados');
+  const u = setNodesFrozen(doc, frozenPoints(doc), false, 0);
+  ok(u.count === 2 && frozenPoints(u.doc).length === 0, 'Unfreeze all nodes descongela los de dentro de grupos');
 }
 
 /* transformaciones: el nodo congelado queda donde está */

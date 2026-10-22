@@ -15,7 +15,7 @@
  */
 
 import { allTopShapes, replaceShapes } from './doc.js';
-import { flattenNodes, splitNodes } from './vector.js';
+import { flattenNodes, splitNodes, walkShapes } from './vector.js';
 import { nodeInto } from './tidy.js';
 
 /** Peso del arrastre a la distancia `d` del punto tomado, con radio `r`: 1 en el centro, 0 en el borde, sin escalón. */
@@ -68,9 +68,11 @@ function pointSet(points, tol) {
  */
 export function frozenTest(doc, tol) {
   const pts = [];
-  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
-    if (shape.type !== 'path') continue;
-    for (const nodes of [shape.nodes || [], ...(shape.holes || [])]) for (const n of nodes) if (n.frozen) pts.push(n);
+  for (const { shape: top } of allTopShapes(doc, { visibleOnly: false })) {
+    walkShapes([top], (shape) => {
+      if (shape.type !== 'path') return;
+      for (const nodes of [shape.nodes || [], ...(shape.holes || [])]) for (const n of nodes) if (n.frozen) pts.push(n);
+    });
   }
   if (!pts.length) return () => false;
   const at = pointSet(pts, tol);
