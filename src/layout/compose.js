@@ -25,6 +25,9 @@ import { lonLatBBox } from '../raster/dem.js';
 import { makeNode, makePath, makePoint, walkShapes } from '../vector.js';
 import { xmlId } from '../io/illustrator.js';
 
+/** mm de página que mide un píxel de pantalla (96 dpi): los mínimos de tamaño de style.js se miden en píxeles. */
+const PX_MM = 25.4 / 96;
+
 export const PAGES = {
   A4: [210, 297],
   A3: [297, 420],
@@ -284,7 +287,7 @@ export function composeLayout(doc, L, rasters = [], attribution = '', { transpar
   doc.layers.forEach((l, i) => {
     if (!l.visible) return;
     if (l.kind === 'vector') {
-      const ctx = { P, mmToPx: f, ptToPx: 0.352778 * f, viewW: g.W, viewH: g.H, defs, uid: `L${i}_`, flatTol: 0.05 };
+      const ctx = { P, mmToPx: f, ptToPx: 0.352778 * f, pxUnit: PX_MM, viewW: g.W, viewH: g.H, defs, uid: `L${i}_`, flatTol: 0.05 };
       part(l.name, mapContent(l.items.map((sh) => shapeToSvg(sh, ctx)).join('')), { opacity: l.opacity, blend: l.blend, locked: l.locked, map: true });
       vectors.push(l);
     } else {
@@ -340,7 +343,7 @@ export function composeLayout(doc, L, rasters = [], attribution = '', { transpar
   }
 
   // ---- cuadros de texto del layout
-  const tctx = { P: (x, y) => [x, y], mmToPx: 1, ptToPx: 0.352778, viewW: g.W, viewH: g.H, defs, uid: 'lt_', flatTol: 0.05 };
+  const tctx = { P: (x, y) => [x, y], mmToPx: 1, ptToPx: 0.352778, pxUnit: PX_MM, viewW: g.W, viewH: g.H, defs, uid: 'lt_', flatTol: 0.05 };
   for (const t of L.texts || []) {
     element(`text:${t.id}`, `Texto: ${String(t.text || '').split('\n')[0].slice(0, 28) || '(vacío)'}`, textToSvg(layoutTextShape(t), { ...tctx, uid: `lt${t.id}_` }));
   }
@@ -638,7 +641,7 @@ function legendSvg(doc, vectors, L, x, y, w, maxY, font, f = 1) {
   const out = [`<text x="${r2(x)}" y="${r2(y + 4)}" font-family="${font}" font-size="3.6" font-weight="700">${esc(L.legendTitle || 'Leyenda')}</text>`];
   let yy = y + 9;
   // las muestras llevan el mismo factor que el mapa, para que se lean igual
-  const ctx = { P: (a, b) => [a, b], mmToPx: f, ptToPx: 0.352778 * f, viewW: 1000, viewH: 1000, defs: [], uid: 'leg_', flatTol: 0.05 };
+  const ctx = { P: (a, b) => [a, b], mmToPx: f, ptToPx: 0.352778 * f, pxUnit: PX_MM, viewW: 1000, viewH: 1000, defs: [], uid: 'leg_', flatTol: 0.05 };
   for (const grp of legendEntries(vectors)) {
     if (yy > maxY) break;
     out.push(`<text x="${r2(x)}" y="${r2(yy)}" font-family="${font}" font-size="2.6" font-weight="700" fill="#374151">${esc(grp.layer)}</text>`);
