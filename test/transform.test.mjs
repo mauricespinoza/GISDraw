@@ -6,7 +6,7 @@
  */
 
 import { transformShapes } from '../src/ops.js';
-import { makeRectPath, shapeBBox } from '../src/vector.js';
+import { makeGroup, makeRectPath, makeText, scaleShape, scaleSizes, shapeBBox } from '../src/vector.js';
 import { defaultStyle } from '../src/style.js';
 import { newDocument, addShapes, History } from '../src/doc.js';
 import { parseCoordText, fromLonLat } from '../src/proj.js';
@@ -88,6 +88,24 @@ const doc = addShapes(base, layerId, [a, b]);
   const ref2 = fromLonLat(-(70 + 40 / 60), -(33 + 27 / 60));
   ok(dms && near(dms[0], ref2[0], 1e-3), 'lat, lon sexagesimales');
   ok(parseCoordText('') === null && parseCoordText('hola') === null && parseCoordText('-95, 10') === null, 'texto inválido → null');
+}
+
+/* ------------------------------------- escalar: también las medidas de papel */
+{
+  const st = { ...defaultStyle(), strokeWidth: 1, casing: true, casingWidth: 0.4, pattern: 'dots', patternSize: 5, ornament: 'triangle', ornamentSpacing: 6, waveAmp: 0.7, pointSize: 2 };
+  const r = makeRectPath(0, 0, 10, 10, st);
+  const t = makeText(5, 5, 'Fm', undefined, 10);
+  const g = makeGroup([r, t]);
+  const k = 2;
+  const out = scaleSizes(scaleShape(g, { x: 0, y: 0 }, k, k), k);
+  const [r2, t2] = out.children;
+  ok(near(r2.style.strokeWidth, 2) && near(r2.style.casingWidth, 0.8) && near(r2.style.patternSize, 10) && near(r2.style.ornamentSpacing, 12), 'trazo, halo, trama y ornamentos ×2 en un grupo');
+  ok(near(r2.style.waveAmp, 1.4) && near(r2.style.pointSize, 4), 'onda y punto ×2');
+  ok(near(t2.fontSize, 20) && near(t2.haloWidth, 1.2), 'texto dentro de un grupo: letra y halo ×2');
+  ok(near(shapeBBox(r2).w, 20), 'la geometría también ×2');
+  ok(scaleSizes(r, 1) === r, 'k = 1 no toca nada');
+  const dd = transformShapes(doc, [a.id], { sx: 2, sy: 2, strokes: true });
+  ok(near(items(dd)[0].style.strokeWidth, 1), 'diálogo Transformar con la opción marcada');
 }
 
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLOS` : ''}`);

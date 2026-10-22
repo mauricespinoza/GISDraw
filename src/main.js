@@ -1443,7 +1443,7 @@ class App {
         { key: 'sx', label: 'Escala', type: 'number', value: 100, min: 5, max: 500, step: 1, unit: '%', log: true },
         { key: 'uniform', label: 'Escala uniforme (vertical = horizontal)', type: 'check', value: last.uniform ?? true },
         { key: 'sy', label: 'Escala vertical', type: 'number', value: 100, min: 5, max: 500, step: 1, unit: '%', log: true, when: (v) => !v.uniform },
-        { key: 'strokes', label: 'Escalar también los grosores de trazo', type: 'check', value: last.strokes ?? false },
+        { key: 'strokes', label: 'Escalar también grosores, tramas, ornamentos y letras', type: 'check', value: last.strokes ?? true },
         { key: 'pivot', label: 'Centro de rotación y escala', type: 'select', value: last.pivot || 'center', options: { center: 'Centro de la selección', each: 'Centro de cada objeto' } },
       ],
       ok: 'Aplicar',
@@ -1515,12 +1515,28 @@ class App {
       const dt = e.clipboardData;
       const inPlace = !!this.pasteInPlaceNext;
       this.pasteInPlaceNext = false;
-      const text = dt?.getData('image/svg+xml') || dt?.getData('text/plain') || '';
+      let text = dt?.getData('image/svg+xml') || dt?.getData('text/plain') || '';
       const html = dt?.getData('text/html') || '';
+      // el código SVG puede venir bajo otro nombre de formato (según versión de Illustrator y sistema)
+      if (!/<svg[\s>]/i.test(text) && !/<svg[\s>]/i.test(html)) {
+        for (const t of dt?.types || []) {
+          if (/^(Files|text\/(plain|html)|image\/svg\+xml)$/.test(t)) continue;
+          const v = dt.getData(t);
+          if (/<svg[\s>]/i.test(v)) text = v;
+        }
+      }
+      const types = [...(dt?.types || [])];
       const files = [...(dt?.files || []), ...[...(dt?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile())];
       const img = files.find((f) => f && /^image\//.test(f.type) && f.type !== 'image/svg+xml');
       const run = async () => {
-        if (img && !/<svg[\s>]/i.test(text)) return this.pasteImage(img);
+        if (img && !/<svg[\s>]/i.test(text) && !/<svg[\s>]/i.test(html)) {
+          // Illustrator con «Incluir código SVG» manda también una imagen: antes de dejarla como capa de
+          // imagen (no se mueve ni escala), se busca el SVG por la API asíncrona del portapapeles
+          const viaApi = await this.readSvgFromClipboardApi();
+          if (viaApi) return this.pasteText(viaApi, inPlace);
+          this.message(`Solo llegó una imagen (formatos: ${types.join(', ') || 'ninguno'}). Se pegó como capa de imagen fija; para un dibujo editable usa Archivo → Importar con el .ai`, 12000);
+          return this.pasteImage(img);
+        }
         if (/<svg[\s>]/i.test(text || html)) return this.pasteText(/<svg[\s>]/i.test(text) ? text : html, inPlace);
         // una imagen dentro de HTML (<img src="data:...">) copiada de una página o documento
         const m = /<img[^>]+src=["'](data:image\/[^"']+)["']/i.exec(html);
@@ -1757,6 +1773,22 @@ class App {
     this.history.commit({ ...doc, layers });
     this.lastPastedImage = file;
     this.message(`Imagen pegada como capa «${name}» en el centro de la vista.${this.mode === 'gis' ? ' Para ubicarla con precisión: Archivo → Georreferenciar imagen.' : ''}`, 7000);
+  }
+
+  /** Busca código SVG en cualquier formato del portapapeles con la API asíncrona (puede pedir permiso). */
+  async readSvgFromClipboardApi() {
+    try {
+      for (const item of (await navigator.clipboard?.read?.()) || []) {
+        for (const t of item.types) {
+          if (/^(image\/(png|jpeg|gif|webp|bmp))$/.test(t)) continue;
+          const v = await (await item.getType(t)).text();
+          if (/<svg[\s>]/i.test(v)) return v;
+        }
+      }
+    } catch {
+      /* sin permiso o sin API */
+    }
+    return '';
   }
 
   /** Pegar desde un botón o Ctrl+F/B: el portapapeles del sistema si se puede leer, si no el interno. */

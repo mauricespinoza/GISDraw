@@ -41,6 +41,7 @@ import {
   nearestOnPath,
   rotateShape,
   scaleShape,
+  scaleSizes,
   shapeBBox,
   simplify,
   splitNodes,
@@ -811,7 +812,7 @@ export class Editor {
         const vy = hp[1] - opp[1];
         const k = Math.max(0.05, Math.min(60, ((sp[0] - opp[0]) * vx + (sp[1] - opp[1]) * vy) / (vx * vx + vy * vy || 1)));
         const [ox, oy] = this.view.toWorld(opp[0], opp[1]);
-        this.history.preview(replaceShapes(d.base, new Map([[d.shape.id, scaleShape(d.shape, { x: ox, y: oy }, k, k)]])));
+        this.history.preview(replaceShapes(d.base, new Map([[d.shape.id, scaleSizes(scaleShape(d.shape, { x: ox, y: oy }, k, k), k)]])));
         return;
       }
       case 'twidth': {
@@ -853,7 +854,8 @@ export class Editor {
         }
         sx = Number.isFinite(sx) && Math.abs(sx) > 0.001 ? sx : 0.001;
         sy = Number.isFinite(sy) && Math.abs(sy) > 0.001 ? sy : 0.001;
-        const map = new Map(d.shapes.map((s) => [s.id, scaleShape(s, anchor, sx, sy)]));
+        const kk = Math.sqrt(Math.abs(sx * sy));
+        const map = new Map(d.shapes.map((s) => [s.id, scaleSizes(scaleShape(s, anchor, sx, sy), kk)]));
         this.history.preview(replaceShapes(d.base, map));
         return;
       }

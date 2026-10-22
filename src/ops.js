@@ -8,7 +8,7 @@
  */
 
 import { allTopShapes, findTopShape, replaceShapes } from './doc.js';
-import { cloneNode, cloneShape, makeGroup, newId, rotateShape, scaleShape, shapeBBox, splitNodes, translateShape, unionBBox } from './vector.js';
+import { cloneNode, cloneShape, makeGroup, newId, rotateShape, scaleShape, scaleSizes, shapeBBox, splitNodes, translateShape, unionBBox, walkShapes } from './vector.js';
 
 /* ------------------------------------------------------------ portapapeles */
 
@@ -476,13 +476,22 @@ export function setNodesFrozen(doc, points, value, tol = 0.01) {
     });
     return changed ? out : nodes;
   };
-  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
-    if (shape.type !== 'path' || !shape.nodes) continue;
+  // también dentro de los grupos (lo importado de Illustrator llega agrupado)
+  const visit = (shape) => {
+    if (shape.type === 'group' && shape.children) {
+      const kids = shape.children.map(visit);
+      return kids.some((k, i) => k !== shape.children[i]) ? { ...shape, children: kids } : shape;
+    }
+    if (shape.type !== 'path' || !shape.nodes) return shape;
     const nodes = ring(shape.nodes);
     const holes = shape.holes ? shape.holes.map(ring) : shape.holes;
-    if (nodes !== shape.nodes || (holes && holes.some((h, i) => h !== shape.holes[i]))) map.set(shape.id, { ...shape, nodes, holes });
+    return nodes !== shape.nodes || (holes && holes.some((h, i) => h !== shape.holes[i])) ? { ...shape, nodes, holes } : shape;
+  };
+  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
+    const next = visit(shape);
+    if (next !== shape) map.set(shape.id, next);
   }
-  return { doc: map.size ? replaceShapes(doc, map) : doc, count };
+  return { doc: map.size ? replaceShapes(doc, map, { includeLocked: true }) : doc, count };
 }
 
 /**
@@ -492,28 +501,24 @@ export function setNodesFrozen(doc, points, value, tol = 0.01) {
 export function frozenPoints(doc, ids = null) {
   const set = ids == null ? null : ids instanceof Set ? ids : new Set(ids);
   const out = [];
-  for (const { shape } of allTopShapes(doc, { visibleOnly: false })) {
-    if ((set && !set.has(shape.id)) || shape.type !== 'path') continue;
-    for (const nodes of [shape.nodes || [], ...(shape.holes || [])]) for (const n of nodes) if (n.frozen) out.push({ x: n.x, y: n.y });
+  for (const { shape: top } of allTopShapes(doc, { visibleOnly: false })) {
+    if (set && !set.has(top.id)) continue;
+    walkShapes([top], (shape) => {
+      if (shape.type !== 'path') return;
+      for (const nodes of [shape.nodes || [], ...(shape.holes || [])]) for (const n of nodes) if (n.frozen) out.push({ x: n.x, y: n.y });
+    });
   }
   return out;
 }
 
 /* ------------------------------------------------------- transformar */
 
-/** Escala los grosores de trazo (y de grupos, recursivo) por `k`. */
-function scaleStrokes(shape, k) {
-  if (shape.type === 'group') return { ...shape, children: shape.children.map((c) => scaleStrokes(c, k)) };
-  const w = shape.style?.strokeWidth;
-  return w > 0 ? { ...shape, style: { ...shape.style, strokeWidth: Math.round(w * k * 1000) / 1000 } } : shape;
-}
-
 /**
  * Transformar con valores exactos (diálogo Transformar): escala `sx`, `sy`
  * (factores), rotación `angle` (grados, antihoraria) y desplazamiento `dx`,
  * `dy` (unidades del mundo), en ese orden. `pivot`: 'center' (de toda la
  * selección) o 'each' (cada objeto en su propio centro). `strokes`: escalar
- * también los grosores de trazo.
+ * también grosores, tramas, ornamentos, halos y demás medidas de papel.
  */
 export function transformShapes(doc, ids, { dx = 0, dy = 0, angle = 0, sx = 1, sy = 1, pivot = 'center', strokes = false } = {}, est = null) {
   const set = ids instanceof Set ? ids : new Set(ids);
@@ -527,7 +532,7 @@ export function transformShapes(doc, ids, { dx = 0, dy = 0, angle = 0, sx = 1, s
     const o = pivot === 'each' ? mid(shapeBBox(s, est)) : all;
     let t = s;
     if (sx !== 1 || sy !== 1) t = scaleShape(t, o, sx, sy);
-    if (strokes && k !== 1) t = scaleStrokes(t, k);
+    if (strokes && k !== 1) t = scaleSizes(t, k);
     if (angle) t = rotateShape(t, o, angle);
     if (dx || dy) t = translateShape(t, dx, dy);
     if (t !== s) map.set(s.id, t);
