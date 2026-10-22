@@ -1025,11 +1025,23 @@ class App {
     return this.editor.penSeen || !!window.matchMedia?.('(pointer: coarse)').matches;
   }
 
+  /** ¿Está congelado el nodo activo (el elegido con la herramienta Nodos)? `null` si no hay nodo activo. */
+  activeNodeFrozen() {
+    const ed = this.editor;
+    const a = ed.tool === 'node' ? ed.activeNode : null;
+    const shape = a && ed.nodeTarget();
+    if (!shape || shape.id !== a.id) return null;
+    const nd = ed.ringNodes(shape, a.ring)?.[a.index];
+    return nd ? !!ed.frozenAt(nd) : null;
+  }
+
   updateContextBar() {
     const bar = document.getElementById('contextbar');
     const ed = this.editor;
     // se llama en cada movimiento del puntero: rehacer los botones solo si cambia lo que muestran
-    const sig = [ed.tool, !!ed.draft, ed.nodeTarget()?.id, ed.selection.size, this.clipboard.length, ed.addMode, this.settings.trace, this.settings.insertOnTap, this.settings.moveJoined, this.isTouchUI()].join('|');
+    const nodeFrozen = this.activeNodeFrozen();
+    const an = ed.tool === 'node' && ed.activeNode ? `${ed.activeNode.id}:${ed.activeNode.ring}:${ed.activeNode.index}:${nodeFrozen}` : '';
+    const sig = [ed.tool, !!ed.draft, ed.nodeTarget()?.id, an, ed.selection.size, this.clipboard.length, ed.addMode, this.settings.trace, this.settings.insertOnTap, this.settings.moveJoined, this.isTouchUI()].join('|');
     if (sig === this.ctxBarSig) return;
     this.ctxBarSig = sig;
     const touch = this.isTouchUI();
@@ -1049,6 +1061,15 @@ class App {
           b('Borrar nodo', () => ed.deleteActiveNode()),
           b('Esquina / curva', () => ed.activeNode && ed.toggleSmooth(ed.activeNode.id, ed.activeNode.ring, ed.activeNode.index)),
         );
+        // con un nodo elegido: dejarlo fijo (Freeze) o liberarlo, según esté
+        if (ed.activeNode && nodeFrozen != null) {
+          items.push(
+            b(nodeFrozen ? 'Unfreeze node' : 'Freeze node', () => {
+              ed.freezeNode(ed.activeNode, !nodeFrozen);
+              this.updateContextBar();
+            }, nodeFrozen ? 'on' : ''),
+          );
+        }
       }
       items.push(
         b(this.settings.insertOnTap ? 'Insertar al tocar ✓' : 'Insertar al tocar', () => {
@@ -3050,7 +3071,7 @@ const SHORTCUTS = [
     ['Ctrl+7 / Ctrl+Alt+7', 'Máscara de recorte / liberar'], ['Ctrl+] / Ctrl+[', 'Adelante / atrás (Mayús: al frente / al fondo)'],
     ['Ctrl+2 / Ctrl+Alt+2', 'Bloquear / desbloquear todo'], ['Ctrl+3 / Ctrl+Alt+3', 'Ocultar / mostrar todo'], ['Mayús+C', 'Nodo esquina ↔ curva'],
   ]],
-  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón de eslabones)'], ['Freeze node', 'Menú contextual sobre un nodo: queda fijo ante transformaciones y frena Deform, Drag y Suavizar (Unfreeze nodes lo libera; Geometría → Unfreeze all nodes, todos los del documento)'], ['Guías', 'Alinear con el nivel o la vertical de otros vértices, aunque estén lejos'], ['Mayús', 'Restringir ángulo o proporción']]],
+  ['Dibujo', [['Enter / doble clic', 'Terminar línea'], ['Clic en el 1er vértice', 'Cerrar polígono'], ['⌫', 'Quitar último vértice'], ['Esc', 'Cancelar'], ['S / K', 'Snapping / trace'], ['Alt (con Trace)', 'Recorrido alterno, por el otro lado'], ['Move Joined', 'Mover juntos los nodos compartidos (botón de eslabones)'], ['Freeze node', 'Botón de la barra flotante al elegir un nodo (o menú contextual sobre él): queda fijo ante transformaciones y frena Deform, Drag y Suavizar (Unfreeze nodes lo libera; Geometría → Unfreeze all nodes, todos los del documento)'], ['Guías', 'Alinear con el nivel o la vertical de otros vértices, aunque estén lejos'], ['Mayús', 'Restringir ángulo o proporción']]],
   ['Tablet (táctil)', [['Dos dedos, dos toques', 'Deshacer'], ['Tres dedos, dos toques', 'Rehacer'], ['Mantener el dedo', 'Menú contextual (Join, Merge, Split, Hole…)'], ['Dos dedos arrastrar / pellizcar', 'Desplazar / zoom']]],
   ['Vista y archivo', [
     ['Ctrl+0', 'Zoom a todo'], ['Ctrl+1', 'Escala de referencia'], ['Ctrl++ / Ctrl+−', 'Acercar / alejar'], ['Rueda del mouse', 'Zoom (Archivo → Vista: cambiar a desplazar)'], ['Trackpad', 'Dos dedos desplazan, pellizco = zoom'],
