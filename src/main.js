@@ -974,6 +974,7 @@ class App {
     const ed = this.editor;
     if (ed.selection.size) {
       items.push(
+        this.canSimplify() ? b('Simplificar', () => this.simplifyDialog().catch((err) => this.message(`Error: ${err.message}`, 6000))) : null,
         duplicate ? b('Duplicar', () => ed.duplicate()) : null,
         b('Cortar', () => this.cut()),
         b('Copiar', () => this.copy()),
@@ -1035,13 +1036,18 @@ class App {
     return nd ? !!ed.frozenAt(nd) : null;
   }
 
+  /** Hay líneas o polígonos editables seleccionados: se puede simplificar. */
+  canSimplify() {
+    return this.editor.selectedShapes().some((s) => s.type === 'path' && !s.locked);
+  }
+
   updateContextBar() {
     const bar = document.getElementById('contextbar');
     const ed = this.editor;
     // se llama en cada movimiento del puntero: rehacer los botones solo si cambia lo que muestran
     const nodeFrozen = this.activeNodeFrozen();
     const an = ed.tool === 'node' && ed.activeNode ? `${ed.activeNode.id}:${ed.activeNode.ring}:${ed.activeNode.index}:${nodeFrozen}` : '';
-    const sig = [ed.tool, !!ed.draft, ed.nodeTarget()?.id, an, ed.selection.size, this.clipboard.length, ed.addMode, this.settings.trace, this.settings.insertOnTap, this.settings.moveJoined, this.isTouchUI()].join('|');
+    const sig = [ed.tool, !!ed.draft, ed.nodeTarget()?.id, an, ed.selection.size, ed.selection.size ? this.canSimplify() : '', this.clipboard.length, ed.addMode, this.settings.trace, this.settings.insertOnTap, this.settings.moveJoined, this.isTouchUI()].join('|');
     if (sig === this.ctxBarSig) return;
     this.ctxBarSig = sig;
     const touch = this.isTouchUI();
