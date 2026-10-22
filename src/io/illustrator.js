@@ -31,7 +31,7 @@ export function selectionSvg(shapes, { refScale = 25000, est = null, name = 'GIS
   const W = box.w / mPerPt + 2 * pad;
   const H = box.h / mPerPt + 2 * pad;
   const P = (x, y) => [(x - box.x) / mPerPt + pad, (box.y + box.h - y) / mPerPt + pad];
-  const ctx = { P, mmToPx: MM_PT, ptToPx: 1, viewW: W * 4, viewH: H * 4, mpp: mPerPt, scale: refScale, defs: [], uid: 'gd_', flatTol: 0.05 };
+  const ctx = { P, mmToPx: MM_PT, ptToPx: 1, pxUnit: 0.75, viewW: W * 4, viewH: H * 4, mpp: mPerPt, scale: refScale, defs: [], uid: 'gd_', flatTol: 0.05 };
   const body = shapes.map((s) => shapeToSvg(s, ctx)).join('');
   const meta = JSON.stringify({ app: 'GISDrawer', v: 1, refScale, shapes });
   const r = (v) => Math.round(v * 100) / 100;

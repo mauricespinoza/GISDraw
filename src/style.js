@@ -355,7 +355,7 @@ export function pathToSvg(shape, ctx, extraAttrs = '') {
     group.push(`<path d="${d}" ${fillPaint(shape, ctx)} fill-rule="evenodd" stroke="none"/>`);
     // trama de litología: encima del color de la unidad, debajo del contorno
     if (s.pattern && s.pattern !== 'none') {
-      const tile = Math.max(2, (s.patternSize || 5) * ctx.mmToPx);
+      const tile = Math.max(2 * (ctx.pxUnit ?? 1), (s.patternSize || 5) * ctx.mmToPx);
       const key = `pat|${s.pattern}|${s.patternColor}|${r2(tile)}|${s.patternOpacity ?? 1}`;
       ctx.defSet = ctx.defSet || new Set();
       const pid = `${ctx.uid}p${hashKey(key)}`;
@@ -395,7 +395,7 @@ export function pathToSvg(shape, ctx, extraAttrs = '') {
     if (s.wavy && base) d = ptsD(wavyPoints(base, (s.waveAmp ?? 0.7) * ctx.mmToPx, (s.waveLen ?? 3.6) * ctx.mmToPx));
     // ornamentos (dientes, tics, flechas): el halo va POR DEBAJO de la traza
     let orn = { halo: '', symbols: '' };
-    if (base && s.ornament && s.ornament !== 'none' && hasStroke && 9 * (25.4 / 96) * ctx.mmToPx * (s.ornamentSize || 1) >= 1.5) {
+    if (base && s.ornament && s.ornament !== 'none' && hasStroke && 9 * (25.4 / 96) * ctx.mmToPx * (s.ornamentSize || 1) >= 1.5 * (ctx.pxUnit ?? 1)) {
       orn = ornamentsSvg(base, s, ctx.mmToPx, s.stroke);
     }
     group.push(orn.halo);
@@ -442,7 +442,7 @@ export function hashKey(str) {
 export function pointToSvg(shape, ctx, extraAttrs = '') {
   const s = shape.style;
   const [cx, cy] = ctx.P(shape.x, shape.y);
-  const r = Math.max(1, ((s.pointSize || 2.5) * ctx.mmToPx) / 2);
+  const r = Math.max(ctx.pxUnit ?? 1, ((s.pointSize || 2.5) * ctx.mmToPx) / 2);
   const d = pointSymbolD(s.pointShape, cx, cy, r);
   const linear = s.pointShape === 'cross' || s.pointShape === 'x';
   const wPx = Math.max(0, (s.strokeWidth || 0) * ctx.mmToPx);
@@ -464,7 +464,7 @@ export function textToSvg(shape, ctx, extraAttrs = '') {
   const s = shape.style;
   const [x, y] = ctx.P(shape.x, shape.y);
   const fs = shape.fontSize * ctx.ptToPx;
-  if (fs < 0.8) return '';
+  if (fs < 0.8 * (ctx.pxUnit ?? 1)) return '';
   const m = layoutText(shape, fs, ctx.mmToPx, textMeasurer(shape));
   const boxed = m.boxed;
   const anchor = anchorOf(shape);

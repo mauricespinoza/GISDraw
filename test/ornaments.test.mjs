@@ -4,8 +4,8 @@
  */
 import { placements, ornamentsSvg, symbolOf, ornamentDefaults, ORNAMENTS, U } from '../src/ornaments.js';
 import { PATTERNS, PATTERN_IDS, patternDef, patternPreview } from '../src/patterns.js';
-import { defaultStyle, pathToSvg, textToSvg, wavyPoints, screenLine } from '../src/style.js';
-import { makePath, makeNode, makeRectPath, makeText } from '../src/vector.js';
+import { defaultStyle, pathToSvg, pointToSvg, textToSvg, wavyPoints, screenLine } from '../src/style.js';
+import { makePath, makeNode, makeRectPath, makePoint, makeText } from '../src/vector.js';
 
 let pass = 0;
 let fail = 0;
@@ -180,6 +180,26 @@ const ctx = (extra = {}) => ({ P: (x, y) => [x, y], mmToPx: 1, ptToPx: 0.352778,
   ok(!pathToSvg(line, ctx({ mmToPx: 0.05 })).includes('<g fill="#00f"'), 'ornamento omitido cuando sería menor a 1,5 px');
   ok(!pathToSvg({ ...line, style: { ...line.style, ornament: 'none' } }, ctx()).includes('<g fill="#00f"'), 'sin ornamento no hay símbolos');
   for (const k of Object.keys(ORNAMENTS)) ok(ornamentDefaults(k).ornament === k, `defaults de ${k}`);
+}
+
+/* ---------- salida en mm de papel (lámina / imagen): lo que se ve se exporta, también lo chico */
+{
+  const PX = 25.4 / 96; // un píxel de pantalla, en mm
+  const mm = (extra = {}) => ctx({ mmToPx: 1, pxUnit: PX, ...extra });
+  const line = (size) => makePath([makeNode(0, 0), makeNode(100, 0)], { style: { ...defaultStyle(), stroke: '#00f', strokeWidth: 0.4, ...ornamentDefaults('thrust'), ornamentSize: size } });
+  for (const size of [1, 0.5, 0.3]) ok(pathToSvg(line(size), mm()).includes('<g fill="#00f"'), `ornamento de tamaño ${size} en mm de papel`);
+  ok(!pathToSvg(line(0.3), ctx({ mmToPx: 1 })).includes('<g fill="#00f"'), 'sin pxUnit sigue el mínimo de pantalla (1,5 px)');
+  // punto de 1 mm: radio 0,5 mm, no el mínimo de 1 unidad
+  const pt = makePoint(5, 5, { ...defaultStyle(), fill: '#c00', stroke: 'none', pointSize: 1, pointShape: 'circle' });
+  const r = Number(/a([\d.]+) /.exec(pointToSvg(pt, mm()))?.[1]);
+  ok(Math.abs(r - 0.5) < 0.01, 'punto de 1 mm: radio de 0,5 mm → ' + r);
+  // trama de 1 mm: baldosa de 1 mm
+  const poly = makeRectPath(0, 0, 10, 10, { ...defaultStyle(), fill: '#eee', stroke: 'none', pattern: 'dots', patternSize: 1 });
+  const dctx = mm();
+  pathToSvg(poly, dctx);
+  ok(/width="1"/.test(dctx.defs.join('')), 'trama de 1 mm: baldosa de 1 mm');
+  // letra de 2 pt (0,7 mm) se dibuja
+  ok(textToSvg(makeText(5, 5, 'a', undefined, 2), mm({ ptToPx: 0.352778 })).includes('<text'), 'texto de 2 pt en mm de papel');
 }
 
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLARON` : ''}`);
