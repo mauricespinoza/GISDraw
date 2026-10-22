@@ -197,8 +197,9 @@ export function elementTransform(L, el, off = L.offsets?.[el] || [0, 0], sc = L.
 /* --------------------------------------------------------- geometría de página */
 
 export function pageGeometry(L) {
-  let [W, H] = PAGES[L.page] || PAGES.A4;
-  if (L.orientation === 'landscape') [W, H] = [H, W];
+  // `pageMm`: página a medida (exportar imagen); sin orientación, ya viene como ancho × alto
+  let [W, H] = L.pageMm || PAGES[L.page] || PAGES.A4;
+  if (!L.pageMm && L.orientation === 'landscape') [W, H] = [H, W];
   const m = L.margin;
   const titleH = L.title && L.showTitle !== false ? 13 + (L.subtitle ? 5 : 0) : 0;
   const side = L.legend ? L.legendWidth : 0;
@@ -254,8 +255,9 @@ export function frameExtent(L, g = pageGeometry(L)) {
  * @param rasters [{ index, href, opacity, blend }] imágenes que cubren el marco
  *   exacto, con el índice de su capa (o de la primera del grupo compuesto)
  * @param attribution texto de fuentes
+ * @param opts `transparent`: sin fondo blanco; `bare`: sin el borde negro del marco
  */
-export function composeLayout(doc, L, rasters = [], attribution = '') {
+export function composeLayout(doc, L, rasters = [], attribution = '', { transparent = false, bare = false } = {}) {
   const g = pageGeometry(L);
   const ext = frameExtent(L, g);
   const k = 1000 / L.scale; // mm por metro
@@ -275,7 +277,7 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
     parts.push({ name, el, svg: `<g class="eo" transform="${elementTransform(L, el)}">${svg}</g>` });
   const part = (name, svg, extra = {}) => svg && parts.push({ name, svg, ...extra });
   const frameRect = `<rect x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" fill="#ffffff"/>`;
-  part('Fondo', `<rect width="${g.W}" height="${g.H}" fill="#fff"/>${frameRect}`, { locked: true });
+  if (!transparent) part('Fondo', `<rect width="${g.W}" height="${g.H}" fill="#fff"/>${frameRect}`, { locked: true });
 
   // ---- contenido del mapa, capa por capa
   const vectors = [];
@@ -300,7 +302,7 @@ export function composeLayout(doc, L, rasters = [], attribution = '') {
   part('Grilla y coordenadas', gridSvg(L, g, ext, P, defs, font));
 
   // ---- marco
-  part('Marco', `<rect x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" fill="none" stroke="#000" stroke-width="0.35"/>`);
+  if (!bare) part('Marco', `<rect x="${r2(g.fx)}" y="${r2(g.fy)}" width="${r2(g.fw)}" height="${r2(g.fh)}" fill="none" stroke="#000" stroke-width="0.35"/>`);
 
   // ---- título
   if (L.title && L.showTitle !== false) {

@@ -824,6 +824,27 @@ export class LayoutEditor {
     return [...src].filter(Boolean).join('; ');
   }
 
+  /**
+   * Una región del mundo (rect {x, y, w, h}) compuesta como lámina SIN adornos —sin título, grilla,
+   * leyenda ni marco— a la escala de referencia: la base de «Exportar imagen». Las capas raster
+   * (mapa base, relieve, imágenes) salen a la resolución `dpi`.
+   * @returns {{ svg: string, geometry: { W: number, H: number } }} W, H en mm de papel
+   */
+  async renderRegion(rect, { dpi, transparent = false, signal } = {}) {
+    const doc = this.app.history.doc;
+    const W = (rect.w * 1000) / doc.refScale;
+    const H = (rect.h * 1000) / doc.refScale;
+    const L = {
+      ...defaultLayout(doc, this.app.view),
+      ...(doc.layout || {}),
+      page: 'custom', pageMm: [W, H], margin: 0, title: '', subtitle: '', showTitle: false, grid: 'none', zebra: false,
+      north: false, scalebar: false, scalenum: false, legend: false, showInfo: false, texts: [], offsets: {}, scales: {},
+      frame: { x: 0, y: 0, w: W, h: H }, scale: doc.refScale, center: [rect.x + rect.w / 2, rect.y + rect.h / 2], symbolScale: 'paper',
+    };
+    const rasters = await this.rasters(L, dpi, { signal });
+    return composeLayout(doc, L, rasters, '', { transparent, bare: true });
+  }
+
   async build(dpi, signal) {
     const L = this.L;
     const rasters = await this.rasters(L, dpi, { signal });

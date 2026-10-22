@@ -870,7 +870,8 @@ class App {
       gis && item('GeoJSON de la capa activa (UTM 19S)', () => this.exportGeoJSON(false)),
       item('Illustrator con capas (.jsx, lámina del layout)', () => this.layout.exportAs('jsx')),
       item('SVG de la lámina con capas (Illustrator, Inkscape)', () => this.layout.exportAs('svg')),
-      item('Imagen PNG de la vista', () => this.exportView('png')),
+      item('Imagen (PNG, JPG, TIFF, WebP) con dpi a elección…', () => this.exportImageDialog()),
+      item('Imagen PNG de la vista (tal como se ve)', () => this.exportView('png')),
       item('SVG de la vista (vectorial)', () => this.exportView('svg')),
       h('div', { class: 'mh' }, 'Vista'),
       item(`Rueda del mouse: ${this.settings.wheelMode === 'pan' ? 'desplaza (Ctrl/Alt = zoom) → cambiar a zoom' : 'zoom → cambiar a desplazar'}`, () => {
@@ -2893,6 +2894,98 @@ class App {
   }
 
   /** Vista actual a PNG (raster compuesto) o SVG (vectores + rasters incrustados). */
+  /**
+   * Exportar imagen: PNG, JPG, TIFF o WebP, de la hoja del lienzo (Canvas), de todo lo dibujado o de la
+   * vista, a 72–1200 dpi. El tamaño de papel sale de la escala de referencia (1 mm de papel = refScale/1000 m).
+   */
+  async exportImageDialog() {
+    const { IMAGE_DPIS, IMAGE_FORMATS, mmToPx, sizeProblem } = await import('./io/imageExport.js');
+    const doc = this.history.doc;
+    const canvasMode = this.mode !== 'gis';
+    const areas = {
+      ...(canvasMode ? { sheet: 'Hoja del lienzo' } : {}),
+      all: 'Todo lo dibujado (capas visibles)',
+      view: 'Lo que se ve ahora en pantalla',
+    };
+    const regionOf = (area) => {
+      if (area === 'sheet') return canvasRect(doc);
+      if (area === 'view') return { x: this.view.cx - (this.view.w * this.view.mpp) / 2, y: this.view.cy - (this.view.h * this.view.mpp) / 2, w: this.view.w * this.view.mpp, h: this.view.h * this.view.mpp };
+      return unionBBox(allTopShapes(doc).map((x) => shapeBBox(x.shape, this.editor.est())));
+    };
+    const last = this.settings.imageExport || {};
+    const v = await askForm({
+      title: 'Exportar imagen',
+      hint: `El tamaño en papel sale de la escala de referencia 1:${doc.refScale.toLocaleString('es-CL')}. Más dpi, más píxeles: 300 dpi para imprimir, 72–96 para pantalla.`,
+      fields: [
+        { key: 'area', label: 'Qué exportar', type: 'select', options: areas, value: areas[last.area] ? last.area : canvasMode ? 'sheet' : 'all' },
+        { key: 'format', label: 'Formato', type: 'select', options: Object.fromEntries(Object.entries(IMAGE_FORMATS).map(([k, f]) => [k, f.label])), value: last.format || 'png' },
+        { key: 'dpi', label: 'Resolución', type: 'select', options: Object.fromEntries(IMAGE_DPIS.map((d) => [d, `${d} dpi${d === 72 ? ' (pantalla)' : d === 300 ? ' (impresión)' : d >= 1200 ? ' (muy pesado)' : ''}`])), value: last.dpi || 300 },
+        { key: 'quality', label: 'Calidad', type: 'number', min: 10, max: 100, step: 1, unit: '%', value: last.quality || 92, when: (x) => IMAGE_FORMATS[x.format].quality },
+        { key: 'background', label: 'Fondo', type: 'select', options: { white: 'Blanco', transparent: 'Transparente' }, value: last.background || 'white', when: (x) => IMAGE_FORMATS[x.format].alpha },
+      ],
+      ok: 'Exportar',
+      validate: (x) => {
+        const r = regionOf(x.area);
+        if (!r || !(r.w > 0) || !(r.h > 0)) return 'No hay nada que exportar en esa área (¿hay objetos en capas visibles?)';
+        return sizeProblem(mmToPx((r.w * 1000) / doc.refScale, Number(x.dpi)), mmToPx((r.h * 1000) / doc.refScale, Number(x.dpi)));
+      },
+    });
+    if (!v) return;
+    this.saveSettings({ imageExport: { area: v.area, format: v.format, dpi: Number(v.dpi), quality: v.quality, background: v.background } });
+    await this.exportImage(regionOf(v.area), { ...v, dpi: Number(v.dpi) });
+  }
+
+  async exportImage(rect, { format, dpi, quality = 92, background = 'white' }) {
+    const { IMAGE_FORMATS, buildTiff, jpegWithDpi, mmToPx, pngWithDpi } = await import('./io/imageExport.js');
+    const fmt = IMAGE_FORMATS[format];
+    const transparent = fmt.alpha && background === 'transparent';
+    this.message(`Generando imagen ${format.toUpperCase()} a ${dpi} dpi…`, 0);
+    try {
+      const { svg, geometry } = await this.layout.renderRegion(rect, { dpi, transparent });
+      const wPx = mmToPx(geometry.W, dpi);
+      const hPx = mmToPx(geometry.H, dpi);
+      const canvas = document.createElement('canvas');
+      canvas.width = wPx;
+      canvas.height = hPx;
+      const ctx = canvas.getContext('2d', { willReadFrequently: format === 'tiff' });
+      if (!ctx || canvas.width !== wPx) throw new Error('El navegador no pudo crear una imagen tan grande: baja los dpi');
+      if (!transparent) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, wPx, hPx);
+      }
+      const img = new Image();
+      const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+      try {
+        img.src = url;
+        await img.decode();
+        ctx.drawImage(img, 0, 0, wPx, hPx);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      let blob;
+      if (format === 'tiff') {
+        blob = buildTiff({ width: wPx, height: hPx, dpi, alpha: transparent, readRows: (y, n) => ctx.getImageData(0, y, wPx, n).data });
+      } else {
+        const raw = await new Promise((res) => canvas.toBlob(res, fmt.mime, quality / 100));
+        if (!raw) throw new Error('No se pudo codificar la imagen');
+        if (raw.type !== fmt.mime) throw new Error(`Este navegador no sabe guardar ${format.toUpperCase()}: elige PNG, JPG o TIFF`);
+        const bytes = new Uint8Array(await raw.arrayBuffer());
+        const tagged = format === 'png' ? pngWithDpi(bytes, dpi) : format === 'jpg' ? jpegWithDpi(bytes, dpi) : bytes;
+        blob = new Blob([tagged], { type: fmt.mime });
+      }
+      const base =
+        String(this.history.doc.title || 'mapa')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^\w-]+/g, '_')
+          .replace(/^_+|_+$/g, '') || 'mapa';
+      download(blob, `${base}_${dpi}dpi.${fmt.ext}`, fmt.mime);
+      this.message(`Imagen ${format.toUpperCase()} exportada: ${wPx.toLocaleString('es-CL')} × ${hPx.toLocaleString('es-CL')} px a ${dpi} dpi (${(blob.size / 1e6).toFixed(1)} MB)`, 7000);
+    } catch (err) {
+      this.message(`No se pudo exportar la imagen: ${err.message}`, 8000);
+    }
+  }
+
   async exportView(kind) {
     const w = Math.round(this.view.w);
     const hgt = Math.round(this.view.h);
