@@ -60,6 +60,7 @@ node test/smooth.test.mjs   # pincel de Suavizar: solo el sector bajo el pincel
 node test/split.test.mjs      # Split de líneas y polígonos (toque o arrastre) y Reshape
 node test/deform.test.mjs     # Deform y Drag: gradiente, alcance, subdivisión y nodos compartidos
 node test/freeze.test.mjs     # Freeze node: nodos fijos ante transformaciones y límite de Deform, Drag y Suavizar
+node test/imageexport.test.mjs # exportar imagen: TIFF, dpi en PNG/JPEG y límites de tamaño
 node test/smoothtopo.test.mjs # suavizado por arcos: nodos compartidos, sin perder el cierre
 node test/project.test.mjs   # proyecto .gisdrawer autocontenido (imágenes incrustadas)
 node test/transform.test.mjs # Transformar (mover/rotar/escalar exactos) y lectura de coordenadas
@@ -565,6 +566,7 @@ entiende `mix-blend-mode`).
 | GeoJSON | WGS84 o con `crs` | WGS84 (RFC 7946) o UTM 19S |
 | GeoTIFF | elevación (una banda) o imagen RGB(A), en su sistema | relieve calculado, imagen georreferenciada |
 | **SVG / Illustrator** | **archivo .ai nativo**, como proyecto nuevo (una capa por capa de Illustrator, imágenes incrustadas como capas de imagen, las ocultas llegan ocultas), **PDF vectorial**, archivo .svg (una capa por capa de primer nivel) y **pegar con Ctrl+V** lo copiado en Illustrator | **lámina con un grupo por capa** (.svg) y **script de Illustrator (.jsx) que crea una capa real por capa**; copiar (Ctrl+C) deja SVG en puntos para pegar en Illustrator |
+| **Imagen** (PNG, JPG, TIFF, WebP) | imagen de fondo o georreferenciada (PNG, JPG, TIFF) | **Archivo → Exportar → Imagen…**: la hoja del lienzo, todo lo dibujado o la vista, de 72 a 1200 dpi (con los dpi escritos en el archivo), con fondo blanco o transparente y calidad para JPG/WebP; el TIFF sale sin compresión, RGB o RGBA |
 | **FieldDraw** | proyecto `.fdproj.json`, paquete `.fdproj.zip` o GeoJSON exportado, con simbología y georreferencia | — |
 | ASCII grid | elevación | — |
 | Proyecto `.gisdrawer` | sí, con sus imágenes y modelos de elevación incrustados | sí, **autocontenido**: lleva incrustados (base64) los archivos raster de sus capas (imágenes pegadas, GeoTIFF, mapas georreferenciados, DEM); además se guarda solo en el navegador |
