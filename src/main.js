@@ -29,7 +29,7 @@ import { forgetRecent, hasContent, listRecent, loadRecent, rememberProject } fro
 import { buildTopology, simplifyArc, smoothArcLevel, smoothTopology } from './smoothTopo.js';
 import { tidyShapes } from './tidy.js';
 import { APP_VERSION, APP_AUTHOR, CHANGELOG } from './version.js';
-import { CANVAS_TABS, GIS_TABS, MODES, canvasDefaults, canvasFromMm, canvasRect, modeOf, normalizeCanvas } from './mode.js';
+import { CANVAS_MIN_MM, CANVAS_TABS, GIS_TABS, MODES, canvasCovering, canvasDefaults, canvasFromMm, canvasMm, canvasRect, modeOf, normalizeCanvas } from './mode.js';
 
 const SETTINGS_KEY = 'gd.settings';
 
@@ -178,7 +178,10 @@ class App {
     };
     this.layout = new LayoutEditor(this);
     this.panels = new Panels(this);
-    this.panels.onShow = (tab) => (tab === 'layout' ? this.layout.show() : this.layout.hide());
+    this.panels.onShow = (tab) => {
+      this.updatePage();
+      return tab === 'layout' ? this.layout.show() : this.layout.hide();
+    };
     this.clipboard = [];
 
     this.history.onChange((doc, meta) => this.onDocChange(doc, meta));
@@ -296,6 +299,83 @@ class App {
     const [x0, y0] = this.view.toScreen(r.x, r.y + r.h);
     const [x1, y1] = this.view.toScreen(r.x + r.w, r.y);
     Object.assign(el.style, { left: `${x0}px`, top: `${y0}px`, width: `${x1 - x0}px`, height: `${y1 - y0}px` });
+    this.updatePageHandles([x0, y0, x1, y1]);
+  }
+
+  /**
+   * Tiradores de la hoja personalizada: 4 vértices y 4 bordes. Solo con la hoja en «Personalizado»
+   * y la pestaña Lienzo a la vista (así no estorban al dibujar).
+   */
+  updatePageHandles([x0, y0, x1, y1]) {
+    const host = document.getElementById('page-edit');
+    if (!host) return;
+    const on = this.mode !== 'gis' && this.history.doc.canvas?.size === 'custom' && this.panels?.tab === 'canvas' && !document.getElementById('app').classList.contains('panel-hidden');
+    host.hidden = !on;
+    if (!on) return;
+    if (!host.firstChild) {
+      host.append(h('div', { class: 'pe-frame' }));
+      for (const k of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) {
+        const hd = h('div', { class: `pe-h ${k}${k.length === 1 ? ' edge' : ''}`, 'data-h': k });
+        hd.addEventListener('pointerdown', (e) => this.pageHandleDown(e, k));
+        host.append(hd);
+      }
+    }
+    const mx = (x0 + x1) / 2;
+    const my = (y0 + y1) / 2;
+    const at = { nw: [x0, y0], n: [mx, y0], ne: [x1, y0], e: [x1, my], se: [x1, y1], s: [mx, y1], sw: [x0, y1], w: [x0, my] };
+    Object.assign(host.firstChild.style, { left: `${x0}px`, top: `${y0}px`, width: `${x1 - x0}px`, height: `${y1 - y0}px` });
+    for (const hd of host.querySelectorAll('.pe-h')) {
+      const [x, y] = at[hd.dataset.h];
+      hd.style.left = `${x}px`;
+      hd.style.top = `${y}px`;
+    }
+  }
+
+  /** Arrastre de un tirador: el lado u esquina opuesta queda fija; las medidas se redondean al mm. */
+  pageHandleDown(e, k) {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = e.currentTarget;
+    el.setPointerCapture?.(e.pointerId);
+    const doc0 = this.history.doc;
+    const r = canvasRect(doc0);
+    const m = doc0.refScale / 1000; // metros de terreno por mm de papel
+    const vr = this.viewport.getBoundingClientRect();
+    this.history.begin();
+    const move = (ev) => {
+      const [wx, wy] = this.view.toWorld(ev.clientX - vr.left, ev.clientY - vr.top);
+      let { x, y, w, h } = r;
+      const size = (v) => Math.max(CANVAS_MIN_MM, Math.round(v / m)) * m;
+      if (k.includes('w')) {
+        w = size(r.x + r.w - wx);
+        x = r.x + r.w - w;
+      } else if (k.includes('e')) w = size(wx - r.x);
+      if (k.includes('n')) h = size(wy - r.y); // norte: y hacia arriba
+      else if (k.includes('s')) {
+        h = size(r.y + r.h - wy);
+        y = r.y + r.h - h;
+      }
+      this.history.preview({ ...this.history.doc, canvas: normalizeCanvas({ ...doc0.canvas, ...canvasCovering({ x, y, w, h }, doc0.refScale) }) });
+    };
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      this.history.end(); // un solo paso de deshacer; guarda y refresca el panel
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+
+  /** Encajar a objetos: la hoja pasa a ser exactamente la caja de lo dibujado (capas visibles). */
+  fitCanvasToObjects() {
+    const doc = this.history.doc;
+    const box = unionBBox(allTopShapes(doc).map((x) => shapeBBox(x.shape, this.editor.est())));
+    if (!box || !(box.w >= 0)) return this.message('No hay objetos dibujados (en capas visibles) a los que encajar la hoja');
+    this.setCanvas(canvasCovering(box, doc.refScale), { defaults: false });
+    const [w, h] = canvasMm(this.history.doc.canvas);
+    this.message(`Hoja encajada a los objetos: ${w.toFixed(1)} × ${h.toFixed(1)} mm${w <= CANVAS_MIN_MM || h <= CANVAS_MIN_MM ? ` (mínimo ${CANVAS_MIN_MM} mm)` : ''}`);
   }
 
   /** Encuadra la hoja entera en la vista. */
@@ -1005,6 +1085,7 @@ class App {
 
   togglePanel() {
     document.getElementById('app').classList.toggle('panel-hidden');
+    this.updatePage();
   }
 
   /* --------------------------------------------------- menú contextual */

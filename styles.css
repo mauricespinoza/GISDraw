@@ -1568,6 +1568,70 @@ body {
   pointer-events: none;
 }
 
+/* hoja personalizada: tiradores en vértices y bordes para cambiar su tamaño arrastrando */
+#page-edit {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+#page-edit[hidden] {
+  display: none;
+}
+
+#page-edit .pe-frame {
+  position: absolute;
+  border: 1.5px dashed var(--accent);
+  pointer-events: none;
+}
+
+#page-edit .pe-h {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  background: #fff;
+  border: 2px solid var(--accent);
+  border-radius: 3px;
+  pointer-events: auto;
+  touch-action: none;
+  box-sizing: border-box;
+}
+
+#page-edit .pe-h.edge {
+  border-radius: 7px;
+  opacity: 0.85;
+}
+
+#page-edit .pe-h.nw,
+#page-edit .pe-h.se {
+  cursor: nwse-resize;
+}
+
+#page-edit .pe-h.ne,
+#page-edit .pe-h.sw {
+  cursor: nesw-resize;
+}
+
+#page-edit .pe-h.n,
+#page-edit .pe-h.s {
+  cursor: ns-resize;
+}
+
+#page-edit .pe-h.e,
+#page-edit .pe-h.w {
+  cursor: ew-resize;
+}
+
+@media (pointer: coarse) {
+  #page-edit .pe-h {
+    width: 22px;
+    height: 22px;
+    margin: -11px 0 0 -11px;
+  }
+}
+
 #app.mode-canvas #coords,
 #app.mode-canvas #btn-redraw,
 #app.mode-canvas #attribution {

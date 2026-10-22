@@ -173,6 +173,9 @@ export class Panels {
         ...custom,
         h('div', { class: 'grid-btns two' }, orient('portrait', 'Vertical'), orient('landscape', 'Horizontal')),
         h('p', { class: 'hint' }, `Hoja de ${Math.round(w)} × ${Math.round(hh)} mm. El dibujo puede salir de la hoja; la hoja marca el área de la lámina.`),
+        c.size === 'custom' ? h('p', { class: 'hint' }, 'Arrastra los vértices o los bordes de la hoja en el lienzo para cambiar su tamaño (se redondea al mm).') : null,
+        btn('▣ Encajar a objetos', () => app.fitCanvasToObjects()),
+        h('p', { class: 'hint' }, 'Reduce (o amplía) la hoja a la caja exacta de lo dibujado en las capas visibles y la deja como Personalizado.'),
         btn('⛶ Encuadrar la hoja', () => app.fitCanvas()),
       ),
       sec(

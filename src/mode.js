@@ -47,6 +47,14 @@ export function normalizeCanvas(c) {
     out.h = Math.max(10, Number(out.h) || 297);
   }
   out.orientation = out.orientation === 'landscape' ? 'landscape' : 'portrait';
+  // posición de la hoja en el mundo (centro): sin ella, la de la vista inicial
+  if (Number.isFinite(out.cx) && Number.isFinite(out.cy)) {
+    out.cx = Number(out.cx);
+    out.cy = Number(out.cy);
+  } else {
+    delete out.cx;
+    delete out.cy;
+  }
   return out;
 }
 
@@ -59,8 +67,25 @@ export function canvasMm(c) {
 
 /** Hoja en el mundo (metros UTM, y hacia arriba): { x, y, w, h } con (x, y) en la esquina inferior izquierda. */
 export function canvasRect(doc) {
-  const [w, h] = canvasMm(doc.canvas).map((mm) => (mm * doc.refScale) / 1000);
-  return { x: CANVAS_CENTER[0] - w / 2, y: CANVAS_CENTER[1] - h / 2, w, h };
+  const c = normalizeCanvas(doc.canvas);
+  const [w, h] = canvasMm(c).map((mm) => (mm * doc.refScale) / 1000);
+  const [cx, cy] = Number.isFinite(c.cx) ? [c.cx, c.cy] : CANVAS_CENTER;
+  return { x: cx - w / 2, y: cy - h / 2, w, h };
+}
+
+/** Medida mínima de la hoja personalizada (mm). */
+export const CANVAS_MIN_MM = 10;
+
+/**
+ * Hoja personalizada que cubre un rectángulo del mundo ({x, y, w, h}, y hacia
+ * arriba): ajustes de `canvas` con medidas en mm de papel a la escala `refScale`
+ * y el centro en el mundo. Con 0,01 mm de resolución; no baja de `CANVAS_MIN_MM`.
+ */
+export function canvasCovering(rect, refScale) {
+  const mm = (m) => Math.max(CANVAS_MIN_MM, Math.round(((m * 1000) / refScale) * 100) / 100);
+  const w = mm(rect.w);
+  const h = mm(rect.h);
+  return { size: 'custom', orientation: w > h ? 'landscape' : 'portrait', w, h, cx: rect.x + rect.w / 2, cy: rect.y + rect.h / 2 };
 }
 
 /** Hoja que mejor calza con unas medidas (mm), o la personalizada. */
