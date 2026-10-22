@@ -1443,7 +1443,7 @@ class App {
         { key: 'sx', label: 'Escala', type: 'number', value: 100, min: 5, max: 500, step: 1, unit: '%', log: true },
         { key: 'uniform', label: 'Escala uniforme (vertical = horizontal)', type: 'check', value: last.uniform ?? true },
         { key: 'sy', label: 'Escala vertical', type: 'number', value: 100, min: 5, max: 500, step: 1, unit: '%', log: true, when: (v) => !v.uniform },
-        { key: 'strokes', label: 'Escalar también los grosores de trazo', type: 'check', value: last.strokes ?? false },
+        { key: 'strokes', label: 'Escalar también grosores, tramas, ornamentos y letras', type: 'check', value: last.strokes ?? true },
         { key: 'pivot', label: 'Centro de rotación y escala', type: 'select', value: last.pivot || 'center', options: { center: 'Centro de la selección', each: 'Centro de cada objeto' } },
       ],
       ok: 'Aplicar',

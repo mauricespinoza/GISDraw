@@ -197,6 +197,7 @@ export function mapPoints(shape, f) {
 export const translateShape = (shape, dx, dy) => mapPoints(shape, (p) => ({ x: p.x + dx, y: p.y + dy }));
 
 export function scaleShape(shape, origin, sx, sy) {
+  if (shape.type === 'group') return { ...shape, children: shape.children.map((c) => scaleShape(c, origin, sx, sy)) };
   const out = mapPoints(shape, (p) => ({
     x: origin.x + (p.x - origin.x) * sx,
     y: origin.y + (p.y - origin.y) * sy,
@@ -207,6 +208,31 @@ export function scaleShape(shape, origin, sx, sy) {
     // un cuadro de texto crece con el estirado: el ajuste de línea se mantiene
     if (shape.boxWidth > 0) out.boxWidth = Math.round(shape.boxWidth * k * 10) / 10;
   }
+  return out;
+}
+
+/** Medidas de papel (mm) del estilo que crecen con la escala de la forma. */
+const SIZE_KEYS = ['strokeWidth', 'casingWidth', 'waveAmp', 'waveLen', 'ornamentSpacing', 'ornamentGap', 'ornamentSize', 'patternSize', 'markerSize', 'pointSize'];
+
+/**
+ * Escala por `k` lo que no son coordenadas y no sigue a la geometría: grosores
+ * de trazo y de halo, ondas, ornamentos, tramas, flechas, puntos y el halo del
+ * texto (el tamaño de letra lo escala `scaleShape`). Recursivo en grupos.
+ * Con la geometría ya escalada, la forma se ve como una versión reducida o
+ * ampliada del original, no con el mismo trazo sobre otro tamaño.
+ */
+export function scaleSizes(shape, k) {
+  if (!(k > 0) || k === 1) return shape;
+  if (shape.type === 'group') return { ...shape, children: shape.children.map((c) => scaleSizes(c, k)) };
+  const r = (v) => Math.round(v * k * 1000) / 1000;
+  const st = shape.style;
+  let style = st;
+  if (st) {
+    style = { ...st };
+    for (const key of SIZE_KEYS) if (st[key] > 0) style[key] = r(st[key]);
+  }
+  const out = { ...shape, style };
+  if (shape.type === 'text' && shape.haloWidth > 0) out.haloWidth = r(shape.haloWidth);
   return out;
 }
 

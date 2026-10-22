@@ -8,7 +8,7 @@
  */
 
 import { allTopShapes, findTopShape, replaceShapes } from './doc.js';
-import { cloneNode, cloneShape, makeGroup, newId, rotateShape, scaleShape, shapeBBox, splitNodes, translateShape, unionBBox, walkShapes } from './vector.js';
+import { cloneNode, cloneShape, makeGroup, newId, rotateShape, scaleShape, scaleSizes, shapeBBox, splitNodes, translateShape, unionBBox, walkShapes } from './vector.js';
 
 /* ------------------------------------------------------------ portapapeles */
 
@@ -513,19 +513,12 @@ export function frozenPoints(doc, ids = null) {
 
 /* ------------------------------------------------------- transformar */
 
-/** Escala los grosores de trazo (y de grupos, recursivo) por `k`. */
-function scaleStrokes(shape, k) {
-  if (shape.type === 'group') return { ...shape, children: shape.children.map((c) => scaleStrokes(c, k)) };
-  const w = shape.style?.strokeWidth;
-  return w > 0 ? { ...shape, style: { ...shape.style, strokeWidth: Math.round(w * k * 1000) / 1000 } } : shape;
-}
-
 /**
  * Transformar con valores exactos (diálogo Transformar): escala `sx`, `sy`
  * (factores), rotación `angle` (grados, antihoraria) y desplazamiento `dx`,
  * `dy` (unidades del mundo), en ese orden. `pivot`: 'center' (de toda la
  * selección) o 'each' (cada objeto en su propio centro). `strokes`: escalar
- * también los grosores de trazo.
+ * también grosores, tramas, ornamentos, halos y demás medidas de papel.
  */
 export function transformShapes(doc, ids, { dx = 0, dy = 0, angle = 0, sx = 1, sy = 1, pivot = 'center', strokes = false } = {}, est = null) {
   const set = ids instanceof Set ? ids : new Set(ids);
@@ -539,7 +532,7 @@ export function transformShapes(doc, ids, { dx = 0, dy = 0, angle = 0, sx = 1, s
     const o = pivot === 'each' ? mid(shapeBBox(s, est)) : all;
     let t = s;
     if (sx !== 1 || sy !== 1) t = scaleShape(t, o, sx, sy);
-    if (strokes && k !== 1) t = scaleStrokes(t, k);
+    if (strokes && k !== 1) t = scaleSizes(t, k);
     if (angle) t = rotateShape(t, o, angle);
     if (dx || dy) t = translateShape(t, dx, dy);
     if (t !== s) map.set(s.id, t);
