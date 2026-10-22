@@ -1534,8 +1534,7 @@ class App {
           // imagen (no se mueve ni escala), se busca el SVG por la API asíncrona del portapapeles
           const viaApi = await this.readSvgFromClipboardApi();
           if (viaApi) return this.pasteText(viaApi, inPlace);
-          this.message(`Solo llegó una imagen (formatos: ${types.join(', ') || 'ninguno'}). Se pegó como capa de imagen fija; para un dibujo editable usa Archivo → Importar con el .ai`, 12000);
-          return this.pasteImage(img);
+          return this.imageOnlyPaste(img, types);
         }
         if (/<svg[\s>]/i.test(text || html)) return this.pasteText(/<svg[\s>]/i.test(text) ? text : html, inPlace);
         // una imagen dentro de HTML (<img src="data:...">) copiada de una página o documento
@@ -1775,6 +1774,24 @@ class App {
     this.message(`Imagen pegada como capa «${name}» en el centro de la vista.${this.mode === 'gis' ? ' Para ubicarla con precisión: Archivo → Georreferenciar imagen.' : ''}`, 7000);
   }
 
+  /**
+   * Lo copiado solo trae una imagen (Illustrator deja el SVG en un formato propio que el navegador no
+   * puede leer): en vez de crear en silencio una capa de imagen fija, se explica y se ofrece la vía vectorial.
+   */
+  async imageOnlyPaste(img, types = []) {
+    const pick = await askChoice({
+      title: 'Solo llegó una imagen, no el dibujo vectorial',
+      hint: `El navegador no puede leer el SVG que Illustrator deja en el portapapeles (formatos recibidos: ${types.join(', ') || 'ninguno'}). Para traer el dibujo vectorial y editable: en Illustrator, Archivo → Exportar → Exportar selección (o Exportar como) → SVG, o guarda el .ai, y elígelo aquí.`,
+      items: [
+        { value: 'file', label: 'Importar un archivo .svg / .ai / .pdf…', hint: 'Dibujo vectorial editable, una capa por capa de Illustrator' },
+        { value: 'image', label: 'Pegar solo como imagen', hint: 'Capa de imagen fija: no se puede mover ni escalar sin georreferenciar' },
+      ],
+      cancel: 'Cancelar',
+    });
+    if (pick === 'file') return this.importSvgFile();
+    if (pick === 'image') return this.pasteImage(img);
+  }
+
   /** Busca código SVG en cualquier formato del portapapeles con la API asíncrona (puede pedir permiso). */
   async readSvgFromClipboardApi() {
     try {
@@ -1805,7 +1822,7 @@ class App {
             const html = await (await item.getType('text/html')).text();
             if (/<svg[\s>]/i.test(html)) text = html;
           }
-          if (img && !/<svg[\s>]/i.test(text)) return this.pasteImage(await item.getType(img));
+          if (img && !/<svg[\s>]/i.test(text)) return this.imageOnlyPaste(await item.getType(img), item.types);
         }
       } else text = (await navigator.clipboard?.readText()) || '';
     } catch {
