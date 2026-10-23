@@ -9,7 +9,7 @@
  */
 
 import { adjustRuns } from '../richText.js';
-import { BLEND_MODES, defaultLabels, findLayer, makeRasterLayer, makeVectorLayer, addLayer, removeLayer, moveLayer, duplicateLayer, updateLayer, mapShapes } from '../doc.js';
+import { BLEND_MODES, defaultLabels, findLayer, makeRasterLayer, makeVectorLayer, addLayer, removeLayer, moveLayer, duplicateLayer, updateLayer, mapShapes, layerOfShape, layerColor } from '../doc.js';
 import { DASHES, MARKERS, POINT_SHAPES, defaultStyle, textMeasurer } from '../style.js';
 import { ORNAMENTS, ORNAMENT_LIMITS, ornamentDefaults } from '../ornaments.js';
 import { PATTERNS, PATTERN_GROUPS, patternPreview } from '../patterns.js';
@@ -195,7 +195,9 @@ export class Panels {
     const doc = this.doc;
     const list = h('div', {});
     // de arriba hacia abajo, como en cualquier programa de dibujo
-    for (const l of [...doc.layers].reverse()) if (app.mode === 'gis' || !isGisLayer(l)) list.append(this.layerRow(l));
+    // capas a las que pertenece lo seleccionado: se resaltan con color
+    const selLayers = new Set([...app.editor.selection].map((id) => layerOfShape(doc, id)?.id));
+    for (const l of [...doc.layers].reverse()) if (app.mode === 'gis' || !isGisLayer(l)) list.append(this.layerRow(l, selLayers.has(l.id)));
     const tip = (el, t) => (el && el.setAttribute('data-tip', t), el);
     const add = h(
       'div',
@@ -242,7 +244,7 @@ export class Panels {
     ];
   }
 
-  layerRow(l) {
+  layerRow(l, hasSel = false) {
     const app = this.app;
     const doc = this.doc;
     const active = l.id === doc.activeLayerId;
@@ -278,7 +280,7 @@ export class Panels {
     );
     const el = h(
       'div',
-      { class: `layer${active ? ' active' : ''}` },
+      { class: `layer${active ? ' active' : ''}${hasSel ? ' has-sel' : ''}`, style: `--lc:${layerColor(doc, l.id)}` },
       h('button', { class: `ico${l.visible ? '' : ' off'}`, title: 'Visible', html: l.visible ? LAYER_ICONS.eye : LAYER_ICONS.eyeOff, onclick: () => set({ visible: !l.visible }) }),
       h('button', { class: `ico${l.locked ? '' : ' off'}`, title: 'Bloqueo', html: l.locked ? LAYER_ICONS.lock : LAYER_ICONS.unlock, onclick: () => set({ locked: !l.locked }) }),
       name,

@@ -147,6 +147,7 @@ class App {
       onMessage: (m) => this.message(m),
       onEditText: (t, isNew) => this.editText(t, isNew),
     });
+    this.editor.onEditOrnament = () => this.showPanel('geology');
     this.editor.onCommandKey = (e) => this.commandKey(e);
     this.editor.onPlainKey = (e) => this.plainKey(e);
     this.editor.onCutLine = (c) => this.runCutLine(c).catch((err) => this.message(`Error: ${err.message}`, 6000));
@@ -252,7 +253,7 @@ class App {
       this.lastSelSig = sig;
       // en celulares la barra de propiedades solo aparece con algo seleccionado
       document.getElementById('app').classList.toggle('has-sel', this.editor.selection.size > 0);
-      if (['style', 'geology', 'attrs', 'arrange'].includes(this.panels.tab)) this.panels.render();
+      if (['layers', 'style', 'geology', 'attrs', 'arrange'].includes(this.panels.tab)) this.panels.render();
       this.renderPropbar();
     }
     this.updateSwatch();

@@ -858,6 +858,12 @@ body {
   background: #fffbeb;
 }
 
+.layer.has-sel {
+  border-color: var(--lc, #0ea5e9);
+  background: color-mix(in srgb, var(--lc, #0ea5e9) 14%, #fff);
+  box-shadow: inset 4px 0 0 var(--lc, #0ea5e9);
+}
+
 .layer .ico {
   width: 30px;
   height: 30px;
