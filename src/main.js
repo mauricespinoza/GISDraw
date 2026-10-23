@@ -252,7 +252,7 @@ class App {
       this.lastSelSig = sig;
       // en celulares la barra de propiedades solo aparece con algo seleccionado
       document.getElementById('app').classList.toggle('has-sel', this.editor.selection.size > 0);
-      if (['style', 'geology', 'attrs', 'arrange'].includes(this.panels.tab)) this.panels.render();
+      if (['layers', 'style', 'geology', 'attrs', 'arrange'].includes(this.panels.tab)) this.panels.render();
       this.renderPropbar();
     }
     this.updateSwatch();

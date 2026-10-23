@@ -937,6 +937,12 @@ export class Editor {
     switch (d.mode) {
       case 'move':
         if (!d.moved) {
+          // Alt+clic sin arrastrar: no queda ninguna copia
+          if (d.dupOf) {
+            this.history.cancel();
+            this.setSelection(d.dupOf);
+            return;
+          }
           this.history.anchor = null;
           // clic sin arrastre sobre algo ya seleccionado y varios: quedarse solo con eso
           if (d.clickedSelected && !e.shiftKey && !this.addMode && this.selection.size > 1) this.setSelection([d.hitId]);
@@ -1168,17 +1174,21 @@ export class Editor {
     if (hit) {
       const id = hit.shape.id;
       const already = this.selection.has(id);
-      if (add) this.toggleSel(id);
+      // Alt+arrastrar duplica (con Shift, en línea recta): Shift ahí no debe quitar la selección
+      const dup = e.altKey && (already || !add);
+      if (add && !dup) this.toggleSel(id);
       else if (!already) this.setSelection([id]);
       if (!this.selection.has(id)) return;
       const shapes = this.selectedShapes().filter((s) => !s.locked);
       this.history.begin();
       this.drag = { mode: 'move', start: wp, sp0: sp, shapes, base: this.doc, moved: false, clickedSelected: already, hitId: id };
       // Alt al arrastrar = duplicar, como en Illustrator
-      if (e.altKey) {
+      if (dup) {
+        const orig = [...this.selection];
         this.duplicate(0, true);
         this.drag.shapes = this.selectedShapes();
         this.drag.base = this.doc;
+        this.drag.dupOf = orig;
       }
       return;
     }
