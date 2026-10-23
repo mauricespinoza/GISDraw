@@ -351,3 +351,12 @@ export class History {
     this.emit({ reset: true });
   }
 }
+
+/** Colores para distinguir capas (halo en el lienzo y marca en el panel). */
+const LAYER_COLORS = ['#0ea5e9', '#f97316', '#22c55e', '#e11d48', '#a855f7', '#eab308', '#14b8a6', '#ec4899', '#6366f1', '#84cc16'];
+
+/** Color estable de una capa según su posición en el documento. */
+export function layerColor(doc, layerId) {
+  const i = doc.layers.findIndex((l) => l.id === layerId);
+  return LAYER_COLORS[(i < 0 ? 0 : i) % LAYER_COLORS.length];
+}

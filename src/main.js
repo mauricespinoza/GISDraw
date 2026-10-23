@@ -147,6 +147,7 @@ class App {
       onMessage: (m) => this.message(m),
       onEditText: (t, isNew) => this.editText(t, isNew),
     });
+    this.editor.onEditOrnament = () => this.showPanel('geology');
     this.editor.onCommandKey = (e) => this.commandKey(e);
     this.editor.onPlainKey = (e) => this.plainKey(e);
     this.editor.onCutLine = (c) => this.runCutLine(c).catch((err) => this.message(`Error: ${err.message}`, 6000));

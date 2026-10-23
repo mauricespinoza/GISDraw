@@ -20,7 +20,7 @@
  */
 
 import { imageRect } from './raster/rasterView.js';
-import { addShapes, allTopShapes, findTopShape, inLockedLayer, layerOfShape, mapShapes, removeShapes, replaceShapes } from './doc.js';
+import { addShapes, allTopShapes, findTopShape, inLockedLayer, layerColor, layerOfShape, mapShapes, removeShapes, replaceShapes } from './doc.js';
 import { frozenPoints, setNodesFrozen, splitPath } from './ops.js';
 import { layoutText, textCorners } from './textLayout.js';
 import { pickShape, shapesInBox, shapesInLasso, shapeDistance, flatRings } from './hit.js';
@@ -2209,6 +2209,8 @@ export class Editor {
     }
     if (this.tool === 'select' && hit.shape.type === 'path') {
       this.setSelection([hit.shape.id]);
+      // línea con ornamento de falla o pliegue: abrir sus ajustes; el resto, editar nodos
+      if (hit.shape.style?.ornament && hit.shape.style.ornament !== 'none' && this.onEditOrnament) return this.onEditOrnament(hit.shape);
       this.setTool('node');
       return;
     }
@@ -2370,6 +2372,32 @@ export class Editor {
     const out = [];
     const r2 = (v) => Math.round(v * 10) / 10;
     const units = this.units();
+
+    // halo tenue de cada capa con algo seleccionado, sobre todos sus objetos (un color por capa)
+    const haloLayers = new Map();
+    for (const id of this.selection) {
+      const l = layerOfShape(this.doc, id);
+      if (l) haloLayers.set(l.id, l);
+    }
+    const est = this.est();
+    for (const l of haloLayers.values()) {
+      if (!l.visible) continue;
+      const col = layerColor(this.doc, l.id);
+      let n = 0;
+      const halo = (s) => {
+        if (s.type === 'group' || s.visible === false || ++n > 4000) return;
+        if (s.type === 'path') out.push(`<path d="${shapeD(s, P)}" fill="none" stroke="${col}" stroke-opacity="0.35" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`);
+        else {
+          const b = shapeBBox(s, est);
+          const [x0, y0] = P(b.x, b.y + b.h);
+          const [x1, y1] = P(b.x + b.w, b.y);
+          const w = Math.max(6, x1 - x0);
+          const hh = Math.max(6, y1 - y0);
+          out.push(`<rect x="${r2((x0 + x1) / 2 - w / 2)}" y="${r2((y0 + y1) / 2 - hh / 2)}" width="${r2(w)}" height="${r2(hh)}" rx="3" fill="none" stroke="${col}" stroke-opacity="0.35" stroke-width="2"/>`);
+        }
+      };
+      walkShapes(l.items, halo);
+    }
 
     // contorno de lo seleccionado
     for (const s of this.selectedShapes()) {

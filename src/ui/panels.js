@@ -9,7 +9,7 @@
  */
 
 import { adjustRuns } from '../richText.js';
-import { BLEND_MODES, defaultLabels, findLayer, makeRasterLayer, makeVectorLayer, addLayer, removeLayer, moveLayer, duplicateLayer, updateLayer, mapShapes, layerOfShape } from '../doc.js';
+import { BLEND_MODES, defaultLabels, findLayer, makeRasterLayer, makeVectorLayer, addLayer, removeLayer, moveLayer, duplicateLayer, updateLayer, mapShapes, layerOfShape, layerColor } from '../doc.js';
 import { DASHES, MARKERS, POINT_SHAPES, defaultStyle, textMeasurer } from '../style.js';
 import { ORNAMENTS, ORNAMENT_LIMITS, ornamentDefaults } from '../ornaments.js';
 import { PATTERNS, PATTERN_GROUPS, patternPreview } from '../patterns.js';
@@ -280,7 +280,7 @@ export class Panels {
     );
     const el = h(
       'div',
-      { class: `layer${active ? ' active' : ''}${hasSel ? ' has-sel' : ''}` },
+      { class: `layer${active ? ' active' : ''}${hasSel ? ' has-sel' : ''}`, style: `--lc:${layerColor(doc, l.id)}` },
       h('button', { class: `ico${l.visible ? '' : ' off'}`, title: 'Visible', html: l.visible ? LAYER_ICONS.eye : LAYER_ICONS.eyeOff, onclick: () => set({ visible: !l.visible }) }),
       h('button', { class: `ico${l.locked ? '' : ' off'}`, title: 'Bloqueo', html: l.locked ? LAYER_ICONS.lock : LAYER_ICONS.unlock, onclick: () => set({ locked: !l.locked }) }),
       name,
