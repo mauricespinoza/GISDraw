@@ -10,7 +10,8 @@ import { Editor, TOOLS } from './editor.js';
 import { StageRenderer } from './render.js';
 import { RasterView, demFiles, imageFiles, imageRect } from './raster/rasterView.js';
 import { BASEMAPS } from './raster/basemap.js';
-import { Panels } from './ui/panels.js';
+import { alignOf } from './textLayout.js';
+import { Panels, FONTS } from './ui/panels.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
 import { ALIGN_ICONS, ICONS } from './ui/icons.js';
 import { h, popSlider, popSliderOpen } from './ui/dom.js';
@@ -692,6 +693,11 @@ class App {
       return [wrap, off];
     };
     items.push(h('span', { class: 'pb-head' }, sel.length ? `${sel.length} sel.` : 'Nuevo'));
+    // solo textos seleccionados: opciones de texto en lugar de trazo/relleno
+    if (sel.length && sel.every((s) => s.type === 'text')) {
+      this.textPropbar(bar, sel, items, st);
+      return;
+    }
     // con el lápiz (o un trazo libre seleccionado) el suavizado va primero: es lo que se está ajustando
     const smooth = this.smoothControl();
     if (smooth) items.push(...smooth, h('span', { class: 'pb-sep' }));
@@ -740,6 +746,51 @@ class App {
       h('span', { class: 'pb-sep' }),
       h('button', { class: 'pb-btn pb-more', 'data-tip': 'Todo el estilo  Ctrl+F10', onclick: () => this.showPanel('style') }, 'Estilo…'),
       h('button', { class: 'pb-btn pb-more', 'data-tip': 'Tramas, fallas y tipos de línea geológicos', onclick: () => this.showPanel('geology') }, 'Geología…'),
+    );
+    bar.replaceChildren(...items);
+  }
+
+  /** Barra superior para una selección que son solo textos. */
+  textPropbar(bar, texts, items, st) {
+    const t = texts[0];
+    const ids = texts.map((x) => x.id);
+    const lbl = (x) => h('span', { class: 'pb-l' }, x);
+    const set = (patch, final = true) => {
+      if (!final && !this.history.anchor) this.history.begin();
+      const base = this.history.anchor || this.history.doc;
+      const next = mapShapes(base, ids, (x) => ({ ...x, ...patch }));
+      if (final) {
+        if (this.history.anchor) {
+          this.history.preview(next);
+          this.history.end();
+        } else this.history.commit(next);
+      } else this.history.preview(next);
+    };
+    const reRender = () => setTimeout(() => this.renderPropbar(), 0);
+    const font = h('select', { class: 'pb-sel', 'data-tip': 'Fuente', onchange: (e) => set({ fontFamily: e.target.value }) }, ...Object.entries({ ...FONTS, ...(FONTS[t.fontFamily] ? {} : { [t.fontFamily]: t.fontFamily }) }).map(([k, label]) => h('option', { value: k, selected: t.fontFamily === k }, label)));
+    const fs = h('input', { type: 'number', class: 'pb-num', min: 0.5, step: 0.5, value: t.fontSize, 'data-tip': 'Tamaño de letra (pt a la escala de referencia)' });
+    fs.addEventListener('change', () => Number(fs.value) > 0 && set({ fontSize: Number(fs.value) }));
+    popSlider(fs, { min: 1, max: 96, step: 0.5, log: true, get: () => t.fontSize, oninput: (v) => set({ fontSize: v }, false), onchange: (v) => set({ fontSize: v }), onclose: reRender, cls: 'pb' });
+    const tog = (label, tip, on, patch, style = '') => h('button', { class: `pb-btn${on ? ' on' : ''}`, 'data-tip': tip, style, onclick: () => set(patch) }, label);
+    const align = (id, label, tip) => tog(label, tip, alignOf(t) === id, { align: id, anchor: id === 'center' ? 'middle' : id === 'right' ? 'end' : 'start' });
+    const col = h('input', { type: 'color', value: /^#[0-9a-f]{6}$/i.test(st.fill) ? st.fill : '#111827' });
+    col.addEventListener('input', () => this.editStyle({ fill: col.value }, false));
+    col.addEventListener('change', () => this.editStyle({ fill: col.value }, true));
+    const rot = h('input', { type: 'number', class: 'pb-num', step: 5, value: Math.round(t.rotation || 0), 'data-tip': 'Rotación (°)' });
+    rot.addEventListener('change', () => Number.isFinite(Number(rot.value)) && set({ rotation: Number(rot.value) }));
+    const hc = h('input', { type: 'color', value: /^#[0-9a-f]{6}$/i.test(t.haloColor) ? t.haloColor : '#ffffff' });
+    hc.addEventListener('input', () => set({ haloColor: hc.value }, false));
+    hc.addEventListener('change', () => set({ haloColor: hc.value }));
+    items.push(
+      lbl('Fuente'), font, fs, h('span', { class: 'pb-u' }, 'pt'),
+      tog('N', 'Negrita', t.fontWeight >= 600, { fontWeight: t.fontWeight >= 600 ? 400 : 700 }, 'font-weight:700'),
+      tog('K', 'Cursiva', !!t.italic, { italic: !t.italic }, 'font-style:italic'),
+      h('span', { class: 'pb-sep' }), lbl('Color'), h('label', { class: 'pb-color', 'data-tip': 'Color de la letra' }, col),
+      h('span', { class: 'pb-sep' }), align('left', '⬅', 'Izquierda'), align('center', '↔', 'Centro'), align('right', '➡', 'Derecha'),
+      h('span', { class: 'pb-sep' }), lbl('Rot.'), rot,
+      h('span', { class: 'pb-sep' }), tog('Halo', 'Halo alrededor de las letras', !!t.halo, { halo: !t.halo }), h('label', { class: 'pb-color', 'data-tip': 'Color del halo' }, hc),
+      h('span', { class: 'pb-sep' }),
+      h('button', { class: 'pb-btn pb-more', 'data-tip': 'Todo el estilo del texto  Ctrl+F10', onclick: () => this.showPanel('style') }, 'Texto…'),
     );
     bar.replaceChildren(...items);
   }
