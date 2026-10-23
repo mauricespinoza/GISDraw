@@ -71,7 +71,7 @@ const widthOf = (v) => +(MAX_STROKE * (v / 1000) ** 2).toFixed(2);
 const MAX_POINT = 60;
 const pointOf = (v) => Math.max(0.2, +(MAX_POINT * (v / 1000) ** 2).toFixed(2));
 
-const FONTS = {
+export const FONTS = {
   'Helvetica, Arial, sans-serif': 'Helvetica / Arial',
   "'Times New Roman', Times, serif": 'Times',
   'Georgia, serif': 'Georgia',
