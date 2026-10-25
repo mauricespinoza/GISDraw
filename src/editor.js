@@ -1180,20 +1180,26 @@ export class Editor {
     const stops = g.stops.map((st) => this.gradientScreen(box, ...at(st[0])));
     const p0 = this.gradientScreen(box, ...at(0));
     const p1 = this.gradientScreen(box, ...at(1));
-    const L = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) || 1;
-    const rot = radial ? null : [p1[0] + ((p1[0] - p0[0]) / L) * 24, p1[1] + ((p1[1] - p0[1]) / L) * 24];
-    return { stops, p0, p1, rot, dir, at };
+    // dial de rotación del degradado: aro centrado en la forma; el asa marca el ángulo (en pantalla)
+    const c = this.gradientScreen(box, 0.5, 0.5);
+    const tl = this.gradientScreen(box, 0, 0);
+    const br = this.gradientScreen(box, 1, 1);
+    const R = Math.max(34, Math.min(90, Math.min(Math.abs(br[0] - tl[0]), Math.abs(br[1] - tl[1])) * 0.42));
+    const rot = radial ? null : [c[0] + R * Math.cos(a), c[1] - R * Math.sin(a)];
+    return { stops, p0, p1, rot, dir, at, c, R };
   }
 
   gradientHit(sp) {
     const t = this.gradientTarget();
     if (!t) return null;
     const hd = this.gradientHandles(t);
-    if (hd.rot && Math.hypot(sp[0] - hd.rot[0], sp[1] - hd.rot[1]) < 12) return { t, kind: 'angle' };
+    if (hd.rot && Math.hypot(sp[0] - hd.rot[0], sp[1] - hd.rot[1]) < 13) return { t, kind: 'angle' };
     // la última parada que coincide queda por encima: se prueba de atrás hacia adelante
     for (let i = hd.stops.length - 1; i >= 0; i--) {
       if (Math.hypot(sp[0] - hd.stops[i][0], sp[1] - hd.stops[i][1]) < 11) return { t, kind: 'stop', index: i };
     }
+    // cualquier punto del aro también gira el degradado
+    if (hd.rot && Math.abs(Math.hypot(sp[0] - hd.c[0], sp[1] - hd.c[1]) - hd.R) < 8) return { t, kind: 'angle' };
     return null;
   }
 
@@ -1203,7 +1209,7 @@ export class Editor {
     const [u, v] = this.gradientUV(box, sp);
     let next;
     if (d.kind === 'angle') {
-      let ang = (Math.atan2(-(v - 0.5), u - 0.5) * 180) / Math.PI;
+      let ang = (Math.atan2(-(sp[1] - d.center[1]), sp[0] - d.center[0]) * 180) / Math.PI;
       ang = ((ang % 360) + 360) % 360;
       // con Mayús (o cerca de un múltiplo de 45°) el ángulo salta a pasos de 15°
       const snap = Math.round(ang / 15) * 15;
@@ -1235,9 +1241,17 @@ export class Editor {
     out.push(`<line x1="${r2(x0)}" y1="${r2(y0)}" x2="${r2(x1)}" y2="${r2(y1)}" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-opacity="0.9"/>`);
     out.push(`<line x1="${r2(x0)}" y1="${r2(y0)}" x2="${r2(x1)}" y2="${r2(y1)}" stroke="#334155" stroke-width="1.5" stroke-linecap="round"/>`);
     if (hd.rot) {
-      out.push(`<line x1="${r2(x1)}" y1="${r2(y1)}" x2="${r2(hd.rot[0])}" y2="${r2(hd.rot[1])}" stroke="#334155" stroke-width="1" stroke-dasharray="2 2"/>`);
-      out.push(`<circle class="h" cx="${r2(hd.rot[0])}" cy="${r2(hd.rot[1])}" r="6.5" fill="#fff" stroke="#334155" stroke-width="1.5"/>`);
-      out.push(`<path d="M${r2(hd.rot[0] - 3)} ${r2(hd.rot[1])}a3 3 0 1 1 3 3" fill="none" stroke="#334155" stroke-width="1.2"/>`);
+      const [cx, cy] = hd.c;
+      const [rx, ry] = hd.rot;
+      const ang = Math.round(((live.g.angle ?? 0) % 360) * 10) / 10;
+      out.push(`<circle cx="${r2(cx)}" cy="${r2(cy)}" r="${r2(hd.R)}" fill="none" stroke="#fff" stroke-width="4" stroke-opacity="0.8"/>`);
+      out.push(`<circle cx="${r2(cx)}" cy="${r2(cy)}" r="${r2(hd.R)}" fill="none" stroke="#334155" stroke-width="1.2" stroke-dasharray="4 3"/>`);
+      out.push(`<line x1="${r2(cx)}" y1="${r2(cy)}" x2="${r2(rx)}" y2="${r2(ry)}" stroke="#334155" stroke-width="1" stroke-dasharray="2 2"/>`);
+      out.push(`<circle class="h" cx="${r2(rx)}" cy="${r2(ry)}" r="9" fill="#334155" stroke="#fff" stroke-width="2.5"/>`);
+      out.push(`<path d="M${r2(rx - 4)} ${r2(ry + 1)}a4 4 0 1 1 4 3.2M${r2(rx + 1.5)} ${r2(ry + 2.4)}l2.6 1.8l-0.4-3.1" fill="none" stroke="#fff" stroke-width="1.3" stroke-linecap="round"/>`);
+      if (this.drag?.mode === 'gradient' && this.drag.kind === 'angle') {
+        out.push(`<text x="${r2(cx)}" y="${r2(cy + hd.R + 18)}" text-anchor="middle" font-size="13" font-weight="700" fill="#334155" stroke="#fff" stroke-width="3" paint-order="stroke">${ang}°</text>`);
+      }
     }
     live.g.stops.forEach((st, i) => {
       const [x, y] = hd.stops[i];
@@ -1261,7 +1275,7 @@ export class Editor {
     const gh = this.selection.size ? this.gradientHit(sp) : null;
     if (gh) {
       this.history.begin();
-      this.drag = { mode: 'gradient', kind: gh.kind, index: gh.index, box: gh.t.box, radial: gh.t.radial, g: gh.t.g, last: null, moved: false };
+      this.drag = { mode: 'gradient', kind: gh.kind, index: gh.index, center: this.gradientScreen(gh.t.box, 0.5, 0.5), box: gh.t.box, radial: gh.t.radial, g: gh.t.g, last: null, moved: false };
       return;
     }
     const handle = this.selection.size ? this.handleAt(sp) : null;
