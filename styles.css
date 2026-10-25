@@ -399,6 +399,17 @@ body {
   color: #cdbda6;
 }
 
+#toolbar .sw-mini.sw-grad {
+  background: linear-gradient(90deg, #fb923c, #fef3c7 55%, #38bdf8);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  padding: 0;
+}
+
+#toolbar .sw-mini.sw-grad.on {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ------------------------------------------------------------- lienzo */
 
 #viewport {
