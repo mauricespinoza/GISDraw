@@ -103,7 +103,7 @@ export function niceFontSize(pt) {
 }
 
 export class Editor {
-  constructor({ history, view, host, settings, getCurrentStyle, onChange, onMessage, onEditText }) {
+  constructor({ history, view, host, settings, getCurrentStyle, onChange, onMessage, onEditText, onStyleEdit }) {
     this.history = history;
     this.view = view;
     this.host = host; // elemento que recibe la entrada
@@ -112,6 +112,7 @@ export class Editor {
     this.onChange = onChange || (() => {});
     this.onMessage = onMessage || (() => {});
     this.onEditText = onEditText || (() => {});
+    this.onStyleEdit = onStyleEdit || (() => {});
     this.tool = 'select';
     this.selection = new Set();
     this.imageSel = null; // id de la capa de imagen seleccionada (mover/escalar), solo si su capa está desbloqueada
@@ -778,6 +779,10 @@ export class Editor {
     const d = this.drag;
     const wp = this.view.toWorld(...sp);
     switch (d.mode) {
+      case 'gradient':
+        this.shiftHeld = e.shiftKey;
+        this.gradientMove(sp);
+        return;
       case 'move': {
         let dx = wp[0] - d.start[0];
         let dy = wp[1] - d.start[1];
@@ -935,6 +940,13 @@ export class Editor {
     this.guides = null;
     const wp = this.view.toWorld(...sp);
     switch (d.mode) {
+      case 'gradient':
+        if (d.moved) {
+          this.onStyleEdit({ gradient: d.last }, true);
+          this.snapDirty = true;
+        } else this.history.cancel();
+        this.changed();
+        return;
       case 'move':
         if (!d.moved) {
           // Alt+clic sin arrastrar: no queda ninguna copia
@@ -1128,6 +1140,113 @@ export class Editor {
     return { ...doc, layers: doc.layers.map((l) => (l.id === id ? { ...l, settings: { ...l.settings, bounds: b } } : l)) };
   }
 
+  /**
+   * Degradado de lo seleccionado, listo para editar en pantalla: la forma con
+   * relleno degradado, su caja y el degradado. Solo con la herramienta Selección.
+   */
+  gradientTarget() {
+    if (this.tool !== 'select' || this.singleText()) return null;
+    let found = null;
+    for (const s of this.selectedShapes()) {
+      walkShapes([s], (x) => {
+        const st = x.style;
+        if (!found && x.type !== 'group' && st && (st.fillType === 'linear' || st.fillType === 'radial') && st.fill && st.fill !== 'none' && st.gradient?.stops?.length >= 2) found = x;
+      });
+    }
+    if (!found || found.locked) return null;
+    const box = shapeBBox(found, this.est());
+    if (!box || !(box.w > 0) || !(box.h > 0)) return null;
+    const radial = found.style.fillType === 'radial';
+    return { shape: found, box, radial, g: found.style.gradient };
+  }
+
+  /** Posición en pantalla de un punto (u, v) del cuadro del objeto (0..1, v hacia abajo). */
+  gradientScreen(box, u, v) {
+    return this.view.toScreen(box.x + u * box.w, box.y + box.h * (1 - v));
+  }
+
+  /** (u, v) del cuadro del objeto bajo un punto de pantalla. */
+  gradientUV(box, sp) {
+    const [wx, wy] = this.view.toWorld(...sp);
+    return [(wx - box.x) / box.w, 1 - (wy - box.y) / box.h];
+  }
+
+  /** Puntos de pantalla del degradado: paradas, extremos de la línea y asa del ángulo. */
+  gradientHandles(t) {
+    const { box, radial, g } = t;
+    const a = ((g.angle ?? 0) * Math.PI) / 180;
+    const dir = radial ? [1, 0] : [Math.cos(a), -Math.sin(a)];
+    const at = (k) => (radial ? [0.5 + 0.5 * k * dir[0], 0.5] : [0.5 + (k - 0.5) * dir[0], 0.5 + (k - 0.5) * dir[1]]);
+    const stops = g.stops.map((st) => this.gradientScreen(box, ...at(st[0])));
+    const p0 = this.gradientScreen(box, ...at(0));
+    const p1 = this.gradientScreen(box, ...at(1));
+    const L = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) || 1;
+    const rot = radial ? null : [p1[0] + ((p1[0] - p0[0]) / L) * 24, p1[1] + ((p1[1] - p0[1]) / L) * 24];
+    return { stops, p0, p1, rot, dir, at };
+  }
+
+  gradientHit(sp) {
+    const t = this.gradientTarget();
+    if (!t) return null;
+    const hd = this.gradientHandles(t);
+    if (hd.rot && Math.hypot(sp[0] - hd.rot[0], sp[1] - hd.rot[1]) < 12) return { t, kind: 'angle' };
+    // la última parada que coincide queda por encima: se prueba de atrás hacia adelante
+    for (let i = hd.stops.length - 1; i >= 0; i--) {
+      if (Math.hypot(sp[0] - hd.stops[i][0], sp[1] - hd.stops[i][1]) < 11) return { t, kind: 'stop', index: i };
+    }
+    return null;
+  }
+
+  gradientMove(sp) {
+    const d = this.drag;
+    const { box, radial, g } = d;
+    const [u, v] = this.gradientUV(box, sp);
+    let next;
+    if (d.kind === 'angle') {
+      let ang = (Math.atan2(-(v - 0.5), u - 0.5) * 180) / Math.PI;
+      ang = ((ang % 360) + 360) % 360;
+      // con Mayús (o cerca de un múltiplo de 45°) el ángulo salta a pasos de 15°
+      const snap = Math.round(ang / 15) * 15;
+      ang = this.shiftHeld || Math.abs(ang - snap) < 2.5 ? snap % 360 : ang;
+      next = { ...g, angle: Math.round(ang * 10) / 10 };
+    } else {
+      const a = ((g.angle ?? 0) * Math.PI) / 180;
+      let k = radial ? (u - 0.5) / 0.5 : 0.5 + (u - 0.5) * Math.cos(a) + (v - 0.5) * -Math.sin(a);
+      const lo = d.index > 0 ? g.stops[d.index - 1][0] : 0;
+      const hi = d.index < g.stops.length - 1 ? g.stops[d.index + 1][0] : 1;
+      k = Math.round(Math.max(lo, Math.min(hi, k)) * 1000) / 1000;
+      next = { ...g, stops: g.stops.map((st, i) => (i === d.index ? [k, st[1], st[2]] : st)) };
+    }
+    d.last = next;
+    d.moved = true;
+    this.onStyleEdit({ gradient: next }, false);
+  }
+
+  /** Dibujo en pantalla del degradado seleccionado (línea, paradas y asa del ángulo). */
+  gradientOverlay(out) {
+    const t = this.gradientTarget();
+    if (!t) return;
+    const r2 = (v) => Math.round(v * 10) / 10;
+    // durante el arrastre se muestra el degradado nuevo
+    const live = this.drag?.mode === 'gradient' && this.drag.last ? { ...t, g: this.drag.last } : t;
+    const hd = this.gradientHandles(live);
+    const [x0, y0] = hd.p0;
+    const [x1, y1] = hd.p1;
+    out.push(`<line x1="${r2(x0)}" y1="${r2(y0)}" x2="${r2(x1)}" y2="${r2(y1)}" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-opacity="0.9"/>`);
+    out.push(`<line x1="${r2(x0)}" y1="${r2(y0)}" x2="${r2(x1)}" y2="${r2(y1)}" stroke="#334155" stroke-width="1.5" stroke-linecap="round"/>`);
+    if (hd.rot) {
+      out.push(`<line x1="${r2(x1)}" y1="${r2(y1)}" x2="${r2(hd.rot[0])}" y2="${r2(hd.rot[1])}" stroke="#334155" stroke-width="1" stroke-dasharray="2 2"/>`);
+      out.push(`<circle class="h" cx="${r2(hd.rot[0])}" cy="${r2(hd.rot[1])}" r="6.5" fill="#fff" stroke="#334155" stroke-width="1.5"/>`);
+      out.push(`<path d="M${r2(hd.rot[0] - 3)} ${r2(hd.rot[1])}a3 3 0 1 1 3 3" fill="none" stroke="#334155" stroke-width="1.2"/>`);
+    }
+    live.g.stops.forEach((st, i) => {
+      const [x, y] = hd.stops[i];
+      const active = this.drag?.mode === 'gradient' && this.drag.kind === 'stop' && this.drag.index === i;
+      out.push(`<circle class="h" cx="${r2(x)}" cy="${r2(y)}" r="${active ? 9 : 8}" fill="${esc(st[1])}" stroke="#fff" stroke-width="2.5"/>`);
+      out.push(`<circle cx="${r2(x)}" cy="${r2(y)}" r="${active ? 9 : 8}" fill="none" stroke="#334155" stroke-width="1.2"/>`);
+    });
+  }
+
   selectDown(e, sp, wp, shift) {
     const add = shift || this.addMode;
     if (this.imageSel && !this.selection.size) {
@@ -1138,6 +1257,12 @@ export class Editor {
         this.drag = { mode: 'iscale', id: l.id, b0: this.imageBounds(l), base: this.doc };
         return;
       }
+    }
+    const gh = this.selection.size ? this.gradientHit(sp) : null;
+    if (gh) {
+      this.history.begin();
+      this.drag = { mode: 'gradient', kind: gh.kind, index: gh.index, box: gh.t.box, radial: gh.t.radial, g: gh.t.g, last: null, moved: false };
+      return;
     }
     const handle = this.selection.size ? this.handleAt(sp) : null;
     if (handle?.startsWith('T')) {
@@ -2438,6 +2563,8 @@ export class Editor {
       out.push(`<rect x="${r2(ir[0])}" y="${r2(ir[1])}" width="${r2(ir[2] - ir[0])}" height="${r2(ir[3] - ir[1])}" fill="rgba(14,165,233,.05)" stroke="#0ea5e9" stroke-dasharray="4 3"/>`);
       out.push(`<rect class="h" x="${r2(ir[2] - 5)}" y="${r2(ir[3] - 5)}" width="10" height="10" fill="#fff" stroke="#0ea5e9" stroke-width="1.5"/>`);
     }
+
+    this.gradientOverlay(out);
 
     // nodos
     const ns = this.tool === 'node' ? this.nodeTarget() : null;

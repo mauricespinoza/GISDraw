@@ -147,6 +147,7 @@ class App {
       onChange: () => this.onEditorChange(),
       onMessage: (m) => this.message(m),
       onEditText: (t, isNew) => this.editText(t, isNew),
+      onStyleEdit: (patch, final) => this.editStyle(patch, final),
     });
     this.editor.onEditOrnament = () => this.showPanel('geology');
     this.editor.onCommandKey = (e) => this.commandKey(e);
@@ -621,6 +622,7 @@ class App {
         mini('◩', 'Predeterminado  D', () => this.defaultColors()),
         mini('⇄', 'Intercambiar  Mayús+X', () => this.swapColors()),
         mini('⌀', 'Ninguno  /', () => this.noneColor()),
+        (this.swGrad = h('button', { class: 'sw-mini sw-grad', 'data-tip': 'Relleno con degradado (arrastra sus colores y ángulo sobre el dibujo)', 'aria-label': 'Relleno con degradado', onclick: () => this.gradientColor() })),
       ),
     );
     this.setSwatchFront(this.swatchFront);
@@ -658,9 +660,23 @@ class App {
     this.editStyle(k === 'fill' ? { fill: 'none', lastFill: st.fill } : { stroke: 'none', lastStroke: st.stroke }, true);
   }
 
+  /** Activa o quita el relleno degradado de lo seleccionado (o del próximo dibujo). */
+  gradientColor() {
+    const st = { ...defaultStyle(), ...this.shownStyle() };
+    if (st.fillType === 'linear' || st.fillType === 'radial') {
+      this.editStyle({ fillType: 'solid' }, true);
+      return;
+    }
+    const base = st.fill && st.fill !== 'none' ? st.fill : st.lastFill || '#86efac';
+    this.editStyle({ fill: base, fillType: 'linear', gradient: { angle: 0, stops: [[0, base, 1], [1, '#ffffff', 1]] } }, true);
+    this.setSwatchFront('fill');
+    this.message('Degradado: arrastra sus colores y el ángulo sobre el dibujo');
+  }
+
   updateSwatch() {
     if (!this.swatch) return;
     const st = this.shownStyle();
+    this.swGrad?.classList.toggle('on', st.fillType === 'linear' || st.fillType === 'radial');
     const paint = (chip, color) => {
       const none = !color || color === 'none';
       chip.classList.toggle('none', none);
