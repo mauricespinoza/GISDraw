@@ -379,10 +379,26 @@ export class Panels {
       ),
       quick('fill'),
       row('Opacidad', ...pct('fillOpacity')),
-      row('Tipo', select({ solid: 'Sólido', linear: 'Degradado lineal', radial: 'Degradado radial' }, s.fillType || 'solid', fin('fillType'))),
     );
-    if (s.fillType === 'linear' || s.fillType === 'radial') {
-      const g = s.gradient || { angle: 90, stops: [[0, '#ffffff', 1], [1, '#1d4ed8', 1]] };
+    const g = s.gradient || { angle: 90, stops: [[0, '#ffffff', 1], [1, '#1d4ed8', 1]] };
+    const stopsCss = g.stops.map((st) => `${st[1]} ${Math.round(st[0] * 100)}%`).join(',');
+    const fillTypes = [
+      ['solid', 'Sólido', `background:${hasFill ? s.fill : s.lastFill || '#86efac'}`],
+      ['linear', 'Degradado', `background:linear-gradient(${g.angle ?? 90}deg,${stopsCss})`],
+      ['radial', 'Radial', `background:radial-gradient(circle,${stopsCss})`],
+    ];
+    const curType = s.fillType || 'solid';
+    fillSec.insertBefore(
+      h(
+        'div',
+        { class: 'fill-types', role: 'group', 'aria-label': 'Tipo de relleno' },
+        ...fillTypes.map(([k, label, bg]) =>
+          h('button', { class: `fill-type${curType === k ? ' on' : ''}`, title: label, onclick: () => edit(k === 'solid' ? { fillType: k } : { fillType: k, gradient: g }) }, h('span', { class: 'ft-sw', style: bg }), label),
+        ),
+      ),
+      fillSec.children[1],
+    );
+    if (curType === 'linear' || curType === 'radial') {
       const setStop = (i, patch, final) => {
         const stops = g.stops.map((st, j) => (j === i ? [patch.offset ?? st[0], patch.color ?? st[1], patch.alpha ?? st[2]] : st));
         edit({ gradient: { ...g, stops } }, final);

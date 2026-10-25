@@ -1419,6 +1419,43 @@ body {
   color: var(--ink);
 }
 
+/* ------------------------------------------------- tipo de relleno */
+
+.fill-types {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
+.fill-type {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 4px;
+  font-size: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line, rgba(31, 22, 14, 0.2));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.fill-type .ft-sw {
+  width: 100%;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid rgba(31, 22, 14, 0.18);
+}
+
+.fill-type.on {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  font-weight: 600;
+}
+
 /* ------------------------------------------------- colores rápidos */
 
 .quick-colors {
