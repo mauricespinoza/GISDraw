@@ -17,7 +17,7 @@ import { ALIGN_ICONS, ICONS } from './ui/icons.js';
 import { h, popSlider, popSliderOpen } from './ui/dom.js';
 import { askChoice, askConfirm, askForm, askText } from './ui/dialog.js';
 import { DASHES, defaultStyle } from './style.js';
-import { align, copyShapes, deleteEmpty, distribute, frozenPoints, pasteShapes, arrange, group, ungroup, ungroupAll, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
+import { align, copyShapes, deleteEmpty, distribute, frozenPoints, insertShapes, pasteShapes, arrange, group, ungroup, ungroupAll, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
 import { coordPreview, formatDMS, parseCoordText, toLonLat } from './proj.js';
 import { shapeBBox, unionBBox, walkShapes, newId, DEFAULT_SMOOTH, canResmooth, canSmooth, adoptFreehand, resmooth } from './vector.js';
 import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles, getDocKey, putDocKey } from './io/store.js';
@@ -1305,7 +1305,8 @@ class App {
     }
     groups.push([
       this.clipboard.length || navigator.clipboard?.readText ? it('Pegar', 'Ctrl+V', () => this.paste(false)) : null,
-      this.clipboard.length || navigator.clipboard?.readText ? it('Pegar en el lugar', 'Ctrl+F', () => this.paste(true)) : null,
+      this.clipboard.length || navigator.clipboard?.readText ? it('Pegar delante, en el lugar', 'Ctrl+F', () => this.paste(true, 'front')) : null,
+      this.clipboard.length || navigator.clipboard?.readText ? it('Pegar detrás, en el lugar', 'Ctrl+B', () => this.paste(true, 'back')) : null,
       it('Seleccionar todo', 'Ctrl+A', () => ed.selectAll()),
       n ? it('Deseleccionar', 'Ctrl+Mayús+A', () => ed.setSelection([])) : null,
     ]);
@@ -1748,34 +1749,15 @@ class App {
       const dt = e.clipboardData;
       const inPlace = !!this.pasteInPlaceNext;
       this.pasteInPlaceNext = false;
-      let text = dt?.getData('image/svg+xml') || dt?.getData('text/plain') || '';
-      const html = dt?.getData('text/html') || '';
-      // el código SVG puede venir bajo otro nombre de formato (según versión de Illustrator y sistema)
-      if (!/<svg[\s>]/i.test(text) && !/<svg[\s>]/i.test(html)) {
-        for (const t of dt?.types || []) {
-          if (/^(Files|text\/(plain|html)|image\/svg\+xml)$/.test(t)) continue;
-          const v = dt.getData(t);
-          if (/<svg[\s>]/i.test(v)) text = v;
-        }
+      const texts = {};
+      for (const t of dt?.types || []) {
+        if (t === 'Files') continue;
+        const v = dt.getData(t);
+        if (v) texts[t] = v;
       }
-      const types = [...(dt?.types || [])];
-      const files = [...(dt?.files || []), ...[...(dt?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile())];
-      const img = files.find((f) => f && /^image\//.test(f.type) && f.type !== 'image/svg+xml');
-      const run = async () => {
-        if (img && !/<svg[\s>]/i.test(text) && !/<svg[\s>]/i.test(html)) {
-          // Illustrator con «Incluir código SVG» manda también una imagen: antes de dejarla como capa de
-          // imagen (no se mueve ni escala), se busca el SVG por la API asíncrona del portapapeles
-          const viaApi = await this.readSvgFromClipboardApi();
-          if (viaApi) return this.pasteText(viaApi, inPlace);
-          return this.imageOnlyPaste(img, types);
-        }
-        if (/<svg[\s>]/i.test(text || html)) return this.pasteText(/<svg[\s>]/i.test(text) ? text : html, inPlace);
-        // una imagen dentro de HTML (<img src="data:...">) copiada de una página o documento
-        const m = /<img[^>]+src=["'](data:image\/[^"']+)["']/i.exec(html);
-        if (m && !this.clipboard.length) return this.pasteImage(await (await fetch(m[1])).blob());
-        return this.pasteText(text || html, inPlace);
-      };
-      run().catch((err) => this.message(`Pegar: ${err.message}`, 6000));
+      const files = [...(dt?.files || []), ...[...(dt?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile())].filter(Boolean);
+      const blobs = [...new Map(files.map((f) => [`${f.name}|${f.size}|${f.type}`, f])).values()];
+      this.pasteData({ texts, blobs, types: [...(dt?.types || [])] }, { inPlace, apiFallback: true }).catch((err) => this.message(`Pegar: ${err.message}`, 6000));
     });
   }
 
@@ -1984,7 +1966,7 @@ class App {
    * se ofrece georreferenciarla; si no, queda como capa de imagen en la vista
    * (y se puede georreferenciar después desde Archivo).
    */
-  async pasteImage(file, { georef = false } = {}) {
+  async pasteImage(file, { georef = false, hint = false } = {}) {
     const n = this.history.doc.layers.filter((l) => l.kind === 'image').length + 1;
     const name = `Recorte ${n}`;
     if (georef) return this.startGeoref(file);
@@ -2004,109 +1986,219 @@ class App {
     layers.splice(fv < 0 ? layers.length : fv, 0, l);
     this.history.commit({ ...doc, layers });
     this.lastPastedImage = file;
-    this.message(`Imagen pegada como capa «${name}» en el centro de la vista.${this.mode === 'gis' ? ' Para ubicarla con precisión: Archivo → Georreferenciar imagen.' : ''}`, 7000);
+    // solo llegó una imagen: si venía de Illustrator, su dibujo vectorial no se pudo leer
+    const tip = hint ? ' ¿Era un dibujo de Illustrator? Ctrl+Z y activa en Illustrator Preferencias → Gestión del portapapeles → «Copiar como: código SVG», o impórtalo con Archivo → Illustrator / PDF.' : '';
+    this.message(`Imagen pegada como capa «${name}» en el centro de la vista.${this.mode === 'gis' ? ' Para ubicarla con precisión: Archivo → Georreferenciar imagen.' : ''}${tip}`, hint ? 11000 : 7000);
   }
 
   /**
-   * Lo copiado solo trae una imagen (Illustrator deja el SVG en un formato propio que el navegador no
-   * puede leer): en vez de crear en silencio una capa de imagen fija, se explica y se ofrece la vía vectorial.
+   * Lee el portapapeles del sistema con la API asíncrona (botones, Ctrl+F/B y,
+   * si el evento `paste` no trajo dibujo, para buscar el SVG de Illustrator en
+   * formatos que el evento no expone). Pide HTML y SVG sin «sanear» donde se
+   * puede: el saneado de Chrome quita el SVG en línea del HTML.
+   * @returns {Promise<{texts: Object<string,string>, blobs: Blob[], types: string[]}|null>}
    */
-  async imageOnlyPaste(img, types = []) {
-    const pick = await askChoice({
-      title: 'Solo llegó una imagen, no el dibujo vectorial',
-      hint: `El navegador no puede leer el SVG que Illustrator deja en el portapapeles (formatos recibidos: ${types.join(', ') || 'ninguno'}). Para traer el dibujo vectorial y editable: en Illustrator, Archivo → Exportar → Exportar selección (o Exportar como) → SVG, o guarda el .ai, y elígelo aquí.`,
-      items: [
-        { value: 'file', label: 'Importar un archivo .svg / .ai / .pdf…', hint: 'Dibujo vectorial editable, una capa por capa de Illustrator' },
-        { value: 'image', label: 'Pegar solo como imagen', hint: 'Capa de imagen fija: no se puede mover ni escalar sin georreferenciar' },
-      ],
-      cancel: 'Cancelar',
-    });
-    if (pick === 'file') return this.importSvgFile();
-    if (pick === 'image') return this.pasteImage(img);
-  }
-
-  /** Busca código SVG en cualquier formato del portapapeles con la API asíncrona (puede pedir permiso). */
-  async readSvgFromClipboardApi() {
+  async readClipboardApi() {
+    if (!navigator.clipboard?.read) {
+      try {
+        const t = await navigator.clipboard?.readText?.();
+        return t ? { texts: { 'text/plain': t }, blobs: [], types: ['text/plain'] } : null;
+      } catch {
+        return null;
+      }
+    }
+    let items;
     try {
-      for (const item of (await navigator.clipboard?.read?.()) || []) {
-        for (const t of item.types) {
-          if (/^(image\/(png|jpeg|gif|webp|bmp))$/.test(t)) continue;
-          const v = await (await item.getType(t)).text();
-          if (/<svg[\s>]/i.test(v)) return v;
+      items = await navigator.clipboard.read({ unsanitized: ['text/html', 'image/svg+xml'] });
+    } catch {
+      try {
+        items = await navigator.clipboard.read();
+      } catch {
+        try {
+          const t = await navigator.clipboard.readText();
+          return t ? { texts: { 'text/plain': t }, blobs: [], types: ['text/plain'] } : null;
+        } catch {
+          return null; // sin permiso
         }
       }
-    } catch {
-      /* sin permiso o sin API */
     }
-    return '';
+    const data = { texts: {}, blobs: [], types: [] };
+    for (const item of items || []) {
+      for (const t of item.types) {
+        data.types.push(t);
+        try {
+          const b = await item.getType(t);
+          if (/^image\/(?!svg)|^application\/(pdf|illustrator|postscript)$/.test(t)) data.blobs.push(b);
+          else data.texts[t] = await b.text();
+        } catch {
+          /* formato que no se deja leer */
+        }
+      }
+    }
+    return data;
   }
 
   /** Pegar desde un botón o Ctrl+F/B: el portapapeles del sistema si se puede leer, si no el interno. */
   async paste(inPlace, where = 'front') {
-    let text = '';
-    try {
-      if (navigator.clipboard?.read) {
-        for (const item of await navigator.clipboard.read()) {
-          const img = item.types.find((t) => /^image\//.test(t) && t !== 'image/svg+xml');
-          if (item.types.includes('image/svg+xml')) text = await (await item.getType('image/svg+xml')).text();
-          else if (item.types.includes('text/plain')) text = await (await item.getType('text/plain')).text();
-          // el código SVG puede llegar solo como HTML (algunas versiones de Illustrator y navegadores)
-          if (!/<svg[\s>]/i.test(text) && item.types.includes('text/html')) {
-            const html = await (await item.getType('text/html')).text();
-            if (/<svg[\s>]/i.test(html)) text = html;
-          }
-          if (img && !/<svg[\s>]/i.test(text)) return this.imageOnlyPaste(await item.getType(img), item.types);
-        }
-      } else text = (await navigator.clipboard?.readText()) || '';
-    } catch {
-      try {
-        text = (await navigator.clipboard?.readText()) || '';
-      } catch {
-        /* sin permiso: queda el portapapeles interno */
-      }
-    }
-    return this.pasteText(text, inPlace, where);
+    const data = (await this.readClipboardApi()) || { texts: {}, blobs: [], types: [] };
+    // Ctrl+F/B: como en Illustrator, justo delante o detrás de lo seleccionado
+    return this.pasteData(data, { inPlace, where, anchor: inPlace && this.editor.selection.size ? new Set(this.editor.selection) : null });
   }
 
   /**
-   * Pega texto del portapapeles: SVG (de Illustrator, Inkscape, un navegador
-   * o el propio GISDrawer) se convierte en dibujo; cualquier otra cosa deja
-   * pasar al portapapeles interno.
+   * Pega lo que traiga el portapapeles, en este orden: archivos vectoriales
+   * (SVG, PDF, AI), código SVG (de Illustrator, Inkscape, un navegador o el
+   * propio GISDrawer), geometrías GIS en texto (GeoJSON, WKT, tabla de QGIS),
+   * una imagen (captura, «Copiar imagen» del navegador, otro programa) y, si
+   * no hay nada de eso, lo copiado dentro de GISDrawer.
    */
-  async pasteText(text, inPlace = false, where = 'front') {
-    if (/<svg[\s>]/i.test(text || '')) {
-      const { importSvg } = await import('./io/svgImport.js');
-      const doc = this.history.doc;
-      const r = importSvg(text, { refScale: doc.refScale, center: [this.view.cx, this.view.cy] });
-      if (r.gisdrawer) {
-        this.clipboard = r.gisdrawer.shapes;
-        this.pasteN = 0;
-        return this.pasteInternal(inPlace, where);
-      }
-      if (!r.shapes.length) return this.message('El SVG del portapapeles no trae formas');
-      const layer = this.editor.ensureDrawableLayer();
-      if (!layer) return;
-      const ids = new Set(r.shapes.map((x) => x.id));
-      const next = addShapes(doc, layer.id, r.shapes);
-      this.history.commit(where === 'back' ? arrange(next, ids, 'back') : next);
-      this.editor.setSelection(ids);
-      this.editor.snapDirty = true;
-      const [w, hgt] = r.sizeMm;
-      this.message(`${r.shapes.length} objeto(s) pegados desde SVG (${w.toFixed(0)} × ${hgt.toFixed(0)} mm de papel a 1:${doc.refScale.toLocaleString('es-CL')})${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, r.warnings.length ? 9000 : 4000);
-      return;
+  async pasteData(data, { inPlace = false, where = 'front', anchor = null, apiFallback = false } = {}) {
+    const { hasSvg, svgFromHtml, svgFromDataUrl, imageSourcesFromHtml, featuresFromText } = await import('./io/clipFormats.js');
+    const texts = data.texts || {};
+    const blobs = data.blobs || [];
+    const opts = { inPlace, where, anchor };
+    // 1. archivos vectoriales copiados en el explorador de archivos o arrastrados al portapapeles
+    for (const f of blobs) {
+      const name = f.name || '';
+      if (f.type === 'image/svg+xml' || /\.svg$/i.test(name)) return this.pasteText(await f.text(), opts);
+      if (/^application\/(pdf|illustrator|postscript)$/.test(f.type) || /\.(pdf|ai)$/i.test(name)) return this.pastePdf(new Uint8Array(await f.arrayBuffer()), opts);
     }
-    if (this.clipboard.length) return this.pasteInternal(inPlace, where);
-    this.message('El portapapeles no trae dibujo. Desde Illustrator: Preferencias → Gestión del portapapeles → «Copiar como: código SVG».', 9000);
+    // 2. código SVG, bajo el nombre de formato que sea (según programa, versión y sistema)
+    const plain = texts['text/plain'] || '';
+    const html = texts['text/html'] || '';
+    let svg = texts['image/svg+xml'] || (hasSvg(plain) ? plain : '') || svgFromDataUrl(plain) || svgFromHtml(html);
+    if (!svg) for (const [t, v] of Object.entries(texts)) if (!/^text\/(plain|html)$/.test(t) && hasSvg(v)) svg = v;
+    const image = blobs.find((f) => /^image\//.test(f.type) && f.type !== 'image/svg+xml');
+    if (!svg && apiFallback && (image || !Object.keys(texts).length)) {
+      // Illustrator deja el SVG en un formato que el evento `paste` no muestra: se busca por la API asíncrona
+      const more = await this.readClipboardApi();
+      const t = more?.texts || {};
+      svg = t['image/svg+xml'] || svgFromHtml(t['text/html']) || Object.values(t).find(hasSvg) || '';
+    }
+    if (svg) return this.pasteText(svg, opts);
+    // 3. geometrías GIS en texto
+    if (this.mode === 'gis') {
+      const feats = featuresFromText(plain);
+      if (feats) return this.pasteFeatures(feats, opts);
+    }
+    // 4. imagen
+    if (image) return this.pasteImage(image, { hint: !html });
+    for (const src of imageSourcesFromHtml(html)) {
+      const blob = await this.fetchImage(src);
+      if (blob) return this.pasteImage(blob);
+    }
+    if (/^(https?:|data:image\/)\S+$/i.test(plain.trim()) && /^data:|\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/i.test(plain.trim())) {
+      const blob = await this.fetchImage(plain.trim());
+      if (blob?.type === 'image/svg+xml') return this.pasteText(await blob.text(), opts);
+      if (blob) return this.pasteImage(blob);
+    }
+    // 5. lo copiado en GISDrawer
+    if (this.clipboard.length) return this.pasteInternal(inPlace, where, anchor);
+    if (imageSourcesFromHtml(html).length) return this.message('La página no deja leer esa imagen: usa clic derecho → «Copiar imagen» y vuelve a pegar.', 8000);
+    this.message('El portapapeles no trae dibujo ni imagen. Desde Illustrator: Preferencias → Gestión del portapapeles → «Copiar como: código SVG».', 9000);
   }
 
-  pasteInternal(inPlace, where = 'front') {
-    if (!this.clipboard.length) return;
-    const layer = this.editor.ensureDrawableLayer();
+  /** Imagen desde una URL (o data URL) de un HTML copiado; null si la página no la deja leer (CORS). */
+  async fetchImage(src) {
+    try {
+      const r = await fetch(src, { mode: 'cors', credentials: 'omit' });
+      if (!r.ok) return null;
+      const b = await r.blob();
+      return /^image\//.test(b.type) ? b : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Capa donde cae lo pegado: la de lo seleccionado si se pega delante/detrás de ello, si no la activa. */
+  pasteLayer(anchor) {
+    if (anchor?.size) {
+      const l = layerOfShape(this.history.doc, [...anchor][0]);
+      if (l && !l.locked && l.visible) return l;
+    }
+    return this.editor.ensureDrawableLayer();
+  }
+
+  /** PDF o .ai en el portapapeles: su dibujo, en la capa activa (las imágenes incrustadas no). */
+  async pastePdf(bytes, opts) {
+    const { pdfToSvg } = await import('./io/pdfImport.js');
+    const r = pdfToSvg(bytes, { name: 'Portapapeles' });
+    return this.pasteText(r.svg, { ...opts, unitMm: 25.4 / 72 });
+  }
+
+  /**
+   * Pega código SVG: se convierte en dibujo (si lo copió GISDrawer, vuelven
+   * sus formas exactas y georreferenciadas). Lo de fuera cae en el centro de
+   * la vista.
+   */
+  async pasteText(text, { inPlace = false, where = 'front', anchor = null, unitMm = null } = {}) {
+    const { importSvg } = await import('./io/svgImport.js');
+    const doc = this.history.doc;
+    const r = importSvg(text, { refScale: doc.refScale, center: [this.view.cx, this.view.cy], unitMm });
+    if (r.gisdrawer) {
+      this.clipboard = r.gisdrawer.shapes;
+      this.pasteN = 0;
+      return this.pasteInternal(inPlace, where, anchor);
+    }
+    if (!r.shapes.length) return this.message('El SVG del portapapeles no trae formas');
+    const layer = this.pasteLayer(anchor);
     if (!layer) return;
-    const r = pasteShapes(this.history.doc, this.clipboard, layer.id, { inPlace, offset: inPlace ? 0 : 12 * this.view.mpp * (this.pasteN = (this.pasteN || 0) + 1) });
-    const ids = new Set(r.ids);
-    this.history.commit(where === 'back' ? arrange(r.doc, ids, 'back') : r.doc);
+    const ids = new Set(r.shapes.map((x) => x.id));
+    this.history.commit(insertShapes(doc, layer.id, r.shapes, { where, anchor }));
     this.editor.setSelection(ids);
+    this.editor.snapDirty = true;
+    const [w, hgt] = r.sizeMm;
+    this.message(`${r.shapes.length} objeto(s) pegados desde SVG (${w.toFixed(0)} × ${hgt.toFixed(0)} mm de papel a 1:${doc.refScale.toLocaleString('es-CL')})${r.warnings.length ? ` · ${r.warnings.join(' · ')}` : ''}`, r.warnings.length ? 9000 : 4000);
+  }
+
+  /**
+   * Geometrías GIS en texto (GeoJSON, WKT, «Copiar objetos» de QGIS): caen en
+   * su lugar en el terreno, con sus atributos. Sin CRS declarado: lon/lat si
+   * las coordenadas lo parecen, si no, el sistema del proyecto (UTM 19S).
+   */
+  async pasteFeatures(feats, { where = 'front', anchor = null } = {}) {
+    const { toDocTransform } = await import('./io/crs.js');
+    const { geometryToShapes, guessName } = await import('./io/features.js');
+    const { looksLonLat } = await import('./io/clipFormats.js');
+    const T = await toDocTransform(feats.crs || (looksLonLat(feats.coords) ? 4326 : 32719));
+    const shapes = [];
+    for (const f of feats.features) {
+      for (const s of geometryToShapes(f.geometry, f.properties, T)) {
+        s.name = guessName(f.properties, s.name);
+        shapes.push(s);
+      }
+    }
+    if (!shapes.length) return this.message('Las geometrías del portapapeles están vacías');
+    const layer = this.pasteLayer(anchor);
+    if (!layer) return;
+    this.history.commit(insertShapes(this.history.doc, layer.id, shapes, { where, anchor }));
+    this.editor.setSelection(shapes.map((s) => s.id));
+    this.editor.snapDirty = true;
+    const b = unionBBox(shapes.map((s) => shapeBBox(s, this.editor.est())));
+    const v = this.view;
+    const [hw, hh] = [(v.w * v.mpp) / 2, (v.h * v.mpp) / 2];
+    if (b && (b.x > v.cx + hw || b.x + b.w < v.cx - hw || b.y > v.cy + hh || b.y + b.h < v.cy - hh)) this.zoomToShapes(shapes);
+    this.message(`${shapes.length} objeto(s) pegados en su lugar desde ${feats.crs ? `el CRS ${feats.crs}` : looksLonLat(feats.coords) ? 'lon/lat (WGS84)' : 'coordenadas del proyecto'}`, 5000);
+  }
+
+  /**
+   * Pega lo copiado en GISDrawer. Ctrl+V: en el centro de la vista (si se
+   * pega otra vez sin mover la vista, cada copia se corre un poco); en el
+   * lugar (Ctrl+F/B, Ctrl+Mayús+V): mismas coordenadas.
+   */
+  pasteInternal(inPlace, where = 'front', anchor = null) {
+    if (!this.clipboard.length) return;
+    const layer = this.pasteLayer(anchor);
+    if (!layer) return;
+    const v = this.view;
+    const at = `${v.cx}|${v.cy}|${v.mpp}`;
+    this.pasteN = !inPlace && this.lastPasteAt === at ? (this.pasteN || 0) + 1 : 0;
+    if (!inPlace) this.lastPasteAt = at;
+    const step = 12 * v.mpp * this.pasteN;
+    const r = pasteShapes(this.history.doc, this.clipboard, layer.id, { inPlace, center: [v.cx, v.cy], est: this.editor.est(), offset: [step, -step], where, anchor });
+    this.history.commit(r.doc);
+    this.editor.setSelection(r.ids);
+    this.editor.snapDirty = true;
   }
 
   commandKey(e) {
@@ -2131,7 +2223,7 @@ class App {
       return;
     }
     // Ctrl+F / Ctrl+B: pegar en el lugar, delante o detrás (Illustrator)
-    if (k === 'f') return run(() => this.paste(true));
+    if (k === 'f') return run(() => this.paste(true, 'front'));
     if (k === 'b') return run(() => this.paste(true, 'back'));
     // Ctrl+S+D (S y luego D, sin soltar Ctrl): guardar en Google Drive, en el mismo archivo
     if (k === 'd' && this.sChordT) {

@@ -7,7 +7,7 @@
  * probarlas y para que el historial las deshaga sin saber qué hicieron.
  */
 
-import { allTopShapes, findTopShape, replaceShapes } from './doc.js';
+import { allTopShapes, findTopShape, mergeFields, replaceShapes } from './doc.js';
 import { cloneNode, cloneShape, makeGroup, newId, rotateShape, scaleShape, scaleSizes, shapeBBox, splitNodes, translateShape, unionBBox, walkShapes } from './vector.js';
 
 /* ------------------------------------------------------------ portapapeles */
@@ -20,19 +20,45 @@ export function copyShapes(doc, ids) {
 }
 
 /**
- * Pega en la capa activa. `inPlace` deja las coordenadas tal cual (pegar en el
- * lugar, Ctrl+Mayús+V); si no, desplaza un poco para que se note la copia.
+ * Pega en una capa. `inPlace` deja las coordenadas tal cual (Ctrl+F / Ctrl+B);
+ * si no, `center` ([x, y] de mundo) lleva el centro del recorte ahí (Ctrl+V:
+ * centro de la vista) y `offset` (número o [dx, dy]) lo desplaza además.
+ * `where`/`anchor`: ver `insertShapes`.
  */
-export function pasteShapes(doc, clip, layerId, { inPlace = false, offset = 0 } = {}) {
+export function pasteShapes(doc, clip, layerId, { inPlace = false, offset = 0, center = null, est = null, where = 'front', anchor = null } = {}) {
+  let [dx, dy] = Array.isArray(offset) ? offset : [offset, -offset];
+  if (!inPlace && center && clip.length) {
+    const b = unionBBox(clip.map((s) => shapeBBox(s, est)));
+    if (b) {
+      dx += center[0] - (b.x + b.w / 2);
+      dy += center[1] - (b.y + b.h / 2);
+    }
+  }
   const shapes = clip.map((s) => {
     const c = cloneShape(s);
-    return inPlace || !offset ? c : translateShape(c, offset, -offset);
+    return inPlace || (!dx && !dy) ? c : translateShape(c, dx, dy);
   });
-  const next = {
+  return { doc: insertShapes(doc, layerId, shapes, { where, anchor }), ids: new Set(shapes.map((s) => s.id)) };
+}
+
+/**
+ * Inserta formas en una capa. `where` 'front' (arriba) o 'back' (abajo). Con
+ * `anchor` (ids, la selección), como «Pegar delante / detrás» de Illustrator:
+ * justo encima del objeto seleccionado más alto o justo debajo del más bajo.
+ */
+export function insertShapes(doc, layerId, shapes, { where = 'front', anchor = null } = {}) {
+  return {
     ...doc,
-    layers: doc.layers.map((l) => (l.id === layerId ? { ...l, items: [...l.items, ...shapes] } : l)),
+    layers: doc.layers.map((l) => {
+      if (l.id !== layerId) return l;
+      const items = l.items.slice();
+      const marks = anchor ? items.map((s, i) => (anchor.has(s.id) ? i : -1)).filter((i) => i >= 0) : [];
+      let at = where === 'back' ? 0 : items.length;
+      if (marks.length) at = where === 'back' ? marks[0] : marks[marks.length - 1] + 1;
+      items.splice(at, 0, ...shapes);
+      return { ...l, items, fields: mergeFields(l.fields, shapes) };
+    }),
   };
-  return { doc: next, ids: new Set(shapes.map((s) => s.id)) };
 }
 
 /* ------------------------------------------------------------------ orden */
