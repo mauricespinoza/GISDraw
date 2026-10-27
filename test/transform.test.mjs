@@ -136,7 +136,7 @@ const doc = addShapes(base, layerId, [a, b]);
 {
   // en el lugar: cada objeto escala (tamaño y grosor) sobre su propio centro
   const a = makeRectPath(0, 0, 10, 10, { ...defaultStyle(), strokeWidth: 1 });
-  const b = makeRectPath(100, 40, 20, 4, { ...defaultStyle(), strokeWidth: 0.5 });
+  const b = makeRectPath(100, 40, 120, 44, { ...defaultStyle(), strokeWidth: 0.5 });
   const nd = newDocument();
   const L = nd.activeLayerId;
   const doc = addShapes(nd, L, [a, b]);
