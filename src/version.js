@@ -3,12 +3,13 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v65';
+export const APP_VERSION = 'v66';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
+  ['v66', 'Tableta: girar la vista con dos dedos (zona muerta y imán al norte); la brújula de la esquina devuelve el norte arriba'],
   ['v65', 'Seleccionar todo lo de la capa: botón en cada capa del panel Capas, en Organizar y en el menú contextual (con un objeto seleccionado, la capa de ese objeto)'],
   ['v64', 'Transformar en el lugar (Ctrl+Alt+Mayús+M, panel Organizar, menús): escala tamaño y grosor, gira o refleja cada objeto sobre su propio centro sin moverlo'],
   ['v63', 'Imagen pegada: queda desbloqueada y seleccionada, se puede mover y escalar de inmediato'],

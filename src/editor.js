@@ -6,7 +6,8 @@
  *  - Apple Pencil (`pointerType: pen`): SIEMPRE usa la herramienta activa. Su
  *    hover (iPad recientes) mueve el cursor de snapping y la línea elástica
  *    sin tocar la pantalla.
- *  - Dedo: un dedo desplaza, dos dedos hacen zoom y desplazan. Un toque corto
+ *  - Dedo: un dedo desplaza, dos dedos hacen zoom, desplazan y, si los dedos giran, rotan
+ *    la vista (con un imán al norte; la brújula de la esquina la endereza). Un toque corto
  *    con el dedo selecciona; fuera de lo seleccionado, además, anula la
  *    herramienta activa y vuelve a Selección. Así la palma o un dedo
  *    apoyado nunca dibujan por error. Para pantallas táctiles sin lápiz hay un
@@ -94,6 +95,8 @@ const GUIDE_PX = 6; // snap ligero a guías de alineación
 const TAP_MS = 350;
 const TAP_MOVE = 8;
 const LONG_PRESS_MS = 550;
+const ROTATE_DEADZONE_DEG = 7; // giro de los dos dedos antes de que la vista empiece a rotar
+const NORTH_SNAP_DEG = 4; // la vista se pega al norte arriba dentro de este margen
 const MIN_TEXT_PX = 16; // tamaño mínimo en pantalla de un texto nuevo
 
 /** Redondea hacia arriba a un tamaño tipográfico "limpio". */
@@ -430,9 +433,15 @@ export class Editor {
     });
   }
 
-  screenPoint(e) {
+  /** Punto del evento en coordenadas de pantalla (sin girar). */
+  hostPoint(e) {
     const r = this.host.getBoundingClientRect();
     return [e.clientX - r.left, e.clientY - r.top];
+  }
+
+  /** Punto del evento en coordenadas del escenario (las de la vista, que puede estar girada). */
+  screenPoint(e) {
+    return this.view.hostToStage(...this.hostPoint(e));
   }
 
   isToolPointer(e) {
@@ -448,7 +457,7 @@ export class Editor {
       /* puntero sintético o ya liberado: no hace falta capturarlo */
     }
     const sp = this.screenPoint(e);
-    this.pointers.set(e.pointerId, { sp, type: e.pointerType, t: performance.now(), start: sp });
+    this.pointers.set(e.pointerId, { sp, hp: this.hostPoint(e), type: e.pointerType, t: performance.now(), start: sp });
     // toque de varios dedos (dos = deshacer, tres = rehacer): se sigue desde que baja el primer dedo
     if (e.pointerType === 'touch') {
       const n = [...this.pointers.values()].filter((q) => q.type === 'touch').length;
@@ -472,7 +481,7 @@ export class Editor {
       this.clearLongPress();
       if (this.drag && this.drag.mode !== 'pinch') this.cancelDrag();
       const [a, b] = touches;
-      this.drag = { mode: 'pinch', dist: Math.hypot(a.sp[0] - b.sp[0], a.sp[1] - b.sp[1]), mid: mid(a.sp, b.sp) };
+      this.drag = { mode: 'pinch', ...pinchState(a, b), turned: 0, rotating: false };
       return;
     }
 
@@ -497,7 +506,10 @@ export class Editor {
     if (e.pointerType) this.inputType = e.pointerType;
     const sp = this.screenPoint(e);
     const p = this.pointers.get(e.pointerId);
-    if (p) p.sp = sp;
+    if (p) {
+      p.sp = sp;
+      p.hp = this.hostPoint(e);
+    }
     if (p && this.tapSession && Math.hypot(sp[0] - p.start[0], sp[1] - p.start[1]) > 14) this.tapSession.moved = true;
     if (this.lp && this.lp.id === e.pointerId && Math.hypot(sp[0] - this.lp.sp[0], sp[1] - this.lp.sp[1]) > TAP_MOVE) this.clearLongPress();
     const d = this.drag;
@@ -506,12 +518,36 @@ export class Editor {
       const touches = [...this.pointers.values()].filter((q) => q.type === 'touch');
       if (touches.length < 2) return;
       const [a, b] = touches;
-      const dist = Math.hypot(a.sp[0] - b.sp[0], a.sp[1] - b.sp[1]);
-      const m = mid(a.sp, b.sp);
-      this.view.panBy(m[0] - d.mid[0], m[1] - d.mid[1]);
-      if (d.dist > 0 && dist > 0) this.view.zoomAt(d.dist / dist, m[0], m[1]);
-      d.dist = dist;
-      d.mid = m;
+      const g = pinchState(a, b);
+      const v = this.view;
+      // desplazar y hacer zoom: en coordenadas de pantalla, pasadas al escenario (que puede estar girado)
+      const rad = (v.rot * Math.PI) / 180;
+      const dx = g.mid[0] - d.mid[0];
+      const dy = g.mid[1] - d.mid[1];
+      v.panBy(dx * Math.cos(rad) + dy * Math.sin(rad), -dx * Math.sin(rad) + dy * Math.cos(rad));
+      if (d.dist > 0 && g.dist > 0) v.zoomAt(d.dist / g.dist, ...v.hostToStage(...g.mid));
+      // girar: solo cuando los dedos giran de verdad (zona muerta), para no torcer el mapa al pellizcar
+      let turn = g.angle - d.angle;
+      turn -= 360 * Math.round(turn / 360);
+      d.turned += turn;
+      if (!d.rotating && Math.abs(d.turned) > ROTATE_DEADZONE_DEG) {
+        d.rotating = true;
+        d.raw = v.rot;
+        turn = d.turned;
+      }
+      if (d.rotating && turn) {
+        d.raw += turn;
+        // imán al norte: cerca de 0° la vista se acomoda sola (el giro real de los dedos sigue contando)
+        let r = ((d.raw % 360) + 360) % 360;
+        if (r > 180) r -= 360;
+        const target = Math.abs(r) < NORTH_SNAP_DEG ? 0 : r;
+        let delta = target - v.rot;
+        delta -= 360 * Math.round(delta / 360);
+        if (delta) v.rotateAt(delta, ...g.mid);
+      }
+      d.dist = g.dist;
+      d.mid = g.mid;
+      d.angle = g.angle;
       return;
     }
     if (d?.mode === 'pan') {
@@ -2888,6 +2924,11 @@ export class Editor {
 }
 
 /* ------------------------------------------------------------------ util */
+
+/** Distancia, punto medio y ángulo (grados, horario en pantalla) de dos dedos, en coordenadas de pantalla. */
+function pinchState(a, b) {
+  return { dist: Math.hypot(a.hp[0] - b.hp[0], a.hp[1] - b.hp[1]), mid: mid(a.hp, b.hp), angle: (Math.atan2(b.hp[1] - a.hp[1], b.hp[0] - a.hp[0]) * 180) / Math.PI };
+}
 
 function mid(a, b) {
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];

@@ -49,6 +49,7 @@ en las herramientas del navegador → Aplicación → Service Workers →
 ```bash
 node test/core.test.mjs      # proyección, geometría, estilo, operaciones, etiquetas, relieve, trace
 node test/georef.test.mjs    # transformaciones, residuos y remuestreo
+node test/view.test.mjs      # rotación de la vista (gesto de dos dedos)
 node test/ornaments.test.mjs # ornamentos, onda, tramas, halos
 node test/richtext.test.mjs # texto con formato por tramos (color/tamaño/negrita/cursiva)
 node test/pdf.test.mjs       # Illustrator (.ai) / PDF vectorial: capas, colores, textos

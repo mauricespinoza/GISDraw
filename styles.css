@@ -420,6 +420,13 @@ body {
   isolation: isolate;
 }
 
+/* la vista puede girarse (dos dedos): #rot lleva el escenario y la hoja, y se gira desde JS */
+#rot {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 #stage,
 #input-host,
 .georef-canvas,
@@ -2242,4 +2249,20 @@ body {
   #status {
     top: 10px;
   }
+}
+
+/* brújula: aparece con la vista girada y la devuelve al norte */
+#btn-north {
+  position: absolute;
+  right: 10px;
+  bottom: 28px;
+  z-index: 4;
+  background: rgba(255, 255, 255, 0.95);
+  transition: transform 0.05s linear;
+}
+#btn-north[hidden] {
+  display: none;
+}
+#btn-north .ico {
+  transform: rotate(var(--north-rot, 0deg));
 }

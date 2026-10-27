@@ -1,10 +1,16 @@
 /**
  * La vista: qué pedazo del mundo UTM cae en la pantalla.
  *
- * Es un estado mínimo —centro en metros y metros por píxel— y no hay rotación:
- * el norte de la cuadrícula UTM queda siempre arriba, que es lo que se espera
- * de un dibujo cartográfico. La convergencia de meridianos la muestra el norte
- * del layout, no la vista.
+ * Es un estado mínimo —centro en metros, metros por píxel y rotación—. El norte
+ * de la cuadrícula UTM queda arriba salvo que el usuario gire la vista con dos
+ * dedos (tableta). La convergencia de meridianos la muestra el norte del
+ * layout, no la vista.
+ *
+ * La rotación no toca el dibujo: el «escenario» (#stage) se gira entero con CSS
+ * alrededor del centro de la pantalla. Para que no queden esquinas sin dibujar,
+ * mientras está girado el escenario mide la diagonal de la pantalla (`w`×`h`);
+ * `vw`×`vh` es el tamaño real de la pantalla. `toScreen`/`toWorld` trabajan en
+ * coordenadas del escenario; `hostToStage`/`stageToHost` pasan de/a pantalla.
  */
 
 /** Pantallas CSS: 96 px por pulgada. */
@@ -15,6 +21,9 @@ export class View {
     this.cx = 346000; // Santiago, por defecto
     this.cy = 6297000;
     this.mpp = 25; // metros por píxel
+    this.vw = width;
+    this.vh = height;
+    this.rot = 0; // grados, horario en pantalla
     this.w = width;
     this.h = height;
     this.listeners = new Set();
@@ -30,9 +39,57 @@ export class View {
   }
 
   resize(w, h) {
-    this.w = w;
-    this.h = h;
+    this.vw = w;
+    this.vh = h;
+    this.layout();
     this.emit();
+  }
+
+  /** Tamaño del escenario: la pantalla, o su diagonal si está girado. */
+  layout() {
+    if (this.rot) this.w = this.h = Math.ceil(Math.hypot(this.vw, this.vh));
+    else {
+      this.w = this.vw;
+      this.h = this.vh;
+    }
+  }
+
+  /** pantalla -> escenario (los dos en píxeles CSS; el escenario gira alrededor del centro de la pantalla) */
+  hostToStage(x, y) {
+    const a = (-this.rot * Math.PI) / 180;
+    const dx = x - this.vw / 2;
+    const dy = y - this.vh / 2;
+    return [this.w / 2 + dx * Math.cos(a) - dy * Math.sin(a), this.h / 2 + dx * Math.sin(a) + dy * Math.cos(a)];
+  }
+
+  /** escenario -> pantalla */
+  stageToHost(x, y) {
+    const a = (this.rot * Math.PI) / 180;
+    const dx = x - this.w / 2;
+    const dy = y - this.h / 2;
+    return [this.vw / 2 + dx * Math.cos(a) - dy * Math.sin(a), this.vh / 2 + dx * Math.sin(a) + dy * Math.cos(a)];
+  }
+
+  /** Gira la vista `deg` grados (horario) alrededor del punto de pantalla (hx, hy): ese punto del mapa no se mueve. */
+  rotateAt(deg, hx = this.vw / 2, hy = this.vh / 2) {
+    const [wx, wy] = this.toWorld(...this.hostToStage(hx, hy));
+    this.setRot(this.rot + deg);
+    const [sx, sy] = this.hostToStage(hx, hy);
+    this.cx = wx - (sx - this.w / 2) * this.mpp;
+    this.cy = wy + (sy - this.h / 2) * this.mpp;
+    this.emit();
+  }
+
+  /** Vuelve el norte arriba (la vista gira sobre el centro de la pantalla). */
+  resetRotation() {
+    if (this.rot) this.rotateAt(-this.rot);
+  }
+
+  setRot(deg) {
+    let r = ((deg % 360) + 360) % 360;
+    if (r > 180) r -= 360;
+    this.rot = Math.abs(r) < 1e-6 ? 0 : r;
+    this.layout();
   }
 
   /** mundo -> pantalla */
@@ -71,6 +128,7 @@ export class View {
     this.emit();
   }
 
+  /** Desplaza la vista; el delta va en píxeles del escenario. */
   panBy(dxPx, dyPx) {
     this.cx -= dxPx * this.mpp;
     this.cy += dyPx * this.mpp;
