@@ -3,12 +3,13 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v63';
+export const APP_VERSION = 'v64';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
+  ['v64', 'Transformar en el lugar (Ctrl+Alt+Mayús+M, panel Organizar, menús): escala tamaño y grosor, gira o refleja cada objeto sobre su propio centro sin moverlo'],
   ['v63', 'Imagen pegada: queda desbloqueada y seleccionada, se puede mover y escalar de inmediato'],
   ['v62', 'Al tocar una línea o un polígono, su estilo queda como el de lo próximo que se dibuje'],
   ['v61', 'Reflejar: eje vertical, horizontal, diagonales 45° / −45° (panel Organizar y menú contextual) y con cualquier ángulo (Transformar); los textos siguen legibles y los dientes de las fallas cambian de lado'],
