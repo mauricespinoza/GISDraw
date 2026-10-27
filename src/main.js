@@ -166,6 +166,8 @@ class App {
     this.editor.onStylePicked = (st) => {
       if (!this.editor.selection.size) this.setCurrentStyle(st);
     };
+    // tocar una línea o un polígono deja su estilo como el de lo próximo que se dibuje
+    this.editor.onStyleAdopt = (st) => this.setCurrentStyle(st);
     this.renderer = new StageRenderer({
       stage: document.getElementById('stage'),
       view: this.view,
