@@ -86,6 +86,8 @@ const DRAW_TOOLS = new Set(['pen', 'polygon', 'pencil', 'line', 'arrow', 'rect',
 const HANDLE_KEYS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 const SNAP_PX = 12;
 const SNAP_PX_PEN = 3; // el lápiz es preciso: casi sin imán, el trazo cae donde se apoya la punta
+const TRACK_R_PX = 8; // radio en que el paso del cursor cubre un borde (Trace)
+const TRACK_STEP_PX = 3; // separación entre muestras del recorrido del cursor
 /** Tolerancia de simplificación (px) del pincel de Suavizar para una intensidad. */
 const smoothTolPx = (level) => 0.3 + (Math.max(0, Math.min(100, level)) / 100) * 2.5;
 const GUIDE_PX = 6; // snap ligero a guías de alineación
@@ -241,7 +243,8 @@ export class Editor {
   snapIndex() {
     if (this.snapDirty || !this._snap || this._snapView !== `${this.view.cx}|${this.view.cy}|${this.view.mpp}|${this.view.w}`) {
       const idx = new SnapIndex(64 * this.view.mpp);
-      const ext = this.view.extent(200);
+      // un viewport de margen: el Trace puede seguir un borde que sale un poco de la pantalla
+      const ext = this.view.extent(Math.max(200, this.view.w, this.view.h));
       const tol = this.view.mpp * 0.5;
       const addShape = (s) => {
         if (s.visible === false) return;
@@ -286,8 +289,10 @@ export class Editor {
       const first = this.draft.nodes[0];
       if (Math.hypot(first.x - wp[0], first.y - wp[1]) < tol) return { point: [first.x, first.y], snap: { type: 'first' } };
     }
-    const s = this.snapIndex().query(wp, tol);
+    const idx = this.snapIndex();
+    const s = idx.query(wp, tol);
     if (s) {
+      s.index = idx; // para reconocerlo si el índice se rehace (ver liveSnap)
       this.guides = null;
       return { point: s.point, snap: s };
     }
@@ -1830,20 +1835,66 @@ export class Editor {
    * parece más corto) y no vuelve a pasar por los vértices ya puestos.
    */
   traceFor(prevSnap, snap, { alt = false, preview = false } = {}) {
+    const a = this.liveSnap(prevSnap);
+    const b = this.liveSnap(snap);
+    if (!a || !b) return null;
     const avoid = new Set((this.draft?.nodes || []).slice(0, -1).map((n) => pointKey([n.x, n.y])));
-    const prefer = this.traceDir?.from === prevSnap ? this.traceDir.first : null;
-    const path = smartTrace(this.snapIndex(), this.graph(), prevSnap, snap, { prefer, avoid, alt, maxVisited: preview ? 40000 : undefined });
-    if (path && !alt) this.traceDir = { from: prevSnap, first: path.first };
-    return path;
+    const t = this.traceTrack?.from === prevSnap ? this.traceTrack : null;
+    const track = t?.pts.length ? { pts: t.pts, r: TRACK_R_PX * this.view.mpp } : null;
+    return smartTrace(this.snapIndex(), this.graph(), a, b, { avoid, alt, track, maxVisited: preview ? 40000 : undefined });
+  }
+
+  /**
+   * El snap en el índice actual. El índice (y el grafo) se rehacen al mover o
+   * hacer zoom, y un snap guardado de antes apunta a un número de segmento que
+   * ahora es otro: se vuelve a ubicar por su punto y su elemento.
+   */
+  liveSnap(snap) {
+    const idx = this.snapIndex();
+    if (!snap || snap.index === idx) return snap;
+    const s = idx.locate(snap.point, Math.max(this.view.mpp * 2, 1e-9), snap.meta?.id);
+    if (s) s.index = idx;
+    return s;
+  }
+
+  /**
+   * Recorrido del cursor sobre la geometría desde el último vértice puesto: el
+   * Trace lo sigue (dobla la esquina por la que pasó el cursor). Se reinicia al
+   * poner otro vértice y cuando el cursor vuelve al punto de partida.
+   */
+  recordTrack(prev, wp) {
+    if (this.traceTrack?.from !== prev) this.traceTrack = { from: prev, pts: [] };
+    const pts = this.traceTrack.pts;
+    const mpp = this.view.mpp;
+    if (Math.hypot(wp[0] - prev.point[0], wp[1] - prev.point[1]) <= TRACK_R_PX * mpp) {
+      pts.length = 0;
+      return;
+    }
+    const on = this.snapIndex().query(wp, SNAP_PX * mpp);
+    if (!on) return;
+    const q = on.point;
+    const last = pts[pts.length - 1];
+    const d = last ? Math.hypot(q[0] - last[0], q[1] - last[1]) : Infinity;
+    if (d < TRACK_STEP_PX * mpp) return;
+    // un movimiento rápido deja huecos: se rellenan si no son muy grandes (en una esquina, lo que queda fuera del borde no cuenta)
+    if (last && d < 60 * mpp) {
+      const n = Math.floor(d / (TRACK_STEP_PX * mpp));
+      for (let i = 1; i < n; i++) pts.push([last[0] + ((q[0] - last[0]) * i) / n, last[1] + ((q[1] - last[1]) * i) / n]);
+    }
+    pts.push(q.slice());
+    if (pts.length > 1500) pts.splice(0, pts.length - 1500);
   }
 
   updateHover(sp, alt = false) {
     const wp = this.view.toWorld(...sp);
     const { point, snap } = this.snapPoint(wp);
     let tracePreview = null;
-    if (this.settings.trace && this.draft && snap?.segment != null && this.draft.snaps.length) {
+    if (this.settings.trace && this.draft && this.draft.snaps.length) {
       const prev = this.draft.snaps[this.draft.snaps.length - 1];
-      if (prev?.segment != null) tracePreview = this.traceFor(prev, snap, { alt, preview: true });
+      if (prev?.segment != null) {
+        this.recordTrack(prev, wp);
+        if (snap?.segment != null) tracePreview = this.traceFor(prev, snap, { alt, preview: true });
+      }
     }
     this.hover = { sp, wp: point, snap, tracePreview };
     this.changed();
