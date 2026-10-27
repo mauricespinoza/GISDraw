@@ -3,12 +3,13 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v58';
+export const APP_VERSION = 'v59';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
+  ['v59', 'Trace: sigue por donde pasa el cursor (al doblar una esquina ya no toma el camino largo) y no salta vértices tras mover o hacer zoom durante el trazado'],
   ['v58', 'Degradado: selector de tipo visible, asas en pantalla para colores y dial de rotación, botón de degradado junto al color; icono de la app corregido para «Añadir a inicio»'],
   ['v57', 'Barra flotante: botón Simplificar al seleccionar líneas o polígonos'],
   ['v56', 'Barra flotante: Freeze node / Unfreeze node al elegir un nodo con la herramienta Nodos'],

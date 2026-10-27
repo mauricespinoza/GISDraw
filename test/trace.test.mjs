@@ -115,6 +115,67 @@ const square = { id: 'sq', closed: true, pts: [[0, 0], [100, 0], [100, 100], [0,
   ok(close && same(close[close.length - 1], 0, 0), 'termina en un punto ya trazado');
 }
 
+// ---- el trace sigue por donde pasó el cursor (track)
+{
+  const rect = { id: 'r', closed: true, pts: [[0, 0], [200, 0], [200, 100], [0, 100]] };
+  const b = build([rect]);
+  const at = (x, y) => b.idx.query([x, y], 1);
+  const along = (pts, step = 3) => {
+    const out = [];
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [a, c] = [pts[i], pts[i + 1]];
+      const n = Math.max(1, Math.ceil(Math.hypot(c[0] - a[0], c[1] - a[1]) / step));
+      for (let k = 0; k < n; k++) out.push([a[0] + ((c[0] - a[0]) * k) / n, a[1] + ((c[1] - a[1]) * k) / n]);
+    }
+    out.push(pts[pts.length - 1].slice());
+    return out;
+  };
+  const A = at(0, 80);
+  // el cursor baja un poco (titubeo), vuelve, sube a la esquina y dobla: el trazo dobla con él, no da la vuelta larga
+  const wiggle = [...along([[0, 75], [0, 60]]), ...along([[0, 88], [0, 100], [40, 100]])];
+  const corner = smartTrace(b.idx, b.graph, A, at(40, 100), { track: { pts: wiggle, r: 8 } });
+  ok(corner && same(corner[1], 0, 100) && Math.abs(pathLength(corner) - 60) < 1e-6, `dobla la esquina por donde pasó el cursor: ${JSON.stringify(corner)}`);
+  // el cursor dio la vuelta por abajo y la derecha: sigue por ahí aunque sea más largo
+  const around = along([[0, 70], [0, 0], [200, 0], [200, 100], [120, 100]]);
+  const long = smartTrace(b.idx, b.graph, A, at(120, 100), { track: { pts: around, r: 8 } });
+  ok(long && same(long[1], 0, 0) && long.some((p) => same(p, 200, 100)), `en el anillo sigue el sentido del cursor: ${JSON.stringify(long)}`);
+  // pero si el cursor dio casi toda la vuelta y el destino quedó junto al inicio, gana el corto
+  const almost = along([[0, 70], [0, 0], [200, 0], [200, 100], [10, 100]]);
+  const back = smartTrace(b.idx, b.graph, A, at(10, 100), { track: { pts: almost, r: 8 } });
+  ok(back && same(back[1], 0, 100) && Math.abs(pathLength(back) - 30) < 1e-6, `destino a un paso por el otro lado: el corto (${JSON.stringify(back)})`);
+  // sin recorrido del cursor: el más corto
+  const plain = smartTrace(b.idx, b.graph, A, at(120, 100));
+  ok(plain && same(plain[1], 0, 100), 'sin recorrido, el más corto');
+}
+
+// ---- dos bordes casi superpuestos: si el cursor sigue el que tiene vértices, el trace no los salta
+{
+  const straight = { id: 's', pts: [[0, 0], [100, 0]] };
+  const wavy = { id: 'w', pts: [[0, 0], [25, 3], [50, 4], [75, 3], [100, 0]] };
+  const b = build([straight, wavy]);
+  const A = b.idx.query([0, 0], 0.5);
+  const B = b.idx.query([100, 0], 0.5);
+  const pts = [];
+  for (let x = 2; x <= 98; x += 2) pts.push([x, x <= 25 ? (3 * x) / 25 : x <= 50 ? 3 + (x - 25) / 25 : x <= 75 ? 4 - (x - 50) / 25 : 3 - (3 * (x - 75)) / 25]);
+  const p = smartTrace(b.idx, b.graph, A, B, { track: { pts, r: 1.5 } });
+  ok(p && [[25, 3], [50, 4], [75, 3]].every(([x, y]) => p.some((q) => same(q, x, y))), `recorre los vértices del borde seguido: ${JSON.stringify(p)}`);
+}
+
+// ---- un snap tomado en un índice anterior se vuelve a ubicar en el nuevo (pan / zoom)
+{
+  const c = { id: 'c', pts: [[50, 100], [50, 200], [80, 230]] };
+  const old = build([square, c]);
+  const snap = old.idx.query([50, 150], 1);
+  const now = build([{ id: 'x', pts: [[500, 500], [600, 500]] }, c, square]); // otro orden: otros números de segmento
+  ok(now.idx.segments[snap.segment].meta.id !== 'c', 'el número de segmento viejo apunta a otro elemento');
+  const live = now.idx.locate(snap.point, 0.1, 'c');
+  ok(live && live.meta.id === 'c' && same(live.point, 50, 150), `se ubica en el mismo elemento y punto: ${JSON.stringify(live?.point)}`);
+  const v = now.idx.locate([50, 200], 0.1, 'c');
+  ok(v && v.type === 'vertex' && same(v.point, 50, 200), 'un vértice sigue siendo vértice');
+  const path = tracePath(now.idx, now.graph, live, now.idx.query([0, 100], 1));
+  ok(path && path.some((p) => same(p, 50, 100)) && same(path[path.length - 1], 0, 100), `traza desde el snap reubicado: ${JSON.stringify(path)}`);
+}
+
 // ---- sin conexión: no hay camino
 {
   const b = build([square, { id: 'far', pts: [[300, 0], [400, 0]] }]);

@@ -111,6 +111,30 @@ export class SnapIndex {
     if (bestSegment) return { ...bestSegment, type: 'segment' };
     return null;
   }
+
+  /**
+   * Vuelve a ubicar en ESTE índice un snap tomado en otro (el índice se rehace
+   * al mover o hacer zoom, y los números de segmento cambian): el segmento del
+   * mismo elemento (`id`) más cercano a `p`, o cualquiera si ese no aparece.
+   * Sin esto, el trazado partiría de un segmento ajeno y saltaría tramos.
+   */
+  locate(p, tol, id = null) {
+    const tolSq = tol * tol;
+    let best = null;
+    for (const i of this.#candidates(p, tol)) {
+      const s = this.segments[i];
+      const r = nearestOnSegment(p, s.a, s.b);
+      if (r.distSq > tolSq) continue;
+      const own = id != null && s.meta?.id === id;
+      if (!best || (own && !best.own) || (own === best.own && r.distSq < best.distSq)) best = { own, distSq: r.distSq, segment: i, t: r.t, meta: s.meta };
+    }
+    if (!best) return null;
+    const s = this.segments[best.segment];
+    const L = Math.hypot(s.b[0] - s.a[0], s.b[1] - s.a[1]) || 1;
+    const t = best.t * L <= tol * 0.05 ? 0 : (1 - best.t) * L <= tol * 0.05 ? 1 : best.t;
+    const point = t === 0 ? s.a.slice() : t === 1 ? s.b.slice() : [s.a[0] + t * (s.b[0] - s.a[0]), s.a[1] + t * (s.b[1] - s.a[1])];
+    return { point, distSq: best.distSq, segment: best.segment, t, meta: best.meta, type: t === 0 || t === 1 ? 'vertex' : 'segment' };
+  }
 }
 
 /* ============================================================ TRAZADO */
@@ -383,6 +407,61 @@ function overlayFor(index, graph, snaps) {
   return { extra, extraAdj, keys, cut };
 }
 
+/** Lo que cuesta, por unidad de largo, un tramo por el que ya pasó el cursor (el resto cuesta 1). */
+const FOLLOWED_COST = 0.25;
+
+/**
+ * Cobertura del recorrido del cursor: `track.pts` son las posiciones (sobre la
+ * geometría) por las que pasó el cursor desde el último vértice, y `track.r`
+ * el radio en que una posición cubre el borde. Devuelve `(pa, pb) => largo`
+ * del tramo pa–pb que el cursor recorrió (unión de las proyecciones ± r).
+ */
+function trackCoverage(track) {
+  const pts = track?.pts;
+  const r = track?.r;
+  if (!pts?.length || !(r > 0)) return null;
+  const cell = r * 4;
+  const grid = new Map();
+  for (const q of pts) {
+    const k = `${Math.floor(q[0] / cell)},${Math.floor(q[1] / cell)}`;
+    let arr = grid.get(k);
+    if (!arr) grid.set(k, (arr = []));
+    arr.push(q);
+  }
+  const near = (pa, pb) => {
+    const x0 = Math.floor((Math.min(pa[0], pb[0]) - r) / cell);
+    const x1 = Math.floor((Math.max(pa[0], pb[0]) + r) / cell);
+    const y0 = Math.floor((Math.min(pa[1], pb[1]) - r) / cell);
+    const y1 = Math.floor((Math.max(pa[1], pb[1]) + r) / cell);
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > pts.length) return pts; // tramo largo: más barato mirar todas
+    const out = [];
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (const q of grid.get(`${x},${y}`) || []) out.push(q);
+    return out;
+  };
+  return (pa, pb) => {
+    const L = Math.hypot(pb[0] - pa[0], pb[1] - pa[1]);
+    if (!L) return 0;
+    const iv = [];
+    for (const q of near(pa, pb)) {
+      const n = nearestOnSegment(q, pa, pb);
+      if (n.distSq > r * r) continue;
+      iv.push([Math.max(0, n.t * L - r), Math.min(L, n.t * L + r)]);
+    }
+    if (!iv.length) return 0;
+    iv.sort((a, b) => a[0] - b[0]);
+    let total = 0;
+    let [s0, e0] = iv[0];
+    for (let i = 1; i < iv.length; i++) {
+      if (iv[i][0] <= e0) e0 = Math.max(e0, iv[i][1]);
+      else {
+        total += e0 - s0;
+        [s0, e0] = iv[i];
+      }
+    }
+    return total + e0 - s0;
+  };
+}
+
 /**
  * Camino más corto sobre el borde de la geometría existente entre dos puntos
  * snapeados — el equivalente de la herramienta Trace de QGIS.
@@ -391,10 +470,15 @@ function overlayFor(index, graph, snaps) {
  * vértices intermedios del principal (por el otro lado de un polígono, por
  * ejemplo); si no hay otro, el mismo.
  *
+ * Con `track` (ver trackCoverage) el camino sigue por donde pasó el cursor: los
+ * tramos recorridos cuestan FOLLOWED_COST de su largo. Así, al doblar una
+ * esquina con el cursor el trazo dobla con él, y en un anillo no se pasa al
+ * otro lado mientras el cursor no haya dado (casi) toda la vuelta.
+ *
  * @returns {Array<[number,number]>|null} puntos en pantalla, incluidos ambos
  *   extremos, o null si no hay camino (features desconectadas).
  */
-export function tracePath(index, graph, snapA, snapB, { maxVisited = 200000, alt = false, avoid = null, first = null } = {}) {
+export function tracePath(index, graph, snapA, snapB, { maxVisited = 200000, alt = false, avoid = null, first = null, track = null } = {}) {
   if (!snapA || !snapB) return null;
   // Mismo punto: no hay nada que trazar, y sin este corte Dijkstra devolvería
   // un ida y vuelta hasta el extremo más cercano.
@@ -419,6 +503,19 @@ export function tracePath(index, graph, snapA, snapB, { maxVisited = 200000, alt
     return bonus ? own.concat(bonus) : own;
   };
   if (!pointOf(startKey) || !pointOf(endKey)) return null;
+  const covered = trackCoverage(track);
+  const costMemo = new Map();
+  const cost = (k, e) => {
+    if (!covered) return e.w;
+    const ek = k < e.to ? `${k}|${e.to}` : `${e.to}|${k}`;
+    let c = costMemo.get(ek);
+    if (c === undefined) {
+      const cv = Math.min(e.w, covered(pointOf(k), pointOf(e.to)));
+      c = e.w - (1 - FOLLOWED_COST) * cv;
+      costMemo.set(ek, c);
+    }
+    return c;
+  };
 
   // `avoid`: puntos por los que el recorrido no debe volver a pasar (lo ya trazado); el final sí puede ser uno de ellos (cerrar el anillo).
   // `first`: único vecino del punto de partida por el que se puede salir (el sentido que ya se venía siguiendo).
@@ -440,7 +537,7 @@ export function tracePath(index, graph, snapA, snapB, { maxVisited = 200000, alt
         if (done.has(e.to) || blockedNodes?.has(e.to) || isAvoided(e.to)) continue;
         if (forceFirst && key === startKey && pointKey(pointOf(e.to)) !== forceFirst) continue;
         if (blocked && blocked.has(key < e.to ? `${key}|${e.to}` : `${e.to}|${key}`)) continue;
-        const nd = priority + e.w;
+        const nd = priority + cost(key, e);
         if (nd < (dist.get(e.to) ?? Infinity)) {
           dist.set(e.to, nd);
           prev.set(e.to, key);
@@ -479,6 +576,7 @@ export const pathLength = (path) => path.reduce((a, p, i) => (i ? a + Math.hypot
 
 /**
  * Trace inteligente. Parte del camino más corto, pero:
+ * - sigue por donde pasó el cursor (`track`, ver tracePath);
  * - sigue el SENTIDO que ya llevaba (`prefer`, el punto por el que salió el
  *   cálculo anterior desde el mismo origen) mientras no cueste más de
  *   `stick` veces el camino libre: en un anillo no cambia de lado de golpe
@@ -487,8 +585,8 @@ export const pathLength = (path) => path.reduce((a, p, i) => (i ? a + Math.hypot
  *   terminar en uno de ellos.
  * @returns el camino (con `.first`) o null
  */
-export function smartTrace(index, graph, snapA, snapB, { prefer = null, avoid = null, alt = false, stick = 3, maxVisited } = {}) {
-  const base = { avoid, maxVisited };
+export function smartTrace(index, graph, snapA, snapB, { prefer = null, avoid = null, alt = false, stick = 3, maxVisited, track = null } = {}) {
+  const base = { avoid, maxVisited, track };
   let free = tracePath(index, graph, snapA, snapB, base);
   if (!free) return null;
   if (prefer && free.first !== prefer) {
