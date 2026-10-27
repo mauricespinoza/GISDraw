@@ -21,7 +21,7 @@
 
 import { imageRect } from './raster/rasterView.js';
 import { addShapes, allTopShapes, findTopShape, inLockedLayer, layerColor, layerOfShape, mapShapes, removeShapes, replaceShapes } from './doc.js';
-import { frozenPoints, setNodesFrozen, splitPath } from './ops.js';
+import { frozenPoints, group as groupShapes, setNodesFrozen, splitPath, ungroup as ungroupShapes } from './ops.js';
 import { layoutText, textCorners } from './textLayout.js';
 import { pickShape, shapesInBox, shapesInLasso, shapeDistance, flatRings } from './hit.js';
 import { SnapIndex, buildGraph, smartTrace, pointKey } from './snapping.js';
@@ -191,6 +191,7 @@ export class Editor {
       this.onMessage(`La capa «${name}» está bloqueada: sus objetos no se pueden seleccionar ni editar`);
     }
     this.selection = new Set(free);
+    if (this.enteredGroup && !free.some((id) => this.enteredGroup.ids.has(id))) this.exitGroup();
     this.imageSel = null;
     this.activeNode = null;
     this.changed();
@@ -198,6 +199,30 @@ export class Editor {
 
   changed() {
     this.onChange(this);
+  }
+
+  /** Doble clic en un grupo: se abre (se desagrupa) para elegir sus elementos; al salir de ellos se reagrupa. */
+  enterGroup(g) {
+    if (g.clip || g.locked || inLockedLayer(this.doc, g.id)) return false;
+    const { doc, ids } = ungroupShapes(this.doc, new Set([g.id]));
+    if (!ids.size) return false;
+    this.history.commit(doc);
+    this.enteredGroup = { ids, name: g.name };
+    this.setSelection([...ids]);
+    this.onMessage('Dentro del grupo: elige sus elementos; haz clic fuera para volver a agruparlo');
+    return true;
+  }
+
+  exitGroup() {
+    const eg = this.enteredGroup;
+    this.enteredGroup = null;
+    if (!eg) return;
+    const alive = new Set([...eg.ids].filter((id) => findTopShape(this.doc, id)));
+    const r = groupShapes(this.doc, alive);
+    if (!r.id) return;
+    if (eg.name) r.doc = mapShapes(r.doc, [r.id], (s) => ({ ...s, name: eg.name }));
+    this.history.commit(r.doc);
+    this.snapDirty = true;
   }
 
   /** Tras deshacer o cambiar el documento: limpiar ids que ya no existen. */
@@ -2392,6 +2417,7 @@ export class Editor {
     if (this.draft && (this.tool === 'pen' || this.tool === 'polygon')) return; // lo resuelve penDown
     const hit = pickShape(this.doc, sp, this.view, this.units(), 8);
     if (!hit) return;
+    if (hit.shape.type === 'group' && this.tool === 'select' && this.enterGroup(hit.shape)) return;
     if (hit.shape.type === 'text') {
       this.setSelection([hit.shape.id]);
       this.onEditText(hit.shape);
