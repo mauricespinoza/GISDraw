@@ -1992,16 +1992,20 @@ class App {
     const rec = { kind: 'image', name, format: 'bitmap', mime: file.type, buffer: await file.arrayBuffer(), bounds };
     imageFiles.set(fileId, { bitmap, x0: bounds[0], y0: bounds[1], x1: bounds[2], y1: bounds[3] });
     await saveFile(fileId, rec);
-    const l = makeRasterLayer('image', name, { fileId });
+    // desbloqueada y seleccionada: lo pegado se puede mover y escalar de inmediato
+    const l = makeRasterLayer('image', name, { fileId }, { locked: false });
     const doc = this.history.doc;
     const layers = doc.layers.slice();
     const fv = layers.findIndex((x) => x.kind === 'vector');
     layers.splice(fv < 0 ? layers.length : fv, 0, l);
     this.history.commit({ ...doc, layers });
+    this.editor.setSelection([]);
+    this.editor.imageSel = l.id;
+    this.editor.changed();
     this.lastPastedImage = file;
     // solo llegó una imagen: si venía de Illustrator, su dibujo vectorial no se pudo leer
     const tip = hint ? ' ¿Era un dibujo de Illustrator? Ctrl+Z y activa en Illustrator Preferencias → Gestión del portapapeles → «Copiar como: código SVG», o impórtalo con Archivo → Illustrator / PDF.' : '';
-    this.message(`Imagen pegada como capa «${name}» en el centro de la vista.${this.mode === 'gis' ? ' Para ubicarla con precisión: Archivo → Georreferenciar imagen.' : ''}${tip}`, hint ? 11000 : 7000);
+    this.message(`Imagen pegada como capa «${name}» en el centro de la vista: arrástrala para moverla y tira de su esquina para escalarla.${this.mode === 'gis' ? ' Para ubicarla con precisión: Archivo → Georreferenciar imagen.' : ''}${tip}`, hint ? 11000 : 7000);
   }
 
   /**
