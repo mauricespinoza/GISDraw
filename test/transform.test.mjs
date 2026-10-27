@@ -133,5 +133,18 @@ const doc = addShapes(base, layerId, [a, b]);
   ok(tr.nodes[0].x === 110, 'Transformar: reflejo y luego desplazamiento');
 }
 
+{
+  // en el lugar: cada objeto escala (tamaño y grosor) sobre su propio centro
+  const a = makeRectPath(0, 0, 10, 10, { ...defaultStyle(), strokeWidth: 1 });
+  const b = makeRectPath(100, 40, 120, 44, { ...defaultStyle(), strokeWidth: 0.5 });
+  const nd = newDocument();
+  const L = nd.activeLayerId;
+  const doc = addShapes(nd, L, [a, b]);
+  const out = transformShapes(doc, new Set([a.id, b.id]), { sx: 2, sy: 2, pivot: 'each', strokes: true }).layers.find((l) => l.id === L).items;
+  const c = (s) => { const q = shapeBBox(s); return [q.x + q.w / 2, q.y + q.h / 2, q.w]; };
+  ok(c(out[0]).every((v, i) => Math.abs(v - [5, 5, 20][i]) < 1e-9) && c(out[1]).every((v, i) => Math.abs(v - [110, 42, 40][i]) < 1e-9), 'en el lugar: el centro de cada objeto no se mueve y el tamaño se duplica');
+  ok(out[0].style.strokeWidth === 2 && out[1].style.strokeWidth === 1, 'en el lugar: el grosor escala también');
+}
+
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLOS` : ''}`);
 if (fail) process.exit(1);

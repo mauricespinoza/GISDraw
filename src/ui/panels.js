@@ -989,7 +989,7 @@ export class Panels {
           btn('⤢ 45°', doIt((d) => reflectShapes(d, ids, 'd1', est))),
           btn('⤡ −45°', doIt((d) => reflectShapes(d, ids, 'd2', est))),
         ),
-        btn('Transformar…', () => app.transformDialog()),
+        h('div', { class: 'grid-btns two' }, btn('Transformar…', () => app.transformDialog()), btn('Transformar en el lugar…', () => app.transformDialog({ inPlace: true }))),
       ),
       sec(
         'Alinear',
