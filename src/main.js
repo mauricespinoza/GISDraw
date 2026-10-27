@@ -278,6 +278,7 @@ class App {
     this.updateRedraw();
     this.updateScaleBox();
     this.updatePage();
+    this.applyRotation();
     clearTimeout(this.viewSaveT);
     this.viewSaveT = setTimeout(() => writeJSON('gd.view', { cx: this.view.cx, cy: this.view.cy, mpp: this.view.mpp }), 400);
   }
@@ -292,6 +293,20 @@ class App {
     if (label) label.textContent = canvas ? 'Zoom' : '1:';
     const unit = document.getElementById('scale-unit');
     if (unit) unit.textContent = canvas ? '%' : '';
+  }
+
+  /** Gira el escenario (y la hoja) con CSS según la rotación de la vista; con 0° queda como siempre. */
+  applyRotation() {
+    const v = this.view;
+    const el = document.getElementById('rot');
+    if (el) {
+      el.style.cssText = v.rot ? `inset:auto;left:${(v.vw - v.w) / 2}px;top:${(v.vh - v.h) / 2}px;width:${v.w}px;height:${v.h}px;transform:rotate(${v.rot}deg)` : '';
+    }
+    const btn = document.getElementById('btn-north');
+    if (btn) {
+      btn.hidden = !v.rot;
+      btn.style.setProperty('--north-rot', `${v.rot}deg`);
+    }
   }
 
   /** Hoja del lienzo (solo en Canvas): un rectángulo blanco que sigue a la vista. */
@@ -314,7 +329,7 @@ class App {
   updatePageHandles([x0, y0, x1, y1]) {
     const host = document.getElementById('page-edit');
     if (!host) return;
-    const on = this.mode !== 'gis' && this.history.doc.canvas?.size === 'custom' && this.panels?.tab === 'canvas' && !document.getElementById('app').classList.contains('panel-hidden');
+    const on = !this.view.rot && this.mode !== 'gis' && this.history.doc.canvas?.size === 'custom' && this.panels?.tab === 'canvas' && !document.getElementById('app').classList.contains('panel-hidden');
     host.hidden = !on;
     if (!on) return;
     if (!host.firstChild) {
@@ -348,7 +363,7 @@ class App {
     const vr = this.viewport.getBoundingClientRect();
     this.history.begin();
     const move = (ev) => {
-      const [wx, wy] = this.view.toWorld(ev.clientX - vr.left, ev.clientY - vr.top);
+      const [wx, wy] = this.view.toWorld(...this.view.hostToStage(ev.clientX - vr.left, ev.clientY - vr.top));
       let { x, y, w, h } = r;
       const size = (v) => Math.max(CANVAS_MIN_MM, Math.round(v / m)) * m;
       if (k.includes('w')) {
@@ -836,6 +851,7 @@ class App {
     this.updateGoogleButton();
     $('btn-panel').onclick = () => this.togglePanel();
     $('btn-help').onclick = () => this.toggleHelp();
+    $('btn-north').onclick = () => this.view.resetRotation();
     if (window.innerWidth < 900) document.getElementById('app').classList.add('panel-hidden');
     this.scaleInput = $('in-scale');
     this.scaleInput.addEventListener('change', () => {
@@ -888,7 +904,7 @@ class App {
     this.viewport.addEventListener('pointermove', (e) => {
       if (e.pointerType === 'touch') return;
       const r = this.viewport.getBoundingClientRect();
-      this.updateCoords(this.view.toWorld(e.clientX - r.left, e.clientY - r.top));
+      this.updateCoords(this.view.toWorld(...this.view.hostToStage(e.clientX - r.left, e.clientY - r.top)));
     });
     this.syncToggles();
   }
@@ -1335,6 +1351,7 @@ class App {
     m.replaceChildren(...els);
     m.hidden = false;
     const vr = this.viewport.getBoundingClientRect();
+    sp = this.view.stageToHost(...sp);
     const mw = m.offsetWidth;
     const mh = m.offsetHeight;
     m.style.left = `${Math.max(4, Math.min(vr.left + sp[0], window.innerWidth - mw - 6))}px`;
@@ -2363,13 +2380,13 @@ class App {
    */
   editText(shape, isNew = false) {
     const host = document.getElementById('text-editor').parentElement;
-    const [x, y] = this.view.toScreen(shape.x, shape.y);
+    const [x, y] = this.view.stageToHost(...this.view.toScreen(shape.x, shape.y));
     const fpx = Math.max(15, Math.min(40, shape.fontSize * paperUnits(this.view, this.history.doc.refScale).ptToPx));
     this.closeTextEditor?.();
     const color = shape.style?.fill && shape.style.fill !== 'none' ? shape.style.fill : '#111827';
     const ed = openRichEditor({
       host,
-      rect: { left: Math.max(4, Math.min(x - 8, this.view.w - 260)), top: Math.max(4, y - fpx * 1.35), width: Math.min(this.view.w - 16, Math.max(260, (shape.text || '').split('\n').reduce((m, l) => Math.max(m, l.length), 9) * fpx * 0.62 + 20)) },
+      rect: { left: Math.max(4, Math.min(x - 8, this.view.vw - 260)), top: Math.max(4, y - fpx * 1.35), width: Math.min(this.view.vw - 16, Math.max(260, (shape.text || '').split('\n').reduce((m, l) => Math.max(m, l.length), 9) * fpx * 0.62 + 20)) },
       shape,
       fontPx: fpx,
       color,
@@ -3121,7 +3138,7 @@ class App {
     };
     const regionOf = (area) => {
       if (area === 'sheet') return canvasRect(doc);
-      if (area === 'view') return { x: this.view.cx - (this.view.w * this.view.mpp) / 2, y: this.view.cy - (this.view.h * this.view.mpp) / 2, w: this.view.w * this.view.mpp, h: this.view.h * this.view.mpp };
+      if (area === 'view') return { x: this.view.cx - (this.view.vw * this.view.mpp) / 2, y: this.view.cy - (this.view.vh * this.view.mpp) / 2, w: this.view.vw * this.view.mpp, h: this.view.vh * this.view.mpp };
       return unionBBox(allTopShapes(doc).map((x) => shapeBBox(x.shape, this.editor.est())));
     };
     const last = this.settings.imageExport || {};
@@ -3199,6 +3216,12 @@ class App {
   }
 
   async exportView(kind) {
+    if (this.view.rot) {
+      // la imagen sale con el norte arriba: se endereza la vista y se espera a que se redibuje
+      this.view.resetRotation();
+      this.renderer.request({ settled: true });
+      await new Promise((r) => setTimeout(r, 400));
+    }
     const w = Math.round(this.view.w);
     const hgt = Math.round(this.view.h);
     const stage = document.getElementById('stage');
