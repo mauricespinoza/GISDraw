@@ -8,7 +8,7 @@
  */
 
 import { allTopShapes, findTopShape, mergeFields, replaceShapes } from './doc.js';
-import { cloneNode, cloneShape, makeGroup, newId, rotateShape, scaleShape, scaleSizes, shapeBBox, splitNodes, translateShape, unionBBox, walkShapes } from './vector.js';
+import { cloneNode, cloneShape, makeGroup, newId, reflectShape, rotateShape, scaleShape, scaleSizes, shapeBBox, splitNodes, translateShape, unionBBox, walkShapes } from './vector.js';
 
 /* ------------------------------------------------------------ portapapeles */
 
@@ -89,6 +89,15 @@ export function arrange(doc, ids, mode) {
       return { ...l, items };
     }),
   };
+}
+
+/** Ejes de reflejo con nombre: ángulo del eje en el mundo (antihorario desde el este). */
+export const REFLECT_AXES = { v: 90, h: 0, d1: 45, d2: -45 };
+
+/** Refleja la selección respecto de un eje por el centro de toda la selección. */
+export function reflectShapes(doc, ids, axis, est = null) {
+  const deg = typeof axis === 'number' ? axis : REFLECT_AXES[axis];
+  return deg == null ? doc : transformShapes(doc, ids, { reflect: deg }, est);
 }
 
 /* ------------------------------------------------------- alinear / distribuir */
@@ -611,13 +620,14 @@ export function frozenPoints(doc, ids = null) {
 /* ------------------------------------------------------- transformar */
 
 /**
- * Transformar con valores exactos (diálogo Transformar): escala `sx`, `sy`
- * (factores), rotación `angle` (grados, antihoraria) y desplazamiento `dx`,
- * `dy` (unidades del mundo), en ese orden. `pivot`: 'center' (de toda la
+ * Transformar con valores exactos (diálogo Transformar): reflejo `reflect`
+ * (ángulo del eje en grados, ver `reflectShape`; null = sin reflejo), escala
+ * `sx`, `sy` (factores), rotación `angle` (grados, antihoraria) y
+ * desplazamiento `dx`, `dy` (unidades del mundo), en ese orden. `pivot`: 'center' (de toda la
  * selección) o 'each' (cada objeto en su propio centro). `strokes`: escalar
  * también grosores, tramas, ornamentos, halos y demás medidas de papel.
  */
-export function transformShapes(doc, ids, { dx = 0, dy = 0, angle = 0, sx = 1, sy = 1, pivot = 'center', strokes = false } = {}, est = null) {
+export function transformShapes(doc, ids, { dx = 0, dy = 0, angle = 0, sx = 1, sy = 1, reflect = null, pivot = 'center', strokes = false } = {}, est = null) {
   const set = ids instanceof Set ? ids : new Set(ids);
   const shapes = allTopShapes(doc, { visibleOnly: false }).map((x) => x.shape).filter((s) => set.has(s.id) && !s.locked);
   if (!shapes.length) return doc;
@@ -628,6 +638,7 @@ export function transformShapes(doc, ids, { dx = 0, dy = 0, angle = 0, sx = 1, s
   for (const s of shapes) {
     const o = pivot === 'each' ? mid(shapeBBox(s, est)) : all;
     let t = s;
+    if (reflect != null && Number.isFinite(reflect)) t = reflectShape(t, o, reflect);
     if (sx !== 1 || sy !== 1) t = scaleShape(t, o, sx, sy);
     if (strokes && k !== 1) t = scaleSizes(t, k);
     if (angle) t = rotateShape(t, o, angle);

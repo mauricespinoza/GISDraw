@@ -17,7 +17,7 @@ import { ALIGN_ICONS, ICONS } from './ui/icons.js';
 import { h, popSlider, popSliderOpen } from './ui/dom.js';
 import { askChoice, askConfirm, askForm, askText } from './ui/dialog.js';
 import { DASHES, defaultStyle } from './style.js';
-import { align, copyShapes, deleteEmpty, distribute, frozenPoints, insertShapes, pasteShapes, arrange, group, ungroup, ungroupAll, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
+import { align, copyShapes, deleteEmpty, distribute, frozenPoints, insertShapes, pasteShapes, arrange, reflectShapes, REFLECT_AXES, group, ungroup, ungroupAll, joinPaths, splitPath, setShapeFlag, resetShapeFlag, selectSame, transformShapes } from './ops.js';
 import { coordPreview, formatDMS, parseCoordText, toLonLat } from './proj.js';
 import { shapeBBox, unionBBox, walkShapes, newId, DEFAULT_SMOOTH, canResmooth, canSmooth, adoptFreehand, resmooth } from './vector.js';
 import { saveDoc, loadDoc, saveFile, loadFile, download, pickFiles, getDocKey, putDocKey } from './io/store.js';
@@ -1268,7 +1268,9 @@ class App {
         n === 1 && this.mode === 'gis' ? it('Atributos…', '', () => this.showPanel('attrs')) : null,
         n === 1 && sel[0].type === 'text' ? it('Editar texto', 'Doble clic', () => this.editText(sel[0])) : null,
         n === 1 && sel[0].type === 'path' ? it('Editar nodos', 'A', () => ed.setTool('node')) : null,
-        it('Transformar: mover, rotar, escalar…', 'Ctrl+Mayús+M', () => this.transformDialog()),
+        it('Transformar: mover, rotar, escalar, reflejar…', 'Ctrl+Mayús+M', () => this.transformDialog()),
+        it('Reflejar ↔ (eje vertical)', '', () => this.history.commit(reflectShapes(doc, ed.selection, 'v', ed.est()))),
+        it('Reflejar ↕ (eje horizontal)', '', () => this.history.commit(reflectShapes(doc, ed.selection, 'h', ed.est()))),
         paths.length ? it('Simplificar (menos nodos)…', '', () => this.simplifyDialog()) : null,
         paths.length > 1 ? it('Tidy: compartir nodos cercanos…', '', () => this.tidyDialog()) : null,
         paths.some((s) => [s.nodes, ...(s.holes || [])].some((r) => r?.some((q) => q.frozen))) ? it('Unfreeze nodes (descongelar todos)', '', () => ed.unfreezeSelection()) : null,
@@ -1506,7 +1508,7 @@ class App {
       item('Hueco conservando la forma (Hole)', () => this.holeSelected(true), g.canHole, 'Selecciona el polígono y, encima, la forma que lo abre'),
       item('Hueco dibujando una forma (Hole)…', () => this.holeByDrawing(), g.canHoleDraw, 'Selecciona un polígono'),
       h('div', { class: 'mh' }, 'Selección'),
-      item('Transformar: mover, rotar, escalar…', () => this.transformDialog(), this.editor.selection.size > 0, 'Selecciona uno o más objetos', 'Ctrl+Mayús+M'),
+      item('Transformar: mover, rotar, escalar, reflejar…', () => this.transformDialog(), this.editor.selection.size > 0, 'Selecciona uno o más objetos', 'Ctrl+Mayús+M'),
       item('Unfreeze nodes (descongelar todos)', () => this.editor.unfreezeSelection(), this.editor.selection.size > 0, 'Selecciona los objetos con nodos congelados'),
       item('Desagrupar todo (todos los niveles)', () => this.ungroupEverything(), this.history.doc.layers.some((l) => l.kind === 'vector' && l.items.some((x) => x.type === 'group')), 'No hay grupos en el documento'),
       item('Borrar vacíos (sin relleno ni trazo)', () => this.deleteEmptyShapes(), true, ''),
@@ -1664,21 +1666,30 @@ class App {
       angle: Number(v.angle) || 0,
       sx: (Number(v.sx) || 100) / 100,
       sy: (v.uniform ? Number(v.sx) || 100 : Number(v.sy) || 100) / 100,
+      reflect: v.reflect === 'angle' ? Number(v.reflectAngle) || 0 : REFLECT_AXES[v.reflect] ?? null,
       pivot: v.pivot,
       strokes: v.strokes,
     });
     const r = await askForm({
       title: 'Transformar',
-      hint: `${sel.length} objeto(s) · ${f(box.w)} × ${f(box.h)} ${unit}. Se aplica en orden: escala, rotación y desplazamiento.`,
+      hint: `${sel.length} objeto(s) · ${f(box.w)} × ${f(box.h)} ${unit}. Se aplica en orden: reflejo, escala, rotación y desplazamiento.`,
       fields: [
         { key: 'dx', label: `Mover → este (${unit})`, type: 'number', value: 0, step: gis ? 1 : 0.5 },
         { key: 'dy', label: `Mover ↑ norte (${unit})`, type: 'number', value: 0, step: gis ? 1 : 0.5 },
+        {
+          key: 'reflect',
+          label: 'Reflejar',
+          type: 'select',
+          value: 'none',
+          options: { none: 'No reflejar', v: '↔ Eje vertical (izquierda ↔ derecha)', h: '↕ Eje horizontal (arriba ↔ abajo)', d1: '⤢ Eje diagonal 45°', d2: '⤡ Eje diagonal −45°', angle: 'Eje con otro ángulo…' },
+        },
+        { key: 'reflectAngle', label: 'Ángulo del eje (°, antihorario desde el este)', type: 'number', value: last.reflectAngle ?? 30, min: -90, max: 90, step: 1, unit: '°', when: (v) => v.reflect === 'angle' },
         { key: 'angle', label: 'Rotar (°, antihorario)', type: 'number', value: 0, min: -180, max: 180, step: 1, unit: '°' },
         { key: 'sx', label: 'Escala', type: 'number', value: 100, min: 5, max: 500, step: 1, unit: '%', log: true },
         { key: 'uniform', label: 'Escala uniforme (vertical = horizontal)', type: 'check', value: last.uniform ?? true },
         { key: 'sy', label: 'Escala vertical', type: 'number', value: 100, min: 5, max: 500, step: 1, unit: '%', log: true, when: (v) => !v.uniform },
         { key: 'strokes', label: 'Escalar también grosores, tramas, ornamentos y letras', type: 'check', value: last.strokes ?? true },
-        { key: 'pivot', label: 'Centro de rotación y escala', type: 'select', value: last.pivot || 'center', options: { center: 'Centro de la selección', each: 'Centro de cada objeto' } },
+        { key: 'pivot', label: 'Centro de reflejo, rotación y escala', type: 'select', value: last.pivot || 'center', options: { center: 'Centro de la selección', each: 'Centro de cada objeto' } },
       ],
       ok: 'Aplicar',
       live: true,
@@ -1686,7 +1697,7 @@ class App {
       onchange: (v) => this.history.preview(transformShapes(base, ids, opts(v), ed.est())),
     });
     if (!r) return this.history.cancel();
-    this.lastTransform = { uniform: r.uniform, strokes: r.strokes, pivot: r.pivot };
+    this.lastTransform = { uniform: r.uniform, strokes: r.strokes, pivot: r.pivot, reflectAngle: r.reflectAngle };
     this.history.preview(transformShapes(base, ids, opts(r), ed.est()));
     this.history.end();
   }

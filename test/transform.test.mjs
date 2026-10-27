@@ -5,8 +5,8 @@
  *   node test/transform.test.mjs
  */
 
-import { transformShapes } from '../src/ops.js';
-import { makeGroup, makeRectPath, makeText, scaleShape, scaleSizes, shapeBBox } from '../src/vector.js';
+import { transformShapes, reflectShapes } from '../src/ops.js';
+import { makeGroup, makeNode, makePath, makeRectPath, makeText, reflectShape, scaleShape, scaleSizes, shapeBBox } from '../src/vector.js';
 import { defaultStyle } from '../src/style.js';
 import { newDocument, addShapes, History } from '../src/doc.js';
 import { parseCoordText, fromLonLat } from '../src/proj.js';
@@ -106,6 +106,31 @@ const doc = addShapes(base, layerId, [a, b]);
   ok(scaleSizes(r, 1) === r, 'k = 1 no toca nada');
   const dd = transformShapes(doc, [a.id], { sx: 2, sy: 2, strokes: true });
   ok(near(items(dd)[0].style.strokeWidth, 1), 'diálogo Transformar con la opción marcada');
+}
+
+{
+  // reflejar: eje vertical, horizontal, diagonal y con ángulo
+  const tri = makePath([makeNode(0, 0), makeNode(10, 0), makeNode(0, 4)], { closed: true, style: { ...defaultStyle(), ornament: 'thrust' } });
+  const nd = newDocument();
+  const L = nd.activeLayerId;
+  const doc = addShapes(nd, L, [tri]);
+  const get = (d) => d.layers.find((l) => l.id === L).items[0];
+  const v = get(reflectShapes(doc, new Set([tri.id]), 'v'));
+  ok(v.nodes[0].x === 10 && v.nodes[1].x === 0 && v.nodes[2].x === 10 && v.nodes[2].y === 4, 'reflejar ↔: x se invierte en el centro de la selección');
+  ok(v.style.ornamentSide === 'right', 'reflejar cambia de lado los dientes del ornamento');
+  const hz = get(reflectShapes(doc, new Set([tri.id]), 'h'));
+  ok(hz.nodes[0].y === 4 && hz.nodes[2].y === 0 && hz.nodes[1].x === 10, 'reflejar ↕: y se invierte');
+  const p = reflectShape(makeRectPath(2, 0, 3, 1), { x: 0, y: 0 }, 45);
+  ok(Math.abs(p.nodes[0].x - 0) < 1e-9 && Math.abs(p.nodes[0].y - 2) < 1e-9, 'diagonal 45°: (x, y) → (y, x)');
+  const twice = reflectShape(reflectShape(tri, { x: 3, y: 1 }, 30), { x: 3, y: 1 }, 30);
+  ok(twice.nodes.every((n, i) => Math.abs(n.x - tri.nodes[i].x) < 1e-9 && Math.abs(n.y - tri.nodes[i].y) < 1e-9) && twice.style.ornamentSide === 'left', 'reflejar dos veces deja todo igual');
+  const t = reflectShape({ ...makeText(5, 0, 'Falla'), rotation: -30 }, { x: 0, y: 0 }, 90);
+  ok(t.x === -5 && Math.abs(t.rotation - 30) < 1e-9, 'texto: cambia de lugar y de inclinación, sigue legible');
+  ok(reflectShape(makeText(5, 0, 'x'), { x: 0, y: 0 }, 90).rotation === 0, 'texto horizontal no queda cabeza abajo');
+  const g = reflectShape(makeGroup([tri]), { x: 0, y: 0 }, 0);
+  ok(g.children[0].nodes[2].y === -4, 'reflejar entra en grupos');
+  const tr = get(transformShapes(doc, new Set([tri.id]), { reflect: 90, dx: 100 }));
+  ok(tr.nodes[0].x === 110, 'Transformar: reflejo y luego desplazamiento');
 }
 
 console.log(`${pass} comprobaciones OK${fail ? `, ${fail} FALLOS` : ''}`);

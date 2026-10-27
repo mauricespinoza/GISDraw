@@ -16,7 +16,7 @@ import { PATTERNS, PATTERN_GROUPS, patternPreview } from '../patterns.js';
 import { BASEMAPS } from '../raster/basemap.js';
 import { DEM_SOURCES, OPENTOPO_TYPES } from '../raster/dem.js';
 import { PALETTES, defaultHillshadeSettings, paletteLUT } from '../raster/hillshade.js';
-import { SAME_CRITERIA, align, arrange, distribute, group, moveToLayer, selectByAttribute, selectSame, ungroup } from '../ops.js';
+import { SAME_CRITERIA, align, arrange, distribute, group, moveToLayer, selectByAttribute, selectSame, reflectShapes, ungroup } from '../ops.js';
 import { measure, shapeBBox, unionBBox, walkShapes } from '../vector.js';
 import { LABEL_SEPARATORS, labelText } from '../labels.js';
 import { RAMPS, applyRenderer, buildRenderer, clearRenderer, countClasses, defaultRendererOptions, fieldChoices, rampCss } from '../symbology.js';
@@ -977,6 +977,19 @@ export class Panels {
           btn('↓ Atrás', doIt((d) => arrange(d, ids, 'backward'))),
           btn('⤓ Al fondo', doIt((d) => arrange(d, ids, 'back'))),
         ),
+      ),
+      sec(
+        'Reflejar',
+        h('p', { class: 'hint' }, 'Respecto de un eje por el centro de la selección. Más ejes (cualquier ángulo) en Transformar.'),
+        h(
+          'div',
+          { class: 'grid-btns four' },
+          btn('↔ Vertical', doIt((d) => reflectShapes(d, ids, 'v', est))),
+          btn('↕ Horizontal', doIt((d) => reflectShapes(d, ids, 'h', est))),
+          btn('⤢ 45°', doIt((d) => reflectShapes(d, ids, 'd1', est))),
+          btn('⤡ −45°', doIt((d) => reflectShapes(d, ids, 'd2', est))),
+        ),
+        btn('Transformar…', () => app.transformDialog()),
       ),
       sec(
         'Alinear',

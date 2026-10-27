@@ -251,6 +251,37 @@ export function rotateShape(shape, origin, deg) {
   return out;
 }
 
+/**
+ * Refleja respecto de un eje que pasa por `origin` con ángulo `deg` (en el
+ * mundo, antihorario desde el este): 90 = eje vertical (izquierda ↔ derecha),
+ * 0 = eje horizontal (arriba ↔ abajo), 45 / -45 = diagonales. Los textos
+ * cambian de lugar pero siguen legibles (no se escriben en espejo); los
+ * ornamentos con lado (dientes de cabalgamiento, tics) se cambian de lado
+ * para que el dibujo quede de verdad espejado.
+ */
+export function reflectShape(shape, origin, deg) {
+  if (shape.type === 'group') return { ...shape, children: shape.children.map((c) => reflectShape(c, origin, deg)) };
+  const a = (2 * deg * Math.PI) / 180;
+  // exactos en los ejes de 0°, 45° y 90° (sin el 1e-16 de sin(π))
+  const c = Math.round(Math.cos(a) * 1e12) / 1e12;
+  const s = Math.round(Math.sin(a) * 1e12) / 1e12;
+  const out = mapPoints(shape, (p) => {
+    const dx = p.x - origin.x;
+    const dy = p.y - origin.y;
+    return { x: origin.x + dx * c + dy * s, y: origin.y + dx * s - dy * c };
+  });
+  if (shape.type === 'text') {
+    // la línea base (rotación de pantalla = −ángulo del mundo) se refleja; si queda cabeza abajo, se da vuelta
+    let dir = 2 * deg + (shape.rotation || 0);
+    dir = ((((dir + 180) % 360) + 360) % 360) - 180;
+    if (Math.abs(dir) > 90.0001) dir += dir > 0 ? -180 : 180;
+    out.rotation = Math.round(-dir * 1e6) / 1e6 || 0;
+  }
+  const st = shape.style;
+  if (st?.ornament && st.ornament !== 'none') out.style = { ...st, ornamentSide: (st.ornamentSide || 'left') === 'left' ? 'right' : 'left' };
+  return out;
+}
+
 /* --------------------------------------------------------- Bézier y aplanado */
 
 export function cubicAt(p0, p1, p2, p3, t) {
