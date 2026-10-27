@@ -284,6 +284,17 @@ export class Panels {
       h('button', { class: `ico${l.visible ? '' : ' off'}`, title: 'Visible', html: l.visible ? LAYER_ICONS.eye : LAYER_ICONS.eyeOff, onclick: () => set({ visible: !l.visible }) }),
       h('button', { class: `ico${l.locked ? '' : ' off'}`, title: 'Bloqueo', html: l.locked ? LAYER_ICONS.lock : LAYER_ICONS.unlock, onclick: () => set({ locked: !l.locked }) }),
       name,
+      l.kind === 'vector'
+        ? h('button', {
+            class: 'ico',
+            title: 'Seleccionar todo lo de la capa',
+            html: '⬚',
+            onclick: () => {
+              app.history.silent({ ...this.doc, activeLayerId: l.id });
+              app.editor.selectLayer(l.id);
+            },
+          })
+        : null,
       h(
         'div',
         {},
@@ -317,7 +328,7 @@ export class Panels {
           app.mode === 'gis' && btn('Aplicar QML/QLR', () => app.applyQmlToLayer(l.id)),
           btn('Seleccionar todo', () => {
             app.history.silent({ ...this.doc, activeLayerId: l.id });
-            app.editor.setSelection(l.items.filter((s) => !s.locked && s.visible !== false).map((s) => s.id));
+            app.editor.selectLayer(l.id);
           }),
         );
       }
@@ -964,6 +975,7 @@ export class Panels {
           btn('Pegar', () => app.paste(false)),
           btn('Pegar en el lugar', () => app.paste(true)),
           btn('Duplicar', () => ed.duplicate()),
+          btn('Seleccionar la capa', () => ed.selectLayer(ed.activeLayer())),
           btn('Eliminar', () => ed.deleteSelection(), 'danger'),
         ),
       ),

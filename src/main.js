@@ -1312,7 +1312,8 @@ class App {
       this.clipboard.length || navigator.clipboard?.readText ? it('Pegar', 'Ctrl+V', () => this.paste(false)) : null,
       this.clipboard.length || navigator.clipboard?.readText ? it('Pegar delante, en el lugar', 'Ctrl+F', () => this.paste(true, 'front')) : null,
       this.clipboard.length || navigator.clipboard?.readText ? it('Pegar detrás, en el lugar', 'Ctrl+B', () => this.paste(true, 'back')) : null,
-      it('Seleccionar todo', 'Ctrl+A', () => ed.selectAll()),
+      it('Seleccionar todo (capa activa)', 'Ctrl+A', () => ed.selectAll()),
+      n ? it('Seleccionar todo lo de la capa del objeto', '', () => ed.selectLayer(layerOfShape(doc, [...ed.selection][0]))) : null,
       n ? it('Deseleccionar', 'Ctrl+Mayús+A', () => ed.setSelection([])) : null,
     ]);
     groups.push([
