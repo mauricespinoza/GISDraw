@@ -1346,7 +1346,10 @@ export class Editor {
       // Alt+arrastrar duplica (con Shift, en línea recta): Shift ahí no debe quitar la selección
       const dup = e.altKey && (already || !add);
       if (add && !dup) this.toggleSel(id);
-      else if (!already) this.setSelection([id]);
+      else if (!already) {
+        this.setSelection([id]);
+        this.adoptStyle(hit.shape);
+      }
       if (!this.selection.has(id)) return;
       const shapes = this.selectedShapes().filter((s) => !s.locked);
       this.history.begin();
@@ -2341,6 +2344,12 @@ export class Editor {
     this.snapDirty = true;
     this.setSelection(r.ids);
     this.onMessage(hit.shape.closed ? 'Polígono abierto en el punto' : 'Trazo cortado en dos');
+  }
+
+  /** Al tocar una línea o un polígono, su estilo pasa a ser el de lo próximo que se dibuje. */
+  adoptStyle(shape) {
+    if (shape?.type !== 'path' || !shape.style) return;
+    this.onStyleAdopt?.({ ...defaultStyle(), ...shape.style });
   }
 
   /**

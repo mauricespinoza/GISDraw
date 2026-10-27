@@ -3,12 +3,13 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v61';
+export const APP_VERSION = 'v62';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
+  ['v62', 'Al tocar una línea o un polígono, su estilo queda como el de lo próximo que se dibuje'],
   ['v61', 'Reflejar: eje vertical, horizontal, diagonales 45° / −45° (panel Organizar y menú contextual) y con cualquier ángulo (Transformar); los textos siguen legibles y los dientes de las fallas cambian de lado'],
   ['v60', 'Pegar: SVG y PDF de otros programas o del navegador, imágenes copiadas de páginas, GeoJSON/WKT/objetos de QGIS en su lugar; Ctrl+V al centro de la vista, Ctrl+F/Ctrl+B delante o detrás de lo seleccionado. Doble clic en un grupo para editar sus elementos'],
   ['v59', 'Trace: sigue por donde pasa el cursor (al doblar una esquina ya no toma el camino largo) y no salta vértices tras mover o hacer zoom durante el trazado'],
