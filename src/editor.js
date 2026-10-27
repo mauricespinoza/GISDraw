@@ -2510,9 +2510,18 @@ export class Editor {
   }
 
   selectAll() {
-    const l = this.activeLayer();
-    const items = l ? l.items : [];
-    this.setSelection(items.filter((s) => s.visible !== false && !s.locked).map((s) => s.id));
+    this.selectLayer(this.activeLayer());
+  }
+
+  /** Selecciona todo lo (visible y desbloqueado) de una capa vectorial. */
+  selectLayer(layer) {
+    const l = typeof layer === 'string' ? this.doc.layers.find((x) => x.id === layer) : layer;
+    if (!l || l.kind !== 'vector') return 0;
+    if (!l.visible) this.onMessage(`La capa «${l.name}» está oculta`);
+    const ids = l.visible ? l.items.filter((s) => s.visible !== false && !s.locked).map((s) => s.id) : [];
+    this.setSelection(ids);
+    if (ids.length) this.onMessage(`${ids.length} objeto(s) de la capa «${l.name}»`);
+    return ids.length;
   }
 
   onKey(e) {
