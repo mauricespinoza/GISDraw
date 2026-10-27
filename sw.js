@@ -9,7 +9,7 @@
  * - Teselas (TILES): mapas base y DEM Terrarium ya vistos, con tope.
  */
 
-const VERSION = 'v66';
+const VERSION = 'v67';
 const PRECACHE = `gisdrawer-shell-${VERSION}`;
 const TILES = 'gisdrawer-tiles';
 const TILE_LIMIT = 5000;
@@ -127,6 +127,11 @@ async function trimTiles() {
   for (const k of keys.slice(0, Math.max(0, keys.length - TILE_LIMIT))) await cache.delete(k);
 }
 
+// Podar recorre todas las claves (miles): no en cada tesela, sino en la primera
+// tras arrancar el service worker y luego cada TRIM_EVERY teselas nuevas.
+const TRIM_EVERY = 50;
+let newTiles = 0;
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
@@ -152,7 +157,8 @@ self.addEventListener('fetch', (event) => {
         const hit = await cache.match(request, { ignoreSearch: true });
         // con una copia guardada, no esperar más de 3 s a una red lenta
         const res = hit ? await Promise.race([net, new Promise((r) => setTimeout(() => r(null), 3000))]) : await net;
-        return res || hit || new Response('Sin conexión', { status: 504 });
+        // un error de la red (404/500 a medio publicar) no tapa la copia buena
+        return (res?.ok ? res : hit || res) || new Response('Sin conexión', { status: 504 });
       })(),
     );
     return;
@@ -165,9 +171,11 @@ self.addEventListener('fetch', (event) => {
         const hit = await cache.match(request);
         if (hit) return hit;
         const res = await fetch(request);
-        if (res.ok || res.type === 'opaque') {
+        // solo respuestas CORS correctas: una opaca puede ser un 404/500 escondido y el
+        // navegador la cuenta como varios MB de cuota, aunque la tesela pese unos KB
+        if (res.ok) {
           await cache.put(request, res.clone());
-          event.waitUntil(trimTiles());
+          if (newTiles++ % TRIM_EVERY === 0) event.waitUntil(trimTiles());
         }
         return res;
       })(),
