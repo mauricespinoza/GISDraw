@@ -3,12 +3,13 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v68';
+export const APP_VERSION = 'v69';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
+  ['v69', 'Importar de Illustrator: los polígonos con degradado (APMB, nube, bloque verde) vuelven a aparecer —llegaban como trazados abiertos y no se rellenaban—, y las líneas con degradado que se desvanecen a blanco ya no quedan invisibles'],
   ['v68', 'Importar de Illustrator (.ai, PDF, SVG): degradados con transparencia (máscaras de opacidad) y degradados que cubren solo parte del objeto quedan como en el original; textos de varios renglones conservan su alineación (izquierda, centro, derecha), su interlineado y su espaciado, y ya no se juntan con etiquetas vecinas'],
   ['v67', 'Sin señal: las teselas guardadas ya no se llenan de respuestas opacas o con error, y la caché se poda sin recorrerla en cada tesela'],
   ['v66', 'Tableta: girar la vista con dos dedos (zona muerta y imán al norte); la brújula de la esquina devuelve el norte arriba'],
