@@ -1445,7 +1445,8 @@ class Converter {
         let x1 = -Infinity;
         let y1 = -Infinity;
         for (const sp of path) {
-          d += sp.d;
+          // un recorte (y el relleno que lo sigue, con `sh`) trata los subtrayectos abiertos como cerrados
+          d += !sp.closed && sp.n > 2 ? `${sp.d}Z` : sp.d;
           x0 = Math.min(x0, sp.x0);
           y0 = Math.min(y0, sp.y0);
           x1 = Math.max(x1, sp.x1);

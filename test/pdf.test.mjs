@@ -280,6 +280,22 @@ BT /F1 10 Tf 1 0 0 1 400 500 Tm (abc) Tj 1 0 0 1 383.5 488 Tm (abcdef) Tj ET`;
   ok(t2.align === 'right' && t2.anchor === 'end', 'text-anchor="end" → alineado a la derecha');
 }
 
+/* ------------------- degradado pintado con `sh` dentro de un recorte abierto */
+{
+  // Illustrator rellena un polígono con degradado como «recorte + sh»; el recorte llega sin cerrar y
+  // GISDrawer no rellena trazados abiertos: el contorno tiene que salir cerrado
+  const pdf = buildPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Shading << /Sh0 << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 0 100] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 1] /N 1 >> >> >> >> >>',
+    flate('q 20 20 m 120 20 l 100 90 l 30 80 l W n /Sh0 sh Q'),
+  ]);
+  const r = pdfToSvg(pdf);
+  ok(/<path d="[^"]*Z" fill="url\(#g\d+\)"/.test(r.svg), `contorno del degradado cerrado: ${r.svg.slice(-300)}`);
+  const sh = importPdf(pdf, { refScale: 1000 }).layers.flatMap((l) => l.shapes).find((q) => q.type === 'path');
+  ok(sh && sh.closed && sh.style.fillType === 'linear', `polígono con degradado importado y cerrado: ${sh && [sh.closed, sh.style.fillType]}`);
+}
+
 /* ------------------------------------------------- casos que no se leen */
 {
   const legacy = new Uint8Array(Buffer.from('%!PS-Adobe-3.0\n%%Creator: Adobe Illustrator(TM) 8.0\n'));

@@ -829,6 +829,8 @@ function subsToShapes(subs, style, name) {
     for (const n of nodes) n.smooth = !!(n.hIn && n.hOut && Math.abs((n.hIn.x - n.x) * (n.hOut.y - n.y) - (n.hIn.y - n.y) * (n.hOut.x - n.x)) < 1e-6);
     return nodes;
   };
+  // un relleno sin trazo: el SVG cierra solo los subtrayectos abiertos; GISDrawer no rellena un trazado abierto
+  if (style.fill && style.fill !== 'none' && !(style.strokeWidth > 0)) subs = subs.map((sp) => (!sp.closed && sp.nodes.length > 2 ? { ...sp, closed: true } : sp));
   const closedAll = subs.every((sp) => sp.closed);
   if (subs.length > 1 && closedAll) {
     const [first, ...rest] = subs;
@@ -868,12 +870,16 @@ function toGdStyle(cs, kMm, opacity, byId, warnings) {
   let strokeAlpha = 1;
   const sg = /url\(\s*['"]?#([^'")]+)['"]?\s*\)/.exec(cs.stroke || '');
   if (sg) {
-    // GISDrawer no tiene trazos en degradado: el color más opaco, con la opacidad media
+    // GISDrawer no tiene trazos en degradado: el color más intenso (el más lejos del blanco) y una opacidad
+    // que refleja cuánto se ve el degradado sobre fondo claro (un trazo que se desvanece a blanco queda más tenue)
     const g = gradientOf(byId, sg[1]);
     if (g) {
-      const top = g.stops.reduce((p, q) => (q[2] > p[2] ? q : p));
+      const far = (c) => Math.max(...[1, 3, 5].map((i) => 255 - parseInt(c.slice(i, i + 2), 16))) / 255;
+      const strength = g.stops.map((q) => q[2] * far(q[1]));
+      const top = g.stops[strength.indexOf(Math.max(...strength))];
+      const peak = Math.max(...strength);
       s = { color: top[1], alpha: 1 };
-      strokeAlpha = g.stops.reduce((acc, q) => acc + q[2], 0) / g.stops.length;
+      strokeAlpha = peak > 0.02 ? strength.reduce((acc, v) => acc + v, 0) / strength.length / peak : g.stops.reduce((acc, q) => acc + q[2], 0) / g.stops.length;
       warnings.add('los degradados en trazos se aproximan con un color');
     } else s = { color: '#808080', alpha: 1 };
   } else s = parseColor(cs.stroke);
