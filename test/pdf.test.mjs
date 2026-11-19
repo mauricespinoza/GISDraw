@@ -231,6 +231,55 @@ const ai = buildPdf(objs, { objStm: true });
   ok(back[0].shapes.length === r.layers[0].shapes.length && back[0].shapes[0].id === r.layers[0].shapes[0].id, 'conserva los identificadores');
 }
 
+/* ------------------- degradado con transparencia (máscara suave) y textos alineados */
+{
+  // Illustrator: un relleno plano bajo una máscara de luminosidad en degradado (opaco → transparente),
+  // un trazo en degradado con transparencia, un texto centrado de dos renglones y una etiqueta suelta debajo
+  const content = `q /GS1 gs 1 0 1 rg 0 0 100 50 re f Q
+q /GS1 gs /Pattern CS /P0 SCN 4 w 0 100 m 100 100 l S Q
+BT /F1 10 Tf 1 0 0 1 278 700 Tm (Pliocene) Tj 1 0 0 1 267 688 Tm (\\(ca. 5-4 Ma\\)) Tj 1 0 0 1 100 676 Tm (APMB) Tj ET
+BT /F1 10 Tf 1 0 0 1 400 500 Tm (abc) Tj 1 0 0 1 383.5 488 Tm (abcdef) Tj ET`;
+  const sh = '<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >> /Extend [true true] >>';
+  const pdf = buildPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS1 << /SMask << /S /Luminosity /G 6 0 R >> >> >> /Pattern << /P0 << /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 1] /C1 [1 0 1] /N 1 >> >> >> >> >> >>`,
+    flate(content),
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
+    { dict: `/Type /XObject /Subtype /Form /BBox [0 0 595 842] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /Shading << /Sh0 ${sh} >> >>`, data: Buffer.from('/Sh0 sh') },
+  ]);
+  const r = pdfToSvg(pdf);
+  ok(/stop-color="#ff00ff" stop-opacity="0"/.test(r.svg) && !r.warnings.some((w) => /máscaras/.test(w)), `máscara de opacidad → paradas transparentes: ${r.warnings}`);
+  const res = importPdf(pdf, { refScale: 1000 });
+  const all = res.layers.flatMap((l) => l.shapes);
+  const rect = all.find((q) => q.type === 'path' && q.closed);
+  const g = rect?.style.gradient;
+  ok(rect?.style.fillType === 'linear' && g.stops[0][2] === 1 && g.stops[g.stops.length - 1][2] === 0 && Math.abs(g.angle) < 0.01, `relleno magenta que se desvanece: ${JSON.stringify(rect?.style.gradient)}`);
+  ok(g.stops.every((q) => q[1] === '#ff00ff'), 'el color no cambia, solo la opacidad');
+  const line = all.find((q) => q.type === 'path' && !q.closed);
+  ok(line && line.style.stroke === '#ff00ff' && line.style.strokeOpacity > 0.3 && line.style.strokeOpacity < 0.7, `trazo en degradado: color y opacidad media (${line?.style.stroke} ${line?.style.strokeOpacity})`);
+  const texts = all.filter((q) => q.type === 'text');
+  const pl = texts.find((q) => q.text.startsWith('Pliocene'));
+  ok(pl && pl.text === 'Pliocene\n(ca. 5-4 Ma)' && pl.align === 'center' && pl.anchor === 'middle', `texto centrado: ${JSON.stringify(pl && [pl.text, pl.align])}`);
+  ok(pl && Math.abs(pl.lineHeight - 1.2) < 0.01, `interlineado: ${pl?.lineHeight}`);
+  // el ancla es el centro del renglón: 300 pt desde el borde, a 1:1000 (0,3528 m por pt) respecto del centro del conjunto
+  const ap = texts.find((q) => q.text === 'APMB');
+  ok(ap && ap.align === 'left', 'la etiqueta de abajo y a un lado queda aparte');
+  ok(pl && ap && Math.abs((pl.x - ap.x) / (25.4 / 72) - 200) < 0.5, `posición del centro: ${pl && (pl.x - ap.x) / (25.4 / 72)}`);
+  const rt = texts.find((q) => q.text === 'abc\nabcdef');
+  ok(rt && rt.align === 'right', `texto alineado a la derecha: ${rt?.align}`);
+}
+
+/* --------------------------------- SVG de Illustrator: degradado en espacio de usuario */
+{
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><defs><linearGradient id="g" x1="50" y1="0" x2="100" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient></defs><rect width="200" height="100" fill="url(#g)"/><text transform="translate(100 50)" font-size="10"><tspan x="-20" y="0">Pliocene</tspan><tspan x="-30" y="12">(ca. 5-4 Ma)</tspan></text><text x="5" y="90" text-anchor="end">Fin</text></svg>';
+  const r = importSvg(svg, { refScale: 1000 });
+  const [rect, t, t2] = r.layers[0].shapes;
+  ok(JSON.stringify(rect.style.gradient.stops) === JSON.stringify([[0, '#ff0000', 1], [0.25, '#ff0000', 1], [0.5, '#0000ff', 1], [1, '#0000ff', 1]]), `degradado en una parte del recuadro: ${JSON.stringify(rect.style.gradient)}`);
+  ok(t.align === 'center' && t.text === 'Pliocene\n(ca. 5-4 Ma)' && Math.abs(t.lineHeight - 1.2) < 0.01, `renglones centrados de Illustrator: ${t.align} ${t.lineHeight}`);
+  ok(t2.align === 'right' && t2.anchor === 'end', 'text-anchor="end" → alineado a la derecha');
+}
+
 /* ------------------------------------------------- casos que no se leen */
 {
   const legacy = new Uint8Array(Buffer.from('%!PS-Adobe-3.0\n%%Creator: Adobe Illustrator(TM) 8.0\n'));

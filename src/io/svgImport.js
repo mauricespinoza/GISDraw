@@ -437,8 +437,9 @@ function shapeToD(el) {
 const STYLE_PROPS = [
   'fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin',
   'font-family', 'font-size', 'font-weight', 'font-style', 'text-anchor', 'visibility', 'opacity', 'display', 'clip-path', 'mix-blend-mode',
+  'letter-spacing', 'word-spacing',
 ];
-const INHERITED = new Set(['fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'font-family', 'font-size', 'font-weight', 'font-style', 'text-anchor', 'visibility']);
+const INHERITED = new Set(['fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'font-family', 'font-size', 'font-weight', 'font-style', 'text-anchor', 'visibility', 'letter-spacing', 'word-spacing']);
 
 /** Hojas de estilo de Illustrator (`.cls-1{fill:#fff;}`) → reglas simples. */
 export function parseCss(text) {
@@ -714,6 +715,17 @@ export function importSvg(text, { refScale = 25000, center = [0, 0], unitMm = nu
         const style = styleFor(cs, scaleOf(M) * k, op);
         const name = el.getAttribute('data-name') || el.getAttribute('id') || DEFAULT_NAMES[tag];
         out = subsToShapes(subs, style, name);
+        const gref = style.gradient && /url\(\s*['"]?#([^'")]+)['"]?\s*\)/.exec(cs.fill || '');
+        const g = gref && gradientOf(byId, gref[1]);
+        if (g) {
+          // cada forma con su recuadro: el degradado se ajusta para que los colores queden donde estaban
+          const fit = (sh) => {
+            if (sh.type === 'group') return sh.children.forEach(fit);
+            const box = subsBox([{ nodes: sh.nodes, closed: sh.closed }]);
+            if (box) sh.style = { ...sh.style, gradient: fitGradient(g, M, box) };
+          };
+          out.forEach(fit);
+        }
         return withClip(el, out, M, cs);
       }
       case 'text':
@@ -852,10 +864,22 @@ function toGdStyle(cs, kMm, opacity, byId, warnings) {
       st.fillOpacity = clamp01(parseFloat(cs['fill-opacity'] ?? 1)) * f.alpha;
     }
   }
-  const s = parseColor(/url\(/.test(cs.stroke || '') ? '#000000' : cs.stroke);
+  let s;
+  let strokeAlpha = 1;
+  const sg = /url\(\s*['"]?#([^'")]+)['"]?\s*\)/.exec(cs.stroke || '');
+  if (sg) {
+    // GISDrawer no tiene trazos en degradado: el color más opaco, con la opacidad media
+    const g = gradientOf(byId, sg[1]);
+    if (g) {
+      const top = g.stops.reduce((p, q) => (q[2] > p[2] ? q : p));
+      s = { color: top[1], alpha: 1 };
+      strokeAlpha = g.stops.reduce((acc, q) => acc + q[2], 0) / g.stops.length;
+      warnings.add('los degradados en trazos se aproximan con un color');
+    } else s = { color: '#808080', alpha: 1 };
+  } else s = parseColor(cs.stroke);
   if (s && s !== 'none') {
     st.stroke = s.color;
-    st.strokeOpacity = clamp01(parseFloat(cs['stroke-opacity'] ?? 1)) * s.alpha;
+    st.strokeOpacity = +(clamp01(parseFloat(cs['stroke-opacity'] ?? 1)) * s.alpha * strokeAlpha).toFixed(3);
     const sw = parseFloat(cs['stroke-width'] ?? 1);
     st.strokeWidth = +((Number.isFinite(sw) ? sw : 1) * kMm).toFixed(4);
     st.cap = { butt: 'butt', round: 'round', square: 'square' }[cs['stroke-linecap']] || 'butt';
@@ -889,33 +913,181 @@ function gradientOf(byId, id, depth = 0) {
     const a = parseFloat(c.getAttribute('stop-opacity') ?? st['stop-opacity'] ?? 1);
     return [clamp01(o), col === 'none' ? '#ffffff' : col.color, clamp01(a) * (col === 'none' ? 0 : col.alpha)];
   });
+  // las paradas van crecientes (una menor que la anterior vale como la anterior)
+  for (let i = 1; i < stops.length; i++) if (stops[i][0] < stops[i - 1][0]) stops[i][0] = stops[i - 1][0];
   const href = el.getAttribute('href') || el.getAttribute('xlink:href');
-  if (!stops.length && href) stops = gradientOf(byId, href.replace(/^#/, ''), depth + 1)?.stops || [];
+  const parent = href ? gradientOf(byId, href.replace(/^#/, ''), depth + 1) : null;
+  if (!stops.length && parent) stops = parent.stops.map((q) => q.slice());
   if (!stops.length) return null;
+  // atributos propios, o heredados del degradado al que remite
+  const attr = (k2) => el.getAttribute(k2) ?? parent?.attrs[k2] ?? null;
+  const attrs = {};
+  for (const k2 of ['x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'gradientUnits', 'gradientTransform']) attrs[k2] = attr(k2);
+  const units = attrs.gradientUnits === 'userSpaceOnUse' ? 'user' : 'box';
   const n = (k2, d) => {
-    const v = el.getAttribute(k2);
+    const v = attrs[k2];
     if (v == null) return d;
     return String(v).endsWith('%') ? parseFloat(v) / 100 : parseFloat(v);
   };
-  const m = parseTransform(el.getAttribute('gradientTransform'));
+  const m = parseTransform(attrs.gradientTransform);
+  const type = tag === 'radialgradient' ? 'radial' : 'linear';
   const [ax, ay] = apply(m, n('x1', 0), n('y1', 0));
   const [bx, by] = apply(m, n('x2', 1), n('y2', 0));
-  return { type: tag === 'radialgradient' ? 'radial' : 'linear', stops, angle: Math.round((-Math.atan2(by - ay, bx - ax) * 180) / Math.PI) };
+  return {
+    type, stops, attrs, units, m,
+    x1: n('x1', 0), y1: n('y1', 0), x2: n('x2', 1), y2: n('y2', 0), cx: n('cx', 0.5), cy: n('cy', 0.5), r: n('r', 0.5),
+    angle: Math.round((-Math.atan2(by - ay, bx - ax) * 180) / Math.PI),
+  };
 }
 
-/** <text> con sus <tspan>: una línea por cada cambio de `y`, como en Illustrator. */
+/** Color de las paradas en `o` (interpolado; fuera de rango, el del extremo). */
+function stopAt(stops, o) {
+  if (o <= stops[0][0]) return [stops[0][1], stops[0][2]];
+  const last = stops[stops.length - 1];
+  if (o >= last[0]) return [last[1], last[2]];
+  for (let i = 1; i < stops.length; i++) {
+    const [o1, c1, a1] = stops[i];
+    if (o > o1) continue;
+    const [o0, c0, a0] = stops[i - 1];
+    const f = o1 > o0 ? (o - o0) / (o1 - o0) : 1;
+    const ch = (c, k) => parseInt(c.slice(1 + 2 * k, 3 + 2 * k), 16);
+    return [`#${[0, 1, 2].map((k) => hex2(ch(c0, k) + (ch(c1, k) - ch(c0, k)) * f)).join('')}`, a0 + (a1 - a0) * f];
+  }
+  return [last[1], last[2]];
+}
+
+/** Paradas llevadas por `f` a otra escala y recortadas a [0, 1] (con el color que toca en cada extremo). */
+function remapStops(stops, f) {
+  const moved = stops.map(([o, c, a]) => [f(o), c, a]);
+  const out = [[0, ...stopAt(moved, 0)]];
+  for (const q of moved) if (q[0] > 1e-4 && q[0] < 1 - 1e-4) out.push([+q[0].toFixed(4), q[1], q[2]]);
+  out.push([1, ...stopAt(moved, 1)]);
+  return out.map(([o, c, a]) => [o, c, +a.toFixed(3)]);
+}
+
+/** Recuadro de los subtrayectos (curvas incluidas, muestreadas) en coordenadas del SVG. */
+function subsBox(nodesList) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const add = (x, y) => {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  };
+  for (const { nodes, closed } of nodesList) {
+    const n = nodes.length;
+    for (let i = 0; i < n; i++) {
+      const a = nodes[i];
+      add(a.x, a.y);
+      if (i === n - 1 && !closed) break;
+      const b = nodes[(i + 1) % n];
+      if (!a.hOut && !b.hIn) continue;
+      const c1 = a.hOut || a;
+      const c2 = b.hIn || b;
+      for (let k = 1; k < 8; k++) {
+        const t = k / 8;
+        const u = 1 - t;
+        add(u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x, u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y);
+      }
+    }
+  }
+  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+}
+
+/**
+ * Degradado del SVG (en el espacio del usuario, como los escribe Illustrator,
+ * o en el del recuadro) → ángulo y paradas de GISDrawer, que se dibujan sobre
+ * el recuadro de la forma: se ajustan para que cada color quede donde estaba.
+ * `M` es la matriz del elemento y `box` su recuadro ya transformado.
+ */
+export function fitGradient(g, M, box) {
+  const w = box.maxX - box.minX;
+  const h = box.maxY - box.minY;
+  if (!(w > 1e-9 && h > 1e-9)) return { angle: g.angle, stops: g.stops.map((q) => q.slice()) };
+  if (g.type === 'radial') {
+    // GISDrawer: círculo (elipse) inscrito en el recuadro, desde su centro
+    let ratio;
+    if (g.units === 'user') {
+      const T = mul(M, g.m);
+      ratio = (g.r * scaleOf(T)) / (Math.sqrt(w * h) / 2);
+    } else ratio = (g.r * scaleOf(g.m)) / 0.5;
+    if (!(ratio > 1e-6)) ratio = 1;
+    return { angle: g.angle, stops: remapStops(g.stops, (o) => o * ratio) };
+  }
+  // t(u, v) = gu·u + gv·v + c en el recuadro normalizado (u, v ∈ [0, 1], v hacia abajo)
+  let gu;
+  let gv;
+  let tc;
+  if (g.units === 'user') {
+    const T = mul(M, g.m);
+    const [ax, ay] = apply(T, g.x1, g.y1);
+    const [bx, by] = apply(T, g.x2, g.y2);
+    const dx = bx - ax;
+    const dy = by - ay;
+    const dd = dx * dx + dy * dy;
+    if (dd < 1e-18) return { angle: 0, stops: [[0, ...stopAt(g.stops, 1)], [1, ...stopAt(g.stops, 1)]] };
+    gu = (w * dx) / dd;
+    gv = (h * dy) / dd;
+    const cx = box.minX + w / 2;
+    const cy = box.minY + h / 2;
+    tc = ((cx - ax) * dx + (cy - ay) * dy) / dd;
+  } else {
+    const [ax, ay] = apply(g.m, g.x1, g.y1);
+    const [bx, by] = apply(g.m, g.x2, g.y2);
+    const dx = bx - ax;
+    const dy = by - ay;
+    const dd = dx * dx + dy * dy;
+    if (dd < 1e-18) return { angle: 0, stops: [[0, ...stopAt(g.stops, 1)], [1, ...stopAt(g.stops, 1)]] };
+    gu = dx / dd;
+    gv = dy / dd;
+    tc = ((0.5 - ax) * dx + (0.5 - ay) * dy) / dd;
+  }
+  const L = Math.hypot(gu, gv);
+  const angle = +((Math.atan2(-gv, gu) * 180) / Math.PI).toFixed(2);
+  // GISDrawer pone t = 0,5 en el centro del recuadro y recorre 1 a lo largo de él en la dirección del ángulo
+  return { angle, stops: remapStops(g.stops, (o) => 0.5 + (o - tc) / L) };
+}
+
+/** Ancho aproximado de un renglón, en las unidades del SVG (canvas si hay navegador). */
+let measureCtx;
+function measureLine(text, fs, family, bold, italic) {
+  if (measureCtx === undefined) {
+    try {
+      measureCtx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1, 1).getContext('2d') : null;
+    } catch {
+      measureCtx = null;
+    }
+  }
+  if (measureCtx) {
+    measureCtx.font = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}100px ${family}`;
+    return (measureCtx.measureText(text).width / 100) * fs;
+  }
+  return text.length * fs * (bold ? 0.58 : 0.53);
+}
+
+/**
+ * <text> con sus <tspan>: una línea por cada cambio de `y`, como en
+ * Illustrator. Cada renglón guarda su `x` y su `text-anchor`: Illustrator no
+ * escribe la alineación, sino dónde empieza cada renglón, así que se deduce
+ * de qué borde (inicio, centro o fin) coincide; si ninguno, cada renglón
+ * sale como un texto aparte en su sitio.
+ */
 function textShapes(el, M, cs, opacity, kMm, computed) {
   const lines = [];
   let line = null;
-  let first = null;
   let curY = null;
+  const x0 = parseFloat(el.getAttribute('x')) || 0;
+  const y0 = parseFloat(el.getAttribute('y')) || 0;
   const visit = (node, style, inheritedX, inheritedY) => {
     for (const c of node.childNodes || []) {
       if (c.nodeType === 3) {
         const t = c.textContent.replace(/[\r\n\t]+/g, ' ');
         if (!t.trim() && !line) continue;
         if (!line) {
-          line = { text: '', style, segs: [] };
+          line = { text: '', style, segs: [], x: inheritedX ?? x0, y: inheritedY ?? curY ?? y0, anchor: style['text-anchor'] };
           lines.push(line);
         }
         line.text += t;
@@ -927,82 +1099,122 @@ function textShapes(el, M, cs, opacity, kMm, computed) {
         const dy = parseFloat(c.getAttribute('dy')) || 0;
         const yy = (y ?? curY ?? 0) + dy;
         if (curY == null || Math.abs(yy - curY) > 1e-6) {
-          line = { text: '', style: st, segs: [] };
+          line = { text: '', style: st, segs: [], x: x ?? x0, y: yy, anchor: st['text-anchor'] };
           lines.push(line);
           curY = yy;
-        }
-        if (!first) first = { x: x ?? 0, y: yy };
+        } else if (line && !line.text.trim() && c.hasAttribute('x')) line.x = x;
         visit(c, st, x, yy);
       }
     }
   };
-  const x0 = parseFloat(el.getAttribute('x')) || 0;
-  const y0 = parseFloat(el.getAttribute('y')) || 0;
   curY = el.hasAttribute('y') ? y0 : null;
   visit(el, cs, x0, el.hasAttribute('y') ? y0 : null);
-  // texto y tramos: cada trozo con estilo propio (color, tamaño, negrita, cursiva) distinto del primero
   const keep = lines.filter((l) => l.text.trim());
   if (!keep.length) return [];
   const st0 = keep[0].segs[0]?.style || keep[0].style || cs;
-  const baseFs = parseFloat(st0['font-size'] ?? cs['font-size'] ?? 16) || 16;
+  const fsU = parseFloat(st0['font-size'] ?? cs['font-size'] ?? 16) || 16;
+  const fam = String(st0['font-family'] ?? cs['font-family'] ?? 'Helvetica').replace(/['"]/g, '').split(',').map((q) => q.trim()).filter(Boolean);
+  const famName = fam[fam.length - 1] || 'Helvetica';
+  const family = `${/\s/.test(famName) ? `'${famName}'` : famName}, Helvetica, Arial, sans-serif`;
   const isBold = (st) => {
     const w = String(st['font-weight'] ?? cs['font-weight'] ?? '400');
     return w === 'bold' || Number(w) >= 600 || /bold|black|heavy/i.test(String(st['font-family'] ?? ''));
   };
   const isItalic = (st) => /italic|oblique/i.test(String(st['font-style'] ?? cs['font-style'] ?? '')) || /italic|oblique/i.test(String(st['font-family'] ?? ''));
-  const colorOf = (st) => {
-    const f = parseColor(st.fill ?? cs.fill ?? '#000000');
-    return f && f !== 'none' ? f.color : '#000000';
-  };
-  const base = { color: colorOf(st0), bold: isBold(st0), italic: isItalic(st0) };
-  let text = '';
-  const runs = [];
-  keep.forEach((l, i) => {
-    if (i) text += '\n';
-    const lineLen = l.text.replace(/\s+$/, '').length;
-    let pos = 0;
-    for (const sg of l.segs) {
-      const t = sg.t.slice(0, Math.max(0, lineLen - pos));
-      pos += sg.t.length;
-      if (!t) continue;
-      const r = { s: text.length, e: text.length + t.length };
-      const sc = (parseFloat(sg.style['font-size'] ?? baseFs) || baseFs) / baseFs;
-      if (Math.abs(sc - 1) > 0.02) r.scale = +sc.toFixed(3);
-      if (t.trim()) {
-        const c = colorOf(sg.style);
-        if (c !== base.color) r.color = c;
-        if (isBold(sg.style) !== base.bold) r.bold = isBold(sg.style);
-        if (isItalic(sg.style) !== base.italic) r.italic = isItalic(sg.style);
-      }
-      if (r.scale || r.color || r.bold !== undefined || r.italic !== undefined) runs.push(r);
-      text += t;
+  const anchorOf = (l) => ({ start: 'start', middle: 'middle', end: 'end' })[l.anchor ?? st0['text-anchor'] ?? cs['text-anchor']] || 'start';
+
+  // ---- alineación común de los renglones
+  let align = anchorOf(keep[0]);
+  let anchorX = keep[0].x;
+  let groups = [keep];
+  if (keep.length > 1) {
+    const sameAnchor = keep.every((l) => anchorOf(l) === align);
+    const xs = keep.map((l) => l.x);
+    if (!(sameAnchor && Math.max(...xs) - Math.min(...xs) <= 0.05 * fsU)) {
+      // bordes de cada renglón con su ancho medido
+      const edges = keep.map((l) => {
+        const st = l.segs[0]?.style || l.style;
+        const fs = parseFloat(st['font-size'] ?? fsU) || fsU;
+        const w = measureLine(l.text.trim(), fs, family, isBold(st), isItalic(st));
+        const a = anchorOf(l);
+        const start = l.x - (a === 'middle' ? w / 2 : a === 'end' ? w : 0);
+        return [start, start + w / 2, start + w];
+      });
+      const spread = (i) => Math.max(...edges.map((e) => e[i])) - Math.min(...edges.map((e) => e[i]));
+      const sp = [spread(0), spread(1), spread(2)];
+      const best = sp.indexOf(Math.min(...sp));
+      if (sp[best] <= 0.6 * fsU) {
+        align = ['start', 'middle', 'end'][best];
+        anchorX = edges.reduce((acc, e) => acc + e[best], 0) / edges.length;
+      } else groups = keep.map((l) => [l]);
     }
-  });
-  if (!text.trim()) return [];
-  const pos = first || { x: x0, y: y0 };
-  const p = apply(M, pos.x, pos.y);
-  const fsU = parseFloat(st0['font-size'] ?? cs['font-size'] ?? 16) || 16;
-  const fsPt = +((fsU * scaleOf(M) * kMm) / PT_MM).toFixed(2);
-  const f = parseColor(st0.fill ?? cs.fill ?? '#000000');
-  const fill = f && f !== 'none' ? f.color : '#000000';
-  const t = makeText(p[0], p[1], text, { ...defaultStyle(), fill, fillOpacity: f && f !== 'none' ? f.alpha * clamp01(parseFloat(st0['fill-opacity'] ?? 1)) : 1, fillType: 'solid', stroke: 'none', opacity: +opacity.toFixed(3) }, fsPt);
-  const fam = String(st0['font-family'] ?? cs['font-family'] ?? 'Helvetica').replace(/['"]/g, '').split(',').map((s) => s.trim()).filter(Boolean);
-  const famName = fam[fam.length - 1] || 'Helvetica';
-  t.fontFamily = `${/\s/.test(famName) ? `'${famName}'` : famName}, Helvetica, Arial, sans-serif`;
-  const fw = String(st0['font-weight'] ?? cs['font-weight'] ?? '400');
-  t.fontWeight = fw === 'bold' || Number(fw) >= 600 || /bold|black|heavy/i.test(fam.join(' ')) ? 700 : 400;
-  t.italic = /italic|oblique/i.test(String(st0['font-style'] ?? cs['font-style'] ?? '')) || /italic|oblique/i.test(fam.join(' '));
-  t.anchor = { start: 'start', middle: 'middle', end: 'end' }[st0['text-anchor'] ?? cs['text-anchor']] || 'start';
-  t.rotation = +((Math.atan2(M[1], M[0]) * 180) / Math.PI).toFixed(2);
-  const sw = parseColor(st0.stroke ?? cs.stroke);
-  if (sw && sw !== 'none') {
-    t.halo = true;
-    t.haloColor = sw.color;
-    t.haloWidth = +(((parseFloat(st0['stroke-width'] ?? cs['stroke-width'] ?? 1) || 1) * scaleOf(M) * kMm) / 2).toFixed(3);
-  } else t.halo = false;
-  if (runs.length) t.runs = normalizeRuns(runs, text.length);
-  t.name = text.split('\n')[0].slice(0, 40);
-  return [t];
+  }
+  if (groups.length > 1) return groups.map((g) => buildText(g, anchorOf(g[0]), g[0].x));
+  return [buildText(keep, align, anchorX)];
+
+  function buildText(ls, anchor, ax) {
+    const base = { color: colorOf(st0), bold: isBold(st0), italic: isItalic(st0) };
+    let text = '';
+    const runs = [];
+    ls.forEach((l, i) => {
+      if (i) text += '\n';
+      const lead = l.text.match(/^\s*/)[0].length;
+      const lineLen = l.text.replace(/\s+$/, '').length;
+      let pos = 0;
+      for (const sg of l.segs) {
+        const from = Math.max(0, lead - pos);
+        const t = sg.t.slice(from, Math.max(from, lineLen - pos));
+        pos += sg.t.length;
+        if (!t) continue;
+        const r = { s: text.length, e: text.length + t.length };
+        const sc = (parseFloat(sg.style['font-size'] ?? fsU) || fsU) / fsU;
+        if (Math.abs(sc - 1) > 0.02) r.scale = +sc.toFixed(3);
+        if (t.trim()) {
+          const c = colorOf(sg.style);
+          if (c !== base.color) r.color = c;
+          if (isBold(sg.style) !== base.bold) r.bold = isBold(sg.style);
+          if (isItalic(sg.style) !== base.italic) r.italic = isItalic(sg.style);
+        }
+        if (r.scale || r.color || r.bold !== undefined || r.italic !== undefined) runs.push(r);
+        text += t;
+      }
+    });
+    const p = apply(M, ax, ls[0].y);
+    const fsPt = +((fsU * scaleOf(M) * kMm) / PT_MM).toFixed(2);
+    const f = parseColor(st0.fill ?? cs.fill ?? '#000000');
+    const fill = f && f !== 'none' ? f.color : '#000000';
+    const t = makeText(p[0], p[1], text, { ...defaultStyle(), fill, fillOpacity: f && f !== 'none' ? f.alpha * clamp01(parseFloat(st0['fill-opacity'] ?? 1)) : 1, fillType: 'solid', stroke: 'none', opacity: +opacity.toFixed(3) }, fsPt);
+    t.fontFamily = family;
+    t.fontWeight = isBold(st0) || /bold|black|heavy/i.test(fam.join(' ')) ? 700 : 400;
+    t.italic = isItalic(st0) || /italic|oblique/i.test(fam.join(' '));
+    t.anchor = anchor;
+    t.align = anchor === 'middle' ? 'center' : anchor === 'end' ? 'right' : 'left';
+    // interlineado real (la mediana de los saltos de línea base)
+    if (ls.length > 1) {
+      const gaps = ls.slice(1).map((l, i) => l.y - ls[i].y).sort((u, v) => u - v);
+      const lh = gaps[gaps.length >> 1] / fsU;
+      if (lh > 0.3 && lh < 5) t.lineHeight = +lh.toFixed(3);
+    }
+    const ls1 = parseFloat(st0['letter-spacing'] ?? cs['letter-spacing']);
+    if (Number.isFinite(ls1) && ls1) t.letterSpacing = Math.round((ls1 / fsU) * 1000);
+    const ws = parseFloat(st0['word-spacing'] ?? cs['word-spacing']);
+    if (Number.isFinite(ws) && ws) t.wordSpacing = Math.round((ws / fsU) * 1000);
+    t.rotation = +((Math.atan2(M[1], M[0]) * 180) / Math.PI).toFixed(2);
+    const sw = parseColor(st0.stroke ?? cs.stroke);
+    if (sw && sw !== 'none') {
+      t.halo = true;
+      t.haloColor = sw.color;
+      t.haloWidth = +(((parseFloat(st0['stroke-width'] ?? cs['stroke-width'] ?? 1) || 1) * scaleOf(M) * kMm) / 2).toFixed(3);
+    } else t.halo = false;
+    if (runs.length) t.runs = normalizeRuns(runs, text.length);
+    t.name = text.split('\n')[0].slice(0, 40);
+    return t;
+  }
+
+  function colorOf(st) {
+    const c = parseColor(st.fill ?? cs.fill ?? '#000000');
+    return c && c !== 'none' ? c.color : '#000000';
+  }
 }
 
 /* ================================================================ util */
