@@ -1311,7 +1311,7 @@ class Converter {
     const black = { css: '#000000' };
     return {
       ctm: ID, fill: black, stroke: black, fcs: { n: 1, rgb: ([g]) => [g, g, g] }, scs: { n: 1, rgb: ([g]) => [g, g, g] },
-      lw: 1, cap: 0, join: 0, miter: 10, dash: [[], 0], fa: 1, sa: 1, clips: [],
+      lw: 1, cap: 0, join: 0, miter: 10, dash: [[], 0], fa: 1, sa: 1, clips: [], smask: null,
       font: null, fs: 12, tc: 0, tw: 0, th: 1, tl: 0, ts: 0, tr: 0,
     };
   }
@@ -1481,7 +1481,7 @@ class Converter {
         adv += tx;
         tm = mul([1, 0, 0, 1, tx, 0], tm);
       }
-      if (visible && this.texts.length < 20000) this.texts.push({ M, end: apply(mul(tm, full()), 0, gs.ts), text, fs: gs.fs, font: gs.font, fill: gs.fill, fa: gs.fa, clips: gs.clips.slice(), layer: this.curLayer(), adv });
+      if (visible && this.texts.length < 20000) this.texts.push({ M, end: apply(mul(tm, full()), 0, gs.ts), text, fs: gs.fs, font: gs.font, fill: gs.fill, fa: gs.fa, tc: gs.tc, tw: gs.tw, clips: gs.clips.slice(), layer: this.curLayer(), adv });
     };
 
     for (;;) {
@@ -1523,7 +1523,11 @@ class Converter {
               const D = pdf.res(eg.D);
               if (Array.isArray(D)) gs.dash = [(pdf.res(D[0]) || []).map(Number), Number(D[1]) || 0];
               const sm = pdf.res(eg.SMask);
-              if (sm && nameOf(sm) !== 'None') this.warn('las máscaras de opacidad no se importan');
+              if (sm && nameOf(sm) === 'None') gs.smask = null;
+              else if (sm && typeof sm === 'object') {
+                gs.smask = this.softMask(sm, gs.ctm, resources);
+                if (!gs.smask) this.warn('algunas máscaras de opacidad no se importan');
+              }
               const bm = nameOf(pdf.res(Array.isArray(eg.BM) ? eg.BM[0] : eg.BM));
               if (bm && bm !== 'Normal' && bm !== 'Compatible') this.warn(`modo de fusión «${bm}» aplicado como normal`);
               if (Array.isArray(pdf.res(eg.Font))) {
@@ -1634,7 +1638,7 @@ class Converter {
           }
           case 'sh': {
             const sh = pdf.res(pdf.res(resources?.Shading)?.[nameOf(a[a.length - 1])]);
-            const grad = this.gradient(sh, gs.ctm, resources);
+            const grad = this.gradient(sh, gs.ctm, resources, gs.smask);
             const clips = gs.clips.slice();
             const id = clips.pop();
             const d = id ? this.clipD.get(id) : `M0 0H${f3(this.W)}V${f3(this.H)}H0Z`;
@@ -1751,9 +1755,18 @@ class Converter {
     return textString(pdf.res(p.Name)).trim() || 'Capa';
   }
 
-  /** Relleno: color, o un degradado (patrón de sombreado) definido en <defs>. */
+  /**
+   * Relleno o trazo: color, o un degradado (patrón de sombreado) definido en
+   * <defs>. Con una máscara de opacidad vigente (`gs.smask`, lo que Illustrator
+   * escribe para un degradado con transparencia o una máscara de opacidad),
+   * su luminosidad pasa a la opacidad de las paradas; un color plano bajo una
+   * máscara en degradado se vuelve un degradado de ese color.
+   */
   paintRef(c, gs, resources) {
-    if (!c?.pattern) return c?.css || '#000000';
+    if (!c?.pattern) {
+      const css = c?.css || '#000000';
+      return gs?.smask ? this.maskedSolid(css, gs.smask) || css : css;
+    }
     const pat = c.pattern;
     const d = pat instanceof Stream ? pat.dict : pat;
     if (pdfType(this.pdf, d) === 1) {
@@ -1761,12 +1774,16 @@ class Converter {
       return '#808080';
     }
     const m = this.pdf.res(d.Matrix);
-    const g = this.gradient(this.pdf.res(d.Shading), Array.isArray(m) ? m.map((v) => Number(this.pdf.res(v))) : ID, resources);
+    const g = this.gradient(this.pdf.res(d.Shading), Array.isArray(m) ? m.map((v) => Number(this.pdf.res(v))) : ID, resources, gs?.smask);
     return g || '#808080';
   }
 
-  /** Sombreado axial / radial → <linearGradient> / <radialGradient>; devuelve url(#id). */
-  gradient(sh, matrix, resources) {
+  /**
+   * Sombreado axial / radial ya llevado a la página (SVG): tipo, geometría
+   * (`a`, `b` extremos o centros; `r0`, `r1` radios), color en t ∈ [0, 1] y
+   * los t donde la función cambia de tramo.
+   */
+  shading(sh, matrix, resources) {
     const pdf = this.pdf;
     sh = pdf.res(sh);
     const d = sh instanceof Stream ? sh.dict : sh;
@@ -1779,34 +1796,161 @@ class Converter {
     if (!d.Function) return null;
     const cs = makeColorSpace(pdf, d.ColorSpace, resources);
     const fn = makeFunction(pdf, d.Function);
-    const dom = pdf.res(d.Domain) || [0, 1];
+    const dom = (pdf.res(d.Domain) || [0, 1]).map((v) => Number(pdf.res(v)));
     const fd = pdf.res(d.Function);
     const fdict = fd instanceof Stream ? fd.dict : fd;
     let ts = [0, 0.25, 0.5, 0.75, 1];
     if (!Array.isArray(fdict) && pdf.res(fdict?.FunctionType) === 3) {
-      const b = pdf.res(fdict.Bounds) || [];
-      const fdom = pdf.res(fdict.Domain) || [0, 1];
+      const b = (pdf.res(fdict.Bounds) || []).map((v) => Number(pdf.res(v)));
+      const fdom = (pdf.res(fdict.Domain) || [0, 1]).map((v) => Number(pdf.res(v)));
       ts = [fdom[0], ...b, fdom[1]].map((v) => (v - fdom[0]) / (fdom[1] - fdom[0] || 1));
       ts = [...new Set(ts.flatMap((v, i) => (i ? [(ts[i - 1] + v) / 2, v] : [v])))];
     } else if (!Array.isArray(fdict) && pdf.res(fdict?.FunctionType) === 2 && (pdf.res(fdict.N) ?? 1) === 1) ts = [0, 1];
     if (ts.length > 11) ts = Array.from({ length: 11 }, (_, i) => i / 10);
-    const stops = ts.map((t) => {
-      const rgb = cs.rgb(fn([dom[0] + t * (dom[1] - dom[0])]));
-      return `<stop offset="${f3(t)}" stop-color="${hex(rgb)}"/>`;
-    });
-    const coords = (pdf.res(d.Coords) || []).map(Number);
+    const rgb = (t) => cs.rgb(fn([dom[0] + clamp(t) * (dom[1] - dom[0])]));
+    const coords = (pdf.res(d.Coords) || []).map((v) => Number(pdf.res(v)));
     const M = mul(matrix, this.F);
+    const k = Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2]));
+    if (type === 2) return { type, a: apply(M, coords[0], coords[1]), b: apply(M, coords[2], coords[3]), rgb, ts };
+    return { type, a: apply(M, coords[0], coords[1]), b: apply(M, coords[3], coords[4]), r0: (coords[2] || 0) * k, r1: (coords[5] || 0) * k, rgb, ts };
+  }
+
+  /** t de un sombreado en un punto de la página (para cruzar un degradado con su máscara). */
+  static tAt(s, x, y) {
+    if (s.type === 2) {
+      const dx = s.b[0] - s.a[0];
+      const dy = s.b[1] - s.a[1];
+      const dd = dx * dx + dy * dy;
+      return dd > 1e-12 ? clamp(((x - s.a[0]) * dx + (y - s.a[1]) * dy) / dd) : 0;
+    }
+    const dr = s.r1 - s.r0;
+    return Math.abs(dr) > 1e-9 ? clamp((Math.hypot(x - s.b[0], y - s.b[1]) - s.r0) / dr) : 0;
+  }
+
+  /** Punto de la página donde un sombreado vale t (sobre su eje; en un radial, hacia la derecha del centro). */
+  static pointAt(s, t) {
+    if (s.type === 2) return [s.a[0] + t * (s.b[0] - s.a[0]), s.a[1] + t * (s.b[1] - s.a[1])];
+    return [s.b[0] + (s.r0 + t * (s.r1 - s.r0)), s.b[1]];
+  }
+
+  /** Degradado de SVG (url) a partir de un sombreado ya muestreado: paradas [t, css, alfa]. */
+  gradientDef(s, stops) {
     const id = this.uid('g');
-    if (type === 2) {
-      const [x1, y1] = apply(M, coords[0], coords[1]);
-      const [x2, y2] = apply(M, coords[2], coords[3]);
-      this.defs.push(`<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${f3(x1)}" y1="${f3(y1)}" x2="${f3(x2)}" y2="${f3(y2)}">${stops.join('')}</linearGradient>`);
+    const body = stops.map(([t, css, al]) => `<stop offset="${f3(t)}" stop-color="${css}"${al < 0.999 ? ` stop-opacity="${f3(al)}"` : ''}/>`).join('');
+    if (s.type === 2) {
+      this.defs.push(`<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${f3(s.a[0])}" y1="${f3(s.a[1])}" x2="${f3(s.b[0])}" y2="${f3(s.b[1])}">${body}</linearGradient>`);
     } else {
-      const [cx, cy] = apply(M, coords[3], coords[4]);
-      const r = coords[5] * Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2]));
-      this.defs.push(`<radialGradient id="${id}" gradientUnits="userSpaceOnUse" cx="${f3(cx)}" cy="${f3(cy)}" r="${f3(r)}">${stops.join('')}</radialGradient>`);
+      this.defs.push(`<radialGradient id="${id}" gradientUnits="userSpaceOnUse" cx="${f3(s.b[0])}" cy="${f3(s.b[1])}" r="${f3(s.r1)}">${body}</radialGradient>`);
     }
     return `url(#${id})`;
+  }
+
+  /** Sombreado axial / radial → <linearGradient> / <radialGradient>; devuelve url(#id). */
+  gradient(sh, matrix, resources, mask = null) {
+    const s = this.shading(sh, matrix, resources);
+    if (!s) return null;
+    let ts = s.ts;
+    if (mask?.shade) {
+      // los cambios de la máscara, llevados al eje del color, y un muestreo regular por si no son paralelos
+      const extra = mask.shade.ts.map((t) => Converter.tAt(s, ...Converter.pointAt(mask.shade, t)));
+      ts = [...new Set([...ts, ...extra, ...Array.from({ length: 11 }, (_, i) => i / 10)].map((t) => Math.round(clamp(t) * 1e4) / 1e4))].sort((p, q) => p - q);
+    }
+    const stops = ts.map((t) => [t, hex(s.rgb(t)), mask ? Converter.maskAlpha(mask, ...Converter.pointAt(s, t)) : 1]);
+    return this.gradientDef(s, stops);
+  }
+
+  /** Color plano bajo una máscara de opacidad en degradado → degradado de ese color. */
+  maskedSolid(css, mask) {
+    if (!mask.shade) return null;
+    const stops = mask.shade.ts.map((t) => [t, css, Converter.maskAlpha(mask, ...Converter.pointAt(mask.shade, t))]);
+    return this.gradientDef(mask.shade, stops);
+  }
+
+  /** Opacidad (0..1) de una máscara suave en un punto de la página. */
+  static maskAlpha(mask, x, y) {
+    if (!mask.shade) return mask.alpha ?? 1;
+    const [r, g, b] = mask.shade.rgb(Converter.tAt(mask.shade, x, y));
+    return clamp(0.3 * r + 0.59 * g + 0.11 * b);
+  }
+
+  /**
+   * Máscara suave de un ExtGState (/SMask << /S /Luminosity /G forma >>):
+   * se busca en la forma el sombreado que la pinta (con `sh` o un patrón de
+   * sombreado) o un gris plano. Su espacio es el de la CTM vigente al fijar el
+   * estado gráfico. Devuelve { shade } o { alpha }, o null si no se entiende.
+   */
+  softMask(sm, ctm, resources) {
+    const pdf = this.pdf;
+    const kind = nameOf(pdf.res(sm.S));
+    const G = pdf.res(sm.G);
+    if (kind !== 'Luminosity' || !(G instanceof Stream)) return null;
+    const fm = pdf.res(G.dict.Matrix);
+    const base = mul(Array.isArray(fm) ? fm.map((v) => Number(pdf.res(v))) : ID, ctm);
+    const found = this.findPaint(pdf.decode(G), pdf.res(G.dict.Resources) || resources, base, base, 0);
+    if (!found) return null;
+    if (found.gray != null) return { alpha: clamp(found.gray) };
+    const shade = this.shading(found.sh, found.matrix, found.res);
+    return shade ? { shade } : null;
+  }
+
+  /** Primer sombreado (o gris plano) que pinta un flujo de contenido: lo que define una máscara de luminosidad. */
+  findPaint(data, res, ctm, formCtm, depth) {
+    const pdf = this.pdf;
+    const lx = new Lexer(data);
+    const stack = [];
+    const saved = [];
+    let m = ctm;
+    let pat = null;
+    let gray = null;
+    for (;;) {
+      const t = lx.token();
+      if (t === null) break;
+      if (!(t instanceof Op)) {
+        stack.push(t === '[' || t === '<<' ? lx.object(t) : t);
+        continue;
+      }
+      const a = stack;
+      const last = a[a.length - 1];
+      switch (t.op) {
+        case 'q': saved.push(m); break;
+        case 'Q': if (saved.length) m = saved.pop(); break;
+        case 'cm': if (a.length >= 6) m = mul(a.slice(-6).map(Number), m); break;
+        case 'sh': {
+          const sh = pdf.res(pdf.res(res?.Shading)?.[nameOf(last)]);
+          if (sh) return { sh, matrix: m, res };
+          break;
+        }
+        case 'scn': case 'SCN':
+          if (last instanceof Name) pat = pdf.res(pdf.res(res?.Pattern)?.[last.name]);
+          break;
+        case 'g': gray = Number(last); pat = null; break;
+        case 'rg': gray = 0.3 * a[a.length - 3] + 0.59 * a[a.length - 2] + 0.11 * last; pat = null; break;
+        case 'k': gray = (1 - a[a.length - 1]) * (1 - (0.3 * a[a.length - 4] + 0.59 * a[a.length - 3] + 0.11 * a[a.length - 2])); pat = null; break;
+        case 'f': case 'F': case 'f*': case 'B': case 'B*': case 'b': case 'b*':
+          if (pat) {
+            const d = pat instanceof Stream ? pat.dict : pat;
+            if (pdfType(pdf, d) === 2) {
+              const pm = pdf.res(d.Matrix);
+              // el patrón vive en el espacio por defecto de la forma, no en el de sus `cm`
+              return { sh: pdf.res(d.Shading), matrix: mul(Array.isArray(pm) ? pm.map((v) => Number(pdf.res(v))) : ID, formCtm), res };
+            }
+          } else if (gray != null) return { gray };
+          break;
+        case 'Do': {
+          const xo = pdf.res(pdf.res(res?.XObject)?.[nameOf(last)]);
+          if (xo instanceof Stream && nameOf(xo.dict.Subtype) === 'Form' && depth < 6) {
+            const fm = pdf.res(xo.dict.Matrix);
+            const inner = mul(Array.isArray(fm) ? fm.map((v) => Number(pdf.res(v))) : ID, m);
+            const r = this.findPaint(pdf.decode(xo), pdf.res(xo.dict.Resources) || res, inner, inner, depth + 1);
+            if (r) return r;
+          }
+          break;
+        }
+        default:
+      }
+      stack.length = 0;
+    }
+    return null;
   }
 
   /**
@@ -1836,9 +1980,20 @@ class Converter {
           prev.pieces.push(p);
           continue;
         }
-        if (ly > prev.y && ly - prev.y < 3 * fs) {
-          group.lines.push({ x: lx, y: ly, pieces: [p] });
-          continue;
+        // renglón siguiente del mismo bloque: justo debajo y encima del bloque (no una etiqueta suelta al lado)
+        if (ly > prev.y && ly - prev.y < 2.2 * fs) {
+          const [pex] = apply(inv, p.end[0], p.end[1]);
+          let bx0 = Infinity;
+          let bx1 = -Infinity;
+          for (const ln of group.lines) {
+            const [lx0, lx1] = lineSpan(ln, inv);
+            bx0 = Math.min(bx0, lx0);
+            bx1 = Math.max(bx1, lx1);
+          }
+          if (lx < bx1 + fs && pex > bx0 - fs) {
+            group.lines.push({ x: lx, y: ly, pieces: [p] });
+            continue;
+          }
         }
       }
       group = { M: p.M, layer: p.layer, clips: p.clips, lines: [] };
@@ -1853,18 +2008,43 @@ class Converter {
         if (p.fa < 1) out.push(`fill-opacity="${f3(p.fa)}"`);
         return out.join(' ');
       };
-      let body = '';
-      for (const ln of g.lines) {
-        ln.pieces.forEach((p, i) => {
-          body += `<tspan${i ? '' : ` x="${f3(ln.x)}" y="${f3(ln.y)}"`} ${attrs(p)}>${xmlText(p.text)}</tspan>`;
-        });
-      }
       const M = g.M;
-      const svg = `<text transform="matrix(${M.map(f3).join(' ')})" ${attrs(p0)} xml:space="preserve">${body}</text>`;
-      const saved = this.mc;
-      this.mc = [{ layer: g.layer }];
-      this.emit(svg, g.clips);
-      this.mc = saved;
+      const inv = invert(M);
+      const spans = g.lines.map((ln) => lineSpan(ln, inv));
+      // alineación: el PDF solo trae dónde empieza cada renglón; se deduce de qué borde coincide
+      const fs = p0.fs || 1;
+      const spread = (f) => {
+        const v = spans.map(f);
+        return Math.max(...v) - Math.min(...v);
+      };
+      let align = 'start';
+      let blocks = [g.lines];
+      if (g.lines.length > 1) {
+        const sS = spread((q) => q[0]);
+        const sM = spread((q) => (q[0] + q[1]) / 2);
+        const sE = spread((q) => q[1]);
+        const tol = 0.25 * fs;
+        if (sS <= 0.05 * fs || (sS <= tol && sS <= sM && sS <= sE)) align = 'start';
+        else if (sM <= tol && sM <= sE) align = 'middle';
+        else if (sE <= tol) align = 'end';
+        else blocks = g.lines.map((ln) => [ln]); // sin borde común: cada renglón por su lado
+      }
+      const xOf = (q) => (align === 'middle' ? (q[0] + q[1]) / 2 : align === 'end' ? q[1] : q[0]);
+      for (const lines of blocks) {
+        let body = '';
+        for (const ln of lines) {
+          const q = lineSpan(ln, inv);
+          ln.pieces.forEach((p, i) => {
+            body += `<tspan${i ? '' : ` x="${f3(xOf(q))}" y="${f3(ln.y)}"`} ${attrs(p)}>${xmlText(p.text)}</tspan>`;
+          });
+        }
+        const extra = `${align !== 'start' ? ` text-anchor="${align}"` : ''}${Math.abs(p0.tc || 0) > 1e-4 ? ` letter-spacing="${f3(p0.tc)}"` : ''}${Math.abs(p0.tw || 0) > 1e-4 ? ` word-spacing="${f3(p0.tw)}"` : ''}`;
+        const svg = `<text transform="matrix(${M.map(f3).join(' ')})" ${attrs(lines[0].pieces[0])}${extra} xml:space="preserve">${body}</text>`;
+        const saved = this.mc;
+        this.mc = [{ layer: g.layer }];
+        this.emit(svg, g.clips);
+        this.mc = saved;
+      }
     }
   }
 
@@ -1899,6 +2079,18 @@ class Converter {
     }
     return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" id="${esc(title.replace(/\s+/g, '_'))}" data-name="${esc(title)}" width="${f3(this.W)}pt" height="${f3(this.H)}pt" viewBox="0 0 ${f3(this.W)} ${f3(this.H)}"><defs>${this.defs.join('')}</defs>${body}</svg>`;
   }
+}
+
+/** Inicio y fin (en x local del bloque de texto) de un renglón: del primer trozo al final del último. */
+function lineSpan(ln, inv) {
+  const a = ln.pieces[0];
+  const b = ln.pieces[ln.pieces.length - 1];
+  const [x0] = apply(inv, a.M[4], a.M[5]);
+  // los espacios del final no cuentan para el borde derecho
+  const trail = (b.text.match(/\s+$/)?.[0].length || 0) * (b.adv / Math.max(1, b.text.length));
+  const [ex, ey] = b.end;
+  const [x1] = apply(inv, ex, ey);
+  return [x0, x1 - trail];
 }
 
 function pdfType(pdf, d) {

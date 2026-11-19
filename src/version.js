@@ -3,12 +3,13 @@
  * está usando. Debe coincidir con `VERSION` de sw.js (lo vigila
  * test/sw.test.mjs): subir las dos juntas en cada publicación.
  */
-export const APP_VERSION = 'v67';
+export const APP_VERSION = 'v68';
 
 export const APP_AUTHOR = { name: 'Mauricio Espinoza', email: 'mauricio.e.espinoza@gmail.com' };
 
 /** Últimos cambios (el más reciente primero); se muestran en «Acerca de». */
 export const CHANGELOG = [
+  ['v68', 'Importar de Illustrator (.ai, PDF, SVG): degradados con transparencia (máscaras de opacidad) y degradados que cubren solo parte del objeto quedan como en el original; textos de varios renglones conservan su alineación (izquierda, centro, derecha), su interlineado y su espaciado, y ya no se juntan con etiquetas vecinas'],
   ['v67', 'Sin señal: las teselas guardadas ya no se llenan de respuestas opacas o con error, y la caché se poda sin recorrerla en cada tesela'],
   ['v66', 'Tableta: girar la vista con dos dedos (zona muerta y imán al norte); la brújula de la esquina devuelve el norte arriba'],
   ['v65', 'Seleccionar todo lo de la capa: botón en cada capa del panel Capas, en Organizar y en el menú contextual (con un objeto seleccionado, la capa de ese objeto)'],
